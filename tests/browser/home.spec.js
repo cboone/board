@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
 
 test('renders the fixture preview and can change the theme', async ({
   page,
@@ -17,4 +18,7 @@ test('renders the fixture preview and can change the theme', async ({
   await expect(
     page.getByRole('button', { name: 'Use light theme' }),
   ).toBeVisible();
+
+  const accessibility = await new AxeBuilder({ page }).analyze();
+  expect(accessibility.violations).toEqual([]);
 });

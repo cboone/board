@@ -22,6 +22,7 @@
     "@alpinejs/csp": "3.17.3"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
     "@playwright/test": "1.63.0",
     "@tailwindcss/vite": "4.3.3",
     "eslint": "10.10.0",
