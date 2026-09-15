@@ -1,0 +1,12 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "24.13.0"
+
+[context.deploy-preview.environment]
+  VITE_BOARD_MODE = "fixture"
+
+[context.branch-deploy.environment]
+  VITE_BOARD_MODE = "fixture"

@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Board turns an eligible GitHub repository into a readable backlog triage report."
+    />
+    <title>Board</title>
+  </head>
+  <body
+    class="min-h-screen bg-stone-50 text-slate-950 antialiased dark:bg-slate-950 dark:text-slate-50"
+  >
+    <main
+      class="mx-auto flex min-h-screen max-w-6xl flex-col px-5 py-8 sm:px-8 lg:px-12"
+      x-data="boardShell"
+    >
+      <header
+        class="flex items-center justify-between gap-4 border-b border-slate-300 pb-6 dark:border-slate-700"
+      >
+        <a class="text-xl font-bold tracking-tight" href="/">Board</a>
+        <button
+          class="rounded-md border border-slate-400 px-3 py-2 text-sm font-medium hover:border-blue-700 hover:text-blue-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-700 dark:border-slate-500 dark:hover:border-blue-300 dark:hover:text-blue-200"
+          type="button"
+          x-on:click="toggleTheme"
+          x-text="themeLabel"
+        ></button>
+      </header>
+
+      <section
+        class="flex flex-1 items-center py-16 sm:py-24"
+        aria-labelledby="welcome-title"
+      >
+        <div class="max-w-3xl">
+          <p
+            class="mb-4 text-sm font-semibold uppercase tracking-[0.2em] text-amber-700 dark:text-amber-300"
+          >
+            Fixture preview
+          </p>
+          <h1
+            id="welcome-title"
+            class="text-4xl font-bold tracking-tight sm:text-6xl"
+          >
+            A clearer way to decide what to start next.
+          </h1>
+          <p
+            class="mt-6 max-w-2xl text-lg leading-8 text-slate-700 dark:text-slate-300"
+            x-text="subtitle"
+          ></p>
+          <div class="mt-10 flex flex-wrap gap-3" aria-label="Board status">
+            <span
+              class="rounded-full bg-amber-100 px-3 py-1 text-sm font-medium text-amber-900 dark:bg-amber-950 dark:text-amber-100"
+              >No GitHub access in previews</span
+            >
+            <span
+              class="rounded-full border border-slate-300 px-3 py-1 text-sm text-slate-700 dark:border-slate-700 dark:text-slate-300"
+              >No saved data</span
+            >
+            <span
+              class="rounded-full border border-slate-300 px-3 py-1 text-sm text-slate-700 dark:border-slate-700 dark:text-slate-300"
+              >No model calls</span
+            >
+          </div>
+        </div>
+      </section>
+
+      <footer
+        class="border-t border-slate-300 pt-6 text-sm text-slate-600 dark:border-slate-700 dark:text-slate-400"
+      >
+        Board is in foundation development. GitHub authorization and backlog
+        analysis will arrive in later releases.
+      </footer>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

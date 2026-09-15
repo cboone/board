@@ -1,0 +1,34 @@
+{
+  "name": "board",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A GitHub-backed backlog triage board.",
+  "type": "module",
+  "engines": {
+    "node": "24.13.0"
+  },
+  "packageManager": "npm@11.6.2",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:browser": "playwright test",
+    "verify": "npm run format:check && npm run lint && npm test && npm run test:browser && npm run build"
+  },
+  "dependencies": {
+    "@alpinejs/csp": "3.17.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@tailwindcss/vite": "4.3.3",
+    "eslint": "10.10.0",
+    "globals": "17.12.0",
+    "prettier": "3.9.6",
+    "tailwindcss": "4.3.3",
+    "vite": "8.3.0",
+    "vitest": "5.0.1"
+  }
+}
