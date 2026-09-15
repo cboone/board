@@ -27,7 +27,7 @@ Files: `package.json`, `package-lock.json`, `vite.config.js`, `playwright.config
 
 The README, contribution and community documents, agent guidance, Dependabot configuration, and secret-scanning workflows describe the project's current fixture-only boundary and the later authenticated product.
 
-Files: `README.md`, `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `CHANGELOG.md`, `.github/`
+Files: `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `CHANGELOG.md`, `.github/`
 
 ## Notable changes
 

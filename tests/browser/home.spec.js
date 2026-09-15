@@ -19,6 +19,15 @@ test('renders the fixture preview and can change the theme', async ({
     page.getByRole('button', { name: 'Use light theme' }),
   ).toBeVisible();
 
+  const themeButton = page.getByRole('button', {
+    name: 'Use light theme',
+  });
+  await themeButton.focus();
+  await page.keyboard.press('Enter');
+  await expect(
+    page.getByRole('button', { name: 'Use dark theme' }),
+  ).toBeVisible();
+
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
 });

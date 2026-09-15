@@ -17,7 +17,7 @@ Harassment, discriminatory conduct, personal attacks, unwanted sexual attention,
 
 ## Reporting
 
-Report a possible Code of Conduct violation through [Board Discussions](https://github.com/cboone/board/discussions). Reports are handled confidentially.
+Report a possible Code of Conduct violation through [Board Discussions](https://github.com/cboone/board/discussions). Discussions are public, so do not include sensitive personal details.
 
 ## Scope
 
