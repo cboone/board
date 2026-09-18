@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "fixture_only",
+    "message": "This deployment provides sample reports only.",
+    "retryable": false
+  }
+}

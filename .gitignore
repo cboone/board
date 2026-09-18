@@ -145,5 +145,6 @@ vite.config.ts.timestamp-*
 # Board development
 .netlify/
 .workmux/
+server/.generated/
 playwright-report/
 test-results/

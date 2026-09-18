@@ -5,7 +5,18 @@ import { resolve, sep, extname } from 'node:path';
 const projectDirectory = resolve(import.meta.dirname, '..');
 const publishDirectory = resolve(projectDirectory, 'dist');
 const sourceDirectory = resolve(projectDirectory, 'src');
-const port = 4173;
+const port = Number(process.env.BOARD_DEV_PORT || '4173');
+if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) {
+  throw new Error('The static test server requires a valid loopback port.');
+}
+const redirects = await readFile(
+  resolve(publishDirectory, '_redirects'),
+  'utf8',
+);
+const fixtureApi = redirects.startsWith('/api/* /fixture-only.json 404\n');
+const fixtureResponse = fixtureApi
+  ? await readFile(resolve(publishDirectory, 'fixture-only.json'))
+  : null;
 
 const headerFile = await readFile(
   resolve(publishDirectory, '_headers'),
@@ -44,13 +55,20 @@ const server = createServer(async (request, response) => {
   for (const [key, value] of Object.entries(headers))
     response.setHeader(key, value);
   try {
+    const pathname = decodeURIComponent(
+      new URL(request.url, 'http://127.0.0.1').pathname,
+    );
+    if (fixtureApi && pathname.startsWith('/api/')) {
+      response.setHeader('Content-Type', 'application/json; charset=utf-8');
+      response
+        .writeHead(404)
+        .end(request.method === 'HEAD' ? undefined : fixtureResponse);
+      return;
+    }
     if (request.method !== 'GET' && request.method !== 'HEAD') {
       response.writeHead(405).end();
       return;
     }
-    const pathname = decodeURIComponent(
-      new URL(request.url, 'http://127.0.0.1').pathname,
-    );
     // These source modules support renderer rejection tests only. This server
     // and its test routes are never part of the Netlify publish directory.
     const sourcePath = pathname.startsWith('/__test__/')
