@@ -417,7 +417,22 @@ export function mountProduction(mount) {
       );
       if (!current(stamp) || state.selected?.id !== selected.id) return;
       if (!validSummary(data, selected)) throw new ApiError('invalid_response');
-      state.summary = data;
+      state.summary = {
+        sync: { at: data.sync.at, branch: data.sync.branch },
+        fingerprint: { value: data.fingerprint.value },
+        counts: Object.fromEntries(
+          Object.keys(countLabels).map((key) => [key, data.counts[key]]),
+        ),
+        provenance: {
+          observedFrom: data.provenance.observedFrom,
+          observedTo: data.provenance.observedTo,
+          files: data.provenance.files.map(({ path, blobId }) => ({
+            path,
+            blobId,
+          })),
+          limitations: [...data.provenance.limitations],
+        },
+      };
       state.pending = null;
       paint();
     } catch (error) {

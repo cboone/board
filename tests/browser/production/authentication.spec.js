@@ -601,6 +601,10 @@ test('renders provenance text literally and supports narrow screens and themes',
   expect(await page.evaluate(() => Object.keys(localStorage))).toEqual([
     'board.theme',
   ]);
+  await page.screenshot({
+    path: test.info().outputPath('synthetic-source-check.png'),
+    fullPage: true,
+  });
 });
 
 test('keeps the production sample independent of authentication and providers', async ({
