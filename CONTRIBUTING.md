@@ -16,15 +16,32 @@ Board requires Node.js 24.13.0 and npm.
 git clone https://github.com/cboone/board.git
 cd board
 npm ci
-npm run build
-npm test
-npm run lint
+npm run dev
 ```
 
-Run `npm run format` before committing. Install Playwright browsers with `npx playwright install chromium firefox webkit` before running `npm run test:browser`.
+Open `/demo` for synthetic sample reports. No credentials are required. Report
+data and the independent fixture inventory are described in the
+[report contract](docs/report-contract.md).
+
+Run `npm run format` before committing. Install Playwright browsers with
+`npx playwright install chromium firefox webkit`, then run `npm run verify` and
+`npm audit --audit-level=high` before opening a pull request.
+
+Verification covers formatting, linting, unit checks, built-asset browser checks
+in Chromium/Firefox/WebKit, the production build, and the static artifact gate.
+Browser tests use a loopback server that serves the built files with the committed
+Netlify security headers. Its test-only source routes support rejected-payload
+checks and are never deployed. This verifies local built behavior; a deployed
+Netlify site still requires its own route and header checks.
+
+Deploy Previews and branch deploys must remain static fixture experiences with
+no Functions, storage access, credentials, or production data. Keep server
+capabilities outside browser imports when adding later phases.
 
 ## Pull requests
 
 Create a descriptive branch using a type prefix such as `feature/` or `fix/`. Use Conventional Commits and include tests and documentation with the change.
 
-Before opening a pull request, run the applicable checks from the README and describe any verification that requires a deployed environment.
+Use GPG-signed commits and merge commits. Retain dated plans and review artifacts
+in this repository. Describe any verification that requires a deployed
+environment and distinguish it from passing fixture checks.
