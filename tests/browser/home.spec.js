@@ -31,3 +31,22 @@ test('renders the fixture preview and can change the theme', async ({
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
 });
+
+test('preserves an explicit theme when the device prefers dark colors', async ({
+  page,
+}) => {
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.goto('/');
+  await expect(
+    page.getByRole('button', { name: 'Use light theme' }),
+  ).toBeVisible();
+
+  await page.getByRole('button', { name: 'Use light theme' }).click();
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await page.getByRole('link', { name: 'View sample report' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await expect(
+    page.getByRole('heading', { name: 'Sample backlog report' }),
+  ).toBeVisible();
+});

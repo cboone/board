@@ -29,6 +29,7 @@
       </header>
 
       <section
+        id="welcome"
         class="flex flex-1 items-center py-16 sm:py-24"
         aria-labelledby="welcome-title"
       >
@@ -46,8 +47,15 @@
           </h1>
           <p
             class="mt-6 max-w-2xl text-lg leading-8 text-slate-700 dark:text-slate-300"
-            x-text="subtitle"
-          ></p>
+          >
+            Explore a sample backlog report showing what can proceed, what is
+            blocked, and where work overlaps.
+          </p>
+          <a
+            class="mt-8 inline-block rounded-md bg-blue-800 px-5 py-3 font-semibold text-white hover:bg-blue-900 dark:bg-blue-300 dark:text-slate-950 dark:hover:bg-blue-200"
+            href="/demo"
+            >View sample report</a
+          >
           <div class="mt-10 flex flex-wrap gap-3" aria-label="Board status">
             <span
               class="rounded-full bg-amber-100 px-3 py-1 text-sm font-medium text-amber-900 dark:bg-amber-950 dark:text-amber-100"
@@ -55,7 +63,7 @@
             >
             <span
               class="rounded-full border border-slate-300 px-3 py-1 text-sm text-slate-700 dark:border-slate-700 dark:text-slate-300"
-              >No saved data</span
+              >Synthetic sample data</span
             >
             <span
               class="rounded-full border border-slate-300 px-3 py-1 text-sm text-slate-700 dark:border-slate-700 dark:text-slate-300"
@@ -65,11 +73,56 @@
         </div>
       </section>
 
+      <section id="demo" class="py-8" aria-labelledby="demo-title" hidden>
+        <div
+          class="mb-8 rounded-lg border border-slate-300 bg-white p-5 dark:border-slate-700 dark:bg-slate-900"
+        >
+          <h1 id="demo-title" class="text-2xl font-bold">
+            Sample backlog report
+          </h1>
+          <p class="mt-2 text-slate-700 dark:text-slate-300">
+            This report uses synthetic data. Its links illustrate source
+            navigation; it does not access repositories or run AI analysis.
+          </p>
+          <label class="mt-4 block text-sm font-semibold" for="sample-scenario"
+            >Sample scenario</label
+          >
+          <select
+            id="sample-scenario"
+            class="mt-2 max-w-full rounded-md border border-slate-400 bg-white px-3 py-2 text-slate-950 focus-visible:outline-blue-700 dark:border-slate-500 dark:bg-slate-950 dark:text-slate-50"
+          ></select>
+          <p
+            id="sample-description"
+            class="mt-3 text-sm text-slate-700 dark:text-slate-300"
+          ></p>
+        </div>
+        <div id="report-content"></div>
+      </section>
+
+      <section
+        id="unavailable"
+        class="flex-1 py-16"
+        aria-labelledby="unavailable-title"
+        hidden
+      >
+        <h1 id="unavailable-title" class="text-3xl font-bold">
+          Page unavailable
+        </h1>
+        <p class="mt-4 max-w-2xl text-slate-700 dark:text-slate-300">
+          This fixture preview provides a welcome page and sample report.
+        </p>
+        <a
+          class="mt-6 inline-block text-blue-800 underline dark:text-blue-300"
+          href="/demo"
+          >View sample report</a
+        >
+      </section>
+
       <footer
         class="border-t border-slate-300 pt-6 text-sm text-slate-600 dark:border-slate-700 dark:text-slate-400"
       >
-        Board is in foundation development. GitHub authorization and backlog
-        analysis will arrive in later releases.
+        Board is a fixture preview. GitHub authorization, repository analysis,
+        and saved reports are in development.
       </footer>
     </main>
     <script type="module" src="/src/main.js"></script>
