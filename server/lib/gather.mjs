@@ -103,8 +103,13 @@ function timestamp(value) {
   return value;
 }
 function permissionGranted(permissions) {
-  return ['metadata', 'issues', 'pull_requests', 'contents'].every((key) =>
-    ['read', 'write'].includes(permissions?.[key]),
+  const required = ['contents', 'issues', 'metadata', 'pull_requests'];
+  return (
+    permissions !== null &&
+    typeof permissions === 'object' &&
+    !Array.isArray(permissions) &&
+    Object.keys(permissions).sort().join(',') === required.join(',') &&
+    required.every((key) => permissions[key] === 'read')
   );
 }
 function repositoryFacts(item) {

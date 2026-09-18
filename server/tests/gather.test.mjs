@@ -101,10 +101,29 @@ test('eligible selection requires the expected personal App installation and act
     1,
   );
 });
-test('no granted installation differs from an empty eligible repository set', async () => {
+test('missing or write-capable grants differ from an empty eligible repository set', async () => {
+  const required = ['metadata', 'issues', 'pull_requests', 'contents'];
   for (const installations of [
     [],
     [{ ...installation, permissions: { metadata: 'read' } }],
+    ...required.map((key) => [
+      {
+        ...installation,
+        permissions: { ...installation.permissions, [key]: 'write' },
+      },
+    ]),
+    [
+      {
+        ...installation,
+        permissions: { ...installation.permissions, administration: 'write' },
+      },
+    ],
+    [
+      {
+        ...installation,
+        permissions: { ...installation.permissions, members: 'read' },
+      },
+    ],
   ]) {
     const result = await operations(
       fixtureProvider({ values: { installations } }),

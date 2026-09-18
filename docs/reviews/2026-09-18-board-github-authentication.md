@@ -60,6 +60,8 @@ Independent synthetic reproducers identified and verified corrections for:
    authorization files, while preserving eligible agent guidance.
 7. One shared repository-list admission limit, successful direct-check
    authorization status, and OAuth identity API version/rate-limit categories.
+8. Installation eligibility now requires every configured GitHub permission to
+   be exactly `read`; a write-capable grant cannot authorize source collection.
 
 No credential files or real repository inputs were used in these reproducers.
 
