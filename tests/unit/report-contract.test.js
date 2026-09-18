@@ -309,6 +309,84 @@ describe('validateReport', () => {
     });
   });
 
+  it('rejects hidden canonical titles that would bypass text bounds', () => {
+    const { report, inventory } = pair();
+    const title = 'x'.repeat(REPORT_LIMITS.textLength + 1);
+    for (const issue of [report.issues[0], inventory.issues[0]])
+      Object.defineProperty(issue, 'title', {
+        value: title,
+        enumerable: false,
+      });
+    expect(validateReport(report, inventory)).toEqual({
+      valid: false,
+      errors: [
+        {
+          path: 'report.issues.0.title',
+          code: 'not_json',
+          message: expect.any(String),
+        },
+      ],
+    });
+  });
+
+  it.each(['object', 'array'])(
+    'rejects a hidden function property on a %s',
+    (kind) => {
+      const { report, inventory } = pair();
+      const target = kind === 'array' ? report.startNow : report;
+      Object.defineProperty(target, 'hidden', { value: () => 'Uninspected' });
+      expect(codes(report, inventory)).toContain('not_json');
+      expect(validateReport(report, inventory).valid).toBe(false);
+    },
+  );
+
+  it.each(['object', 'array'])(
+    'rejects an own symbol property on a %s',
+    (kind) => {
+      const { report, inventory } = pair();
+      const target = kind === 'array' ? report.startNow : report;
+      target[Symbol('hidden')] = 'Uninspected data';
+      expect(codes(report, inventory)).toContain('not_json');
+      expect(validateReport(report, inventory).valid).toBe(false);
+    },
+  );
+
+  it.each(['object', 'array'])(
+    'rejects an enumerable %s accessor without executing its getter',
+    (kind) => {
+      const { report, inventory } = pair();
+      const target = kind === 'array' ? report.startNow : report;
+      const key = kind === 'array' ? '0' : 'summary';
+      const originalValue = target[key];
+      let reads = 0;
+      Object.defineProperty(target, key, {
+        enumerable: true,
+        get() {
+          reads += 1;
+          return originalValue;
+        },
+      });
+      expect(validateReport(report, inventory).valid).toBe(false);
+      expect(reads).toBe(0);
+    },
+  );
+
+  it('accepts frozen plain and null-prototype objects with dense JSON arrays', () => {
+    const values = JSON.parse(JSON.stringify(pair()));
+    Object.setPrototypeOf(values.report, null);
+    Object.setPrototypeOf(values.inventory, null);
+    function freezeJson(value) {
+      if (value === null || typeof value !== 'object') return value;
+      for (const child of Object.values(value)) freezeJson(child);
+      return Object.freeze(value);
+    }
+    const { report, inventory } = freezeJson(values);
+    expect(validateReport(report, inventory)).toEqual({
+      valid: true,
+      errors: [],
+    });
+  });
+
   it('rejects an Array subclass that skips validation of an invalid dense pick', () => {
     class SkippedChecksArray extends Array {
       forEach() {}
@@ -353,18 +431,21 @@ describe('validateReport', () => {
     });
   });
 
-  it('handles accessors that cannot be read safely', () => {
+  it('rejects a throwing accessor without reading it', () => {
     const { inventory } = pair();
+    let reads = 0;
     const report = Object.defineProperty({}, 'issues', {
       enumerable: true,
       get() {
+        reads += 1;
         throw new Error('Unavailable');
       },
     });
     expect(validateReport(report, inventory)).toMatchObject({
       valid: false,
-      errors: [{ code: 'malformed_input' }],
+      errors: [{ path: 'report.issues', code: 'not_json' }],
     });
+    expect(reads).toBe(0);
   });
 
   it.each([
@@ -505,6 +586,26 @@ describe('validateReport', () => {
     const { report, inventory } = pair();
     report.repoUrl = 'https://github.com/example/widgets/';
     expect(validateReport(report, inventory).valid).toBe(true);
+  });
+
+  it('accepts a safe source URL with a mixed-case HTTPS scheme', () => {
+    const { report, inventory } = pair();
+    report.issues[1].waitingOn = [
+      { url: 'HtTpS://example.com/design', label: 'Design' },
+    ];
+    expect(validateReport(report, inventory)).toEqual({
+      valid: true,
+      errors: [],
+    });
+  });
+
+  it('accepts a canonical repository URL with a mixed-case HTTPS scheme', () => {
+    const { report, inventory } = pair();
+    report.repoUrl = inventory.repoUrl = 'HtTpS://github.com/example/widgets';
+    expect(validateReport(report, inventory)).toEqual({
+      valid: true,
+      errors: [],
+    });
   });
 
   it('rejects source additions, duplicate issues, absent/repeated lane placements and repeated claims', () => {

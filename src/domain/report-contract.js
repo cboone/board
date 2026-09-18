@@ -30,7 +30,11 @@ const has = (object, key) => Object.hasOwn(object, key);
 const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 
 function safeHttps(value) {
-  if (!isText(value) || !/^https:\/\//u.test(value) || /[\s"<>\\]/u.test(value))
+  if (
+    !isText(value) ||
+    !/^https:\/\//iu.test(value) ||
+    /[\s"<>\\]/u.test(value)
+  )
     return false;
   try {
     const url = new URL(value);
@@ -150,9 +154,10 @@ function validateReport(report, inventory) {
             );
           }
         } else if (entry.value !== null && typeof entry.value === 'object') {
+          const array = Array.isArray(entry.value);
           const prototype = Object.getPrototypeOf(entry.value);
           if (
-            Array.isArray(entry.value)
+            array
               ? prototype !== Array.prototype
               : ![Object.prototype, null].includes(prototype)
           ) {
@@ -171,10 +176,7 @@ function validateReport(report, inventory) {
             );
             return false;
           }
-          if (
-            Array.isArray(entry.value) &&
-            entry.value.length > REPORT_LIMITS.arrayLength
-          ) {
+          if (array && entry.value.length > REPORT_LIMITS.arrayLength) {
             add(
               entry.path,
               'size_limit',
@@ -182,7 +184,7 @@ function validateReport(report, inventory) {
             );
             return false;
           }
-          const keys = Object.keys(entry.value);
+          const keys = Reflect.ownKeys(entry.value);
           if (keys.length > REPORT_LIMITS.nodes) {
             add(
               entry.path,
@@ -191,8 +193,44 @@ function validateReport(report, inventory) {
             );
             return false;
           }
-          if (Array.isArray(entry.value)) {
-            const indexedKeys = new Set(keys);
+          const properties = [];
+          for (const key of keys) {
+            if (typeof key !== 'string') {
+              add(
+                entry.path,
+                'not_json',
+                'Symbol properties are not JSON data.',
+              );
+              return false;
+            }
+            const descriptor = Object.getOwnPropertyDescriptor(
+              entry.value,
+              key,
+            );
+            if (
+              array &&
+              key === 'length' &&
+              descriptor &&
+              !descriptor.enumerable &&
+              has(descriptor, 'value')
+            )
+              continue;
+            if (
+              !descriptor ||
+              !descriptor.enumerable ||
+              !has(descriptor, 'value')
+            ) {
+              add(
+                `${entry.path}.${key}`,
+                'not_json',
+                'Properties must be enumerable data values.',
+              );
+              return false;
+            }
+            properties.push({ key, value: descriptor.value });
+          }
+          if (array) {
+            const indexedKeys = new Set(properties.map(({ key }) => key));
             for (let index = 0; index < entry.value.length; index += 1) {
               if (!indexedKeys.has(String(index))) {
                 add(
@@ -203,7 +241,7 @@ function validateReport(report, inventory) {
                 return false;
               }
             }
-            if (keys.length !== entry.value.length) {
+            if (properties.length !== entry.value.length) {
               add(
                 entry.path,
                 'not_json',
@@ -212,7 +250,7 @@ function validateReport(report, inventory) {
               return false;
             }
           }
-          for (const key of keys) {
+          for (const { key, value } of properties) {
             characters += key.length;
             if (
               key.length > REPORT_LIMITS.textLength ||
@@ -232,7 +270,7 @@ function validateReport(report, inventory) {
                 'Field names must not contain control characters.',
               );
             stack.push({
-              value: entry.value[key],
+              value,
               path: `${entry.path}.${key}`,
               depth: entry.depth + 1,
               ancestors: [...entry.ancestors, entry.value],

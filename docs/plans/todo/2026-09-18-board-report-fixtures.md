@@ -224,7 +224,7 @@ and supplies independently authored complete, empty, and uncertain sample inputs
 Source links, theme preferences, responsive layouts, and renderer disposal are
 implemented. Built browser checks use the committed Netlify security headers.
 
-`npm run verify` passed after the PR corrections with 142 unit checks and 45
+`npm run verify` passed after the PR corrections with 152 unit checks and 45
 browser checks across
 Chromium, Firefox, and WebKit, plus build and static artifact verification.
 `npm audit --audit-level=high` reported no vulnerabilities. Independent final
@@ -233,7 +233,7 @@ verified with positive and negative cases. The source head-freeing defect is
 recorded in [plugin issue #457](https://github.com/cboone/agent-harness-plugins/issues/457).
 
 The first PR review also corrected head-freeing claims when another branch is
-active and prose links embedded in longer paths. The 95 contract/lane checks
+active and prose links embedded in longer paths. The 105 contract/lane checks
 and 26 source-link checks pass, including reproduced negative cases and positive
 controls. Current-head PR checks and a fresh review remain required before merge.
 Optional null time zones also render through the local-zone fallback; browser
@@ -251,6 +251,12 @@ The artifact credential/import scan covers every regular published file,
 including browser modules and source maps, without relying on its extension.
 Synthetic `.mjs` and `.map` mutations demonstrate the rejected cases; the normal
 fixture artifact remains valid.
+
+Plain JSON inspection checks every own property descriptor, rejecting symbols,
+hidden properties, and accessors before semantic validation. It reads data
+values without executing getters and preserves native array lengths, frozen
+data, and null-prototype objects. Mixed-case HTTPS schemes follow the same safe
+URL policy as source-link generation.
 
 Branch identifiers reject empty path components, and typed issue/PR references
 require positive safe integers. Nested branch names and the safe-integer boundary

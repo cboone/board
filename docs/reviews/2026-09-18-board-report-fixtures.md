@@ -90,9 +90,15 @@ every regular published file, including `.mjs` and source maps. Synthetic
 forbidden-content mutations verify the rejected artifacts; ordinary built
 assets remain valid.
 
+Complete own-property inspection rejects hidden, symbol, and accessor properties
+without executing getters. Independent reproductions confirm that hidden required
+titles, callable properties, and array method overrides cannot bypass validation;
+own-key bounds, frozen arrays, and null-prototype objects retain their controls.
+Safe HTTPS schemes accept mixed case consistently with source-link generation.
+
 ## Verification
 
-- `npm run verify` passed after the PR corrections: formatting, lint, 142 unit
+- `npm run verify` passed after the PR corrections: formatting, lint, 152 unit
   checks, 45 browser checks
   across Chromium/Firefox/WebKit, production build, and static artifact gate.
 - `npm audit --audit-level=high` reported no vulnerabilities.
@@ -100,7 +106,7 @@ assets remain valid.
   companion/foreign-reference negative controls.
 - All implementation commits use GPG signing. The planning merge commit's
   GitHub signature is verified.
-- The PR corrections also passed their scoped checks: 95 contract/lane checks
+- The PR corrections also passed their scoped checks: 105 contract/lane checks
   and 26 source-link checks, plus formatting, lint, and whitespace validation.
   Full current-head CI and a fresh PR review remain merge gates.
 
