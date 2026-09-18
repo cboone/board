@@ -20,11 +20,10 @@ The prompt's `/add-issue-report` reference is interpreted using the
 remains unchanged. Its current path is `docs/plans/project-prompt.md`;
 `docs/project-prompt.md` is absent.
 
-The fuller earlier roadmap is preserved locally at
-`backup/2026-09-13-roadmap`, commit `70e6f33`, path
-`docs/plans/todo/2026-09-13-backlog-tracker-roadmap.md`. It is not an ancestor of
-current `main`. Its claims about earlier interview decisions are useful context
-to confirm, not substitutes for the current interview.
+An earlier roadmap was consulted from a local backup branch during review. It is
+not part of the published project documentation. Its claimed interview decisions
+are context, not definitive requirements; this roadmap independently records
+the confirmed user answers.
 
 ## Product outcome
 
