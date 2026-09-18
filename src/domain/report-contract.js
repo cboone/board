@@ -203,6 +203,14 @@ function validateReport(report, inventory) {
                 return false;
               }
             }
+            if (keys.length !== entry.value.length) {
+              add(
+                entry.path,
+                'not_json',
+                'Arrays must contain only their indexed elements.',
+              );
+              return false;
+            }
           }
           for (const key of keys) {
             characters += key.length;

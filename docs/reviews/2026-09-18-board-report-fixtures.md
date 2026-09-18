@@ -84,9 +84,15 @@ reproducer confirms both reference gaps and the matching PR progress case.
 Nested branch names and maximum-safe-integer references retain valid links;
 generic HTTPS reference URLs retain their existing behavior.
 
+The plain JSON boundary also rejects extra enumerable array properties while
+preserving the existing exact-index sparse errors. The artifact scan inspects
+every regular published file, including `.mjs` and source maps. Synthetic
+forbidden-content mutations verify the rejected artifacts; ordinary built
+assets remain valid.
+
 ## Verification
 
-- `npm run verify` passed after the PR corrections: formatting, lint, 139 unit
+- `npm run verify` passed after the PR corrections: formatting, lint, 142 unit
   checks, 45 browser checks
   across Chromium/Firefox/WebKit, production build, and static artifact gate.
 - `npm audit --audit-level=high` reported no vulnerabilities.
@@ -101,8 +107,11 @@ generic HTTPS reference URLs retain their existing behavior.
 ## Remaining acceptance boundaries
 
 The phase has no application Functions, service credentials, GitHub gathering,
-Anthropic calls, production data, or report persistence. No actual Netlify site
-has been provisioned or verified. The loopback server's test-only source routes
+Anthropic calls, production data, or report persistence. Separate setup created
+the empty `tracker-boards` Netlify site in `cboone`, ID
+`9ddf762e-9c92-44da-8636-e03913200664`, at
+`https://tracker-boards.netlify.app`. It has no repository link or deployment;
+production behavior remains unverified. The loopback server's test-only source routes
 are outside the publish directory. Local built browser checks do not establish
 deployed Netlify routing or response headers.
 

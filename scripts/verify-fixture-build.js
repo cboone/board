@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
-import { resolve, relative, extname } from 'node:path';
+import { resolve, relative } from 'node:path';
 
 const publishDirectory = resolve(import.meta.dirname, '../dist');
 const requiredFiles = ['index.html', '_headers', '_redirects'];
@@ -26,12 +26,10 @@ for (const entry of entries) {
     entry.isFile(),
     'The fixture publish directory must contain regular static files only.',
   );
-  if (!['.html', '.js', '.css', '.json'].includes(extname(entry.name)))
-    continue;
   const file = resolve(entry.parentPath, entry.name);
   const content = await readFile(file, 'utf8');
   assert(
-    !/ANTHROPIC_API_KEY|GITHUB_CLIENT_SECRET|BOARD_TOKEN_ENCRYPTION_KEY|@netlify\/(?:blobs|database)/.test(
+    !/ANTHROPIC_API_KEY|GITHUB_APP_CLIENT_SECRET|GITHUB_CLIENT_SECRET|BOARD_TOKEN_ENCRYPTION_KEY|@netlify\/(?:blobs|database)/.test(
       content,
     ),
     'Server credentials or storage clients must not enter browser assets: ' +

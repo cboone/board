@@ -258,6 +258,37 @@ describe('validateReport', () => {
     });
   });
 
+  it.each(['meta', '01'])(
+    'rejects an enumerable array property %s outside its dense indices',
+    (key) => {
+      const { report, inventory } = pair();
+      report.startNow[key] = {
+        issue: 999,
+        why: 'This property must not bypass pick validation.',
+      };
+      expect(report.startNow.length).toBe(1);
+      expect(() => validateReport(report, inventory)).not.toThrow();
+      expect(validateReport(report, inventory)).toEqual({
+        valid: false,
+        errors: [
+          {
+            path: 'report.startNow',
+            code: 'not_json',
+            message: expect.any(String),
+          },
+        ],
+      });
+    },
+  );
+
+  it('accepts dense report and inventory arrays parsed from plain JSON', () => {
+    const { report, inventory } = JSON.parse(JSON.stringify(pair()));
+    expect(validateReport(report, inventory)).toEqual({
+      valid: true,
+      errors: [],
+    });
+  });
+
   it('accepts dense frozen arrays in reports and source inventories', () => {
     const { report, inventory } = pair();
     for (const array of [
