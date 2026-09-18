@@ -3,7 +3,11 @@
 The production site is
 [tracker-boards.netlify.app](https://tracker-boards.netlify.app), site ID
 `9ddf762e-9c92-44da-8636-e03913200664`, in the owned `cboone` Netlify account.
-The empty site has been created; deployment and live acceptance remain pending.
+The reviewed authentication/source-check composition is deployed from signed
+commit `55cbae82894561133905ebdf4b8c35e66723d6c0`, deploy ID
+`6aadcb7a2630da02746f4792`. The site API independently reports that deployment
+ready in production context. The repository connection, live owner sign-in and
+public/private source acceptance remain pending.
 No custom domain or self-hosting guide is required for this release.
 
 ## Owner-controlled GitHub App setup
@@ -69,11 +73,12 @@ Optional `BOARD_PREVIOUS_TOKEN_KEY_ID` and `BOARD_PREVIOUS_TOKEN_ENCRYPTION_KEY`
 support future key rotation; leave both absent for initial setup. Never give
 secrets `VITE_` names, put values in shell arguments, print them, or save them
 in project files. No Anthropic key is required for the
-authentication/source-check phase. OAuth, owner sign-in, deployment, and live
-runtime acceptance have not run. The callback, disabled device flow, expiring
-user-token behavior, and actual installation/source grants remain live
-verification checks. App installation and private-key handling are
-owner-confirmed.
+authentication/source-check phase. The production bundle manifest contains one
+native `api` function using `nodejs24.x`, runtime API version 2, and `/api/*`.
+Live anonymous API and OAuth transaction storage checks pass. Owner sign-in,
+disabled device flow, expiring user-token behavior, and actual
+installation/source grants remain live verification checks. App installation
+and private-key handling are owner-confirmed.
 
 ## Deployment dependencies and evidence
 
@@ -86,10 +91,30 @@ The account has 1,000 monthly credits with automatic top-up disabled, but the
 undocumented API counters do not establish its current spendable balance. No
 purchase, recharge, upgrade, migration, or automatic top-up change is implied.
 
-Deploy only the reviewed production composition. Verify deployed
-callback/session and repository/source-check routes, production runtime
-configuration, actual owner sign-in, and an eligible public/private source
-check. Verify an actual preview has zero Functions and static fixture API
-responses. Public evidence records private acceptance pass/fail without private
-identifiers, counts, source tips, issue titles, or screenshots. Keep mocked
-checks distinct from live checks.
+Live verification passes for `/`, `/demo`, and a protected deep link with CSP
+and security headers; an anonymous no-store session; no-store 401 responses for
+repository, check, and logout routes without a session; live encrypted OAuth
+transaction storage and PKCE redirect; a sanitized invalid callback with cookie
+clearing; and 403 rejection of the immutable deployment origin. These are
+anonymous checks and do not establish an authorized source snapshot.
+
+Manual fixture draft `6aadcd18b83e9e153b9c7bbf` is independently reported
+ready in `deploy-preview` context with an explicit provider inventory of zero
+Functions. Its welcome and `/demo` routes serve fixtures with CSP, and
+`/api/session` serves the fixture-only JSON `404`. The fresh isolated staging
+directory contained no Edge Functions, but provider edge inventory still
+requires confirmation from the per-deploy summary.
+
+Verify actual owner sign-in and an eligible public/private source check. Confirm
+the provider summary's zero Edge Functions count and repeat the proven fixture
+behavior through an automatic PR Deploy Preview after repository linking. Connect
+the existing project to `cboone/board` through Netlify's GitHub App flow with
+production branch `main`, build `npm run build`, and publish `dist`. The committed
+production context selects `npm run build:production`; every other context
+produces fixtures. Grant the Netlify GitHub App only the required repository
+access. Avoid the CLI's legacy deploy-key/webhook registration flow.
+
+Public evidence records private acceptance pass/fail without private identifiers,
+counts, source tips, issue titles, or screenshots. Keep mocked checks distinct
+from live checks. Subsequent documentation-only commits do not change the
+deployed implementation; production evidence names its exact source commit.

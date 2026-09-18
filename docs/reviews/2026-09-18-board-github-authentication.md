@@ -82,14 +82,25 @@ No credential files or real repository inputs were used in these reproducers.
 ## Remaining acceptance
 
 The existing owned site is `tracker-boards`, ID
-`9ddf762e-9c92-44da-8636-e03913200664`. Its repository connection and first
-deployment are pending. Production-only environment metadata and the owner's
-App-installation confirmation are recorded in the
-[setup document](../production-setup.md). They do not establish live OAuth,
-runtime, public/private source acceptance, deployed headers, or zero-Function
-preview behavior.
+`9ddf762e-9c92-44da-8636-e03913200664`. Reviewed commit
+`55cbae82894561133905ebdf4b8c35e66723d6c0` is deployed as
+`6aadcb7a2630da02746f4792`, independently reported ready in production context.
+Its native manifest specifies Node24, runtime API version 2, and `/api/*`.
+Live static/security headers, anonymous session/protected routes, OAuth
+transaction storage/PKCE redirect, invalid callback handling, and immutable
+origin rejection pass. Its source commit's GitHub signature is verified valid.
+The [setup document](../production-setup.md) records this evidence separately
+from production-only environment metadata and owner-confirmed App installation.
+Manual fixture draft `6aadcd18b83e9e153b9c7bbf` is ready in `deploy-preview`
+context with explicit provider inventory of zero Functions. Its static fixture
+welcome and `/demo` routes, CSP, and fixture-only API JSON `404` pass. Fresh
+isolated staging contained no Edge Functions; confirm the provider's zero Edge
+Functions summary and repeat through an automatic PR preview after repository
+linking. Live owner OAuth, public/private source acceptance, and repository
+connection remain pending.
 
 Record private acceptance as sanitized pass/fail without private repository
 identifiers, counts, source tips, issue titles, or screenshots. Deliberate live
 installation revocation is not performed; synthetic tests cover that boundary.
-Anthropic credentials and paid calls are absent. Setup spending remains zero.
+Anthropic credentials and paid calls are absent. Anthropic setup spending
+remains zero.
