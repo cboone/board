@@ -124,4 +124,31 @@ describe('source links', () => {
         .join(''),
     ).toBe(source);
   });
+
+  it.each([
+    'path/other/package#17',
+    '/other/package#17',
+    'path/#17',
+    '&other/package#17',
+    '&#17',
+  ])('leaves embedded reference %s as plain text', (source) => {
+    expect(proseReferences(source, links)).toEqual([source]);
+  });
+
+  it('links standalone cross-repository references next to punctuation', () => {
+    const source = '(other/package#17), then other/package#18.';
+    expect(proseReferences(source, links)).toEqual([
+      '(',
+      {
+        href: 'https://github.com/other/package/issues/17',
+        text: 'other/package#17',
+      },
+      '), then ',
+      {
+        href: 'https://github.com/other/package/issues/18',
+        text: 'other/package#18',
+      },
+      '.',
+    ]);
+  });
 });

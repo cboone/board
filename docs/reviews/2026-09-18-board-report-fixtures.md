@@ -59,17 +59,27 @@ head-freeing source defect is recorded in
 Mechanical renderer corrections support both full SHA lengths, maintain progress
 tag contrast, and avoid implying access to unpushed local worktrees.
 
+The first PR review identified two additional valid cases. Head freeing now
+requires the head to be the sole running branch unit, so completing it cannot
+promise new starts while another active branch occupies the lane. Regression
+checks preserve overlap capacity and verify the successor stays queued after
+head completion. An independent review found no remaining issue in that change.
+Prose references now share a preceding-character boundary, leaving longer paths
+and embedded references as text while standalone references still link.
+
 ## Verification
 
-- `npm run verify` passed: formatting, lint, 112 unit checks, 42 browser checks
+- `npm run verify` passed after the PR corrections: formatting, lint, 121 unit
+  checks, 42 browser checks
   across Chromium/Firefox/WebKit, production build, and static artifact gate.
 - `npm audit --audit-level=high` reported no vulnerabilities.
 - The independent reproducers confirm the three dependency corrections and
   companion/foreign-reference negative controls.
 - All implementation commits use GPG signing. The planning merge commit's
   GitHub signature is verified.
-- Subsequent changes after the complete verification run are documentation and
-  merge ancestry only; applicable formatting and whitespace checks passed.
+- The PR corrections also passed their scoped checks: 95 contract/lane checks
+  and 26 source-link checks, plus formatting, lint, and whitespace validation.
+  Full current-head CI and a fresh PR review remain merge gates.
 
 ## Remaining acceptance boundaries
 

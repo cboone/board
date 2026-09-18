@@ -186,6 +186,79 @@ describe('deriveReport', () => {
     expect(model.lanes[0].freedAfter).toBe(0);
   });
 
+  it.each([
+    {
+      name: 'the head root is active',
+      issues: [
+        issue(1, { inProgress: 'PR #90' }),
+        issue(2, { inProgress: 'PR #91' }),
+        issue(3, { waitingOn: [1] }),
+      ],
+      order: [1, 2, 3],
+      remaining: [issue(2, { inProgress: 'PR #91' }), issue(3)],
+      remainingOrder: [2, 3],
+      activeRoots: [1, 2],
+      successor: 3,
+    },
+    {
+      name: 'an active head companion overlaps a blocked active root',
+      issues: [
+        issue(1),
+        issue(2, { sameBranchAs: 1, inProgress: 'PR #90' }),
+        issue(3, { inProgress: 'PR #91', waitingOn: [{ pr: 92 }] }),
+        issue(4, { after: [1] }),
+      ],
+      order: [2, 1, 3, 4],
+      remaining: [
+        issue(3, { inProgress: 'PR #91', waitingOn: [{ pr: 92 }] }),
+        issue(4),
+      ],
+      remainingOrder: [3, 4],
+      activeRoots: [1, 3],
+      successor: 4,
+    },
+  ])(
+    'does not promise head freeing while another branch remains active: $name',
+    (scenario) => {
+      const model = deriveReport(
+        report(scenario.issues, [lane('head', scenario.order)]),
+      );
+      const afterHead = deriveReport(
+        report(scenario.remaining, [lane('head', scenario.remainingOrder)]),
+      );
+
+      expect(model.lanes[0].runningRoots).toEqual(scenario.activeRoots);
+      expect(model.lanes[0].capacity).toBe(2);
+      expect(model.lanes[0].startableRoots).toEqual([]);
+      expect(model.lanes[0].freedAfter).toBe(0);
+      expect(afterHead.lanes[0].runningRoots).toEqual([
+        scenario.activeRoots[1],
+      ]);
+      expect(afterHead.lanes[0].capacity).toBe(1);
+      expect(afterHead.lanes[0].startableRoots).toEqual([]);
+      expect(afterHead.lanes[0].stateByIssue.get(scenario.successor)).toBe(
+        'queued',
+      );
+    },
+  );
+
+  it('counts successors when active companions occupy only the head branch unit', () => {
+    const model = deriveReport(
+      report(
+        [
+          issue(1),
+          issue(2, { sameBranchAs: 1, inProgress: 'PR #90' }),
+          issue(3, { waitingOn: [2] }),
+        ],
+        [lane('head', [2, 1, 3])],
+      ),
+    );
+
+    expect(model.lanes[0].runningRoots).toEqual([1]);
+    expect(model.lanes[0].capacity).toBe(1);
+    expect(model.lanes[0].freedAfter).toBe(1);
+  });
+
   it('does not count a successor whose companion still has independent soft ordering', () => {
     const model = deriveReport(
       report(

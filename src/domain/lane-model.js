@@ -161,7 +161,10 @@ function deriveReport(report) {
               .companions.filter((number) => companionCanRun(number, head)),
           ]);
     const freedAfter =
-      head != null && runningRoots.includes(head) && !units.get(head).uncertain
+      head != null &&
+      runningRoots.length === 1 &&
+      runningRoots[0] === head &&
+      !units.get(head).uncertain
         ? roots.filter(
             (number) =>
               !headUnit.has(number) &&

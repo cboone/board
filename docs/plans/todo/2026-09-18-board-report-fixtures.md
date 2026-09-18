@@ -224,12 +224,18 @@ and supplies independently authored complete, empty, and uncertain sample inputs
 Source links, theme preferences, responsive layouts, and renderer disposal are
 implemented. Built browser checks use the committed Netlify security headers.
 
-`npm run verify` passed with 112 unit checks and 42 browser checks across
+`npm run verify` passed after the PR corrections with 121 unit checks and 42
+browser checks across
 Chromium, Firefox, and WebKit, plus build and static artifact verification.
 `npm audit --audit-level=high` reported no vulnerabilities. Independent final
 reviews found three dependency-model defects, all corrected and independently
 verified with positive and negative cases. The source head-freeing defect is
 recorded in [plugin issue #457](https://github.com/cboone/agent-harness-plugins/issues/457).
+
+The first PR review also corrected head-freeing claims when another branch is
+active and prose links embedded in longer paths. The 95 contract/lane checks
+and 26 source-link checks pass, including reproduced negative cases and positive
+controls. Current-head PR checks and a fresh review remain required before merge.
 
 No actual Netlify deployment, credentials, GitHub gathering, provider call, or
 report persistence is claimed by this phase. Deployed route/header verification

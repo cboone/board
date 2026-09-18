@@ -126,7 +126,7 @@ export function proseReferences(text, links) {
   let last = 0;
   for (const match of source.matchAll(PROSE_REFERENCE)) {
     const before = source[match.index - 1];
-    if (!match[1] && before && /[\w&]/.test(before)) continue;
+    if (before && /[\w&/]/.test(before)) continue;
     const head = source.slice(0, match.index);
     if (/:\/\//.test(head.slice(head.search(/\S*$/)))) continue;
     const href = match[1]
