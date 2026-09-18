@@ -11,7 +11,7 @@ export default defineConfig({
     { name: 'webkit', use: { ...devices['Desktop Safari'] } },
   ],
   webServer: {
-    command: 'npm run dev -- --port 4173',
+    command: 'npm run build && node scripts/serve-fixture.js',
     port: 4173,
     reuseExistingServer: false,
   },
