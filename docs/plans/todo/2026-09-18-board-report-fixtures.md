@@ -224,7 +224,7 @@ and supplies independently authored complete, empty, and uncertain sample inputs
 Source links, theme preferences, responsive layouts, and renderer disposal are
 implemented. Built browser checks use the committed Netlify security headers.
 
-`npm run verify` passed after the PR corrections with 121 unit checks and 42
+`npm run verify` passed after the PR corrections with 121 unit checks and 45
 browser checks across
 Chromium, Firefox, and WebKit, plus build and static artifact verification.
 `npm audit --audit-level=high` reported no vulnerabilities. Independent final
@@ -236,6 +236,9 @@ The first PR review also corrected head-freeing claims when another branch is
 active and prose links embedded in longer paths. The 95 contract/lane checks
 and 26 source-link checks pass, including reproduced negative cases and positive
 controls. Current-head PR checks and a fresh review remain required before merge.
+Optional null time zones also render through the local-zone fallback; browser
+coverage reproduces the prior formatter exception and verifies report sections
+and interval disposal.
 
 No actual Netlify deployment, credentials, GitHub gathering, provider call, or
 report persistence is claimed by this phase. Deployed route/header verification

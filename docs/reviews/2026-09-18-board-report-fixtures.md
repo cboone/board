@@ -66,11 +66,14 @@ checks preserve overlap capacity and verify the successor stays queued after
 head completion. An independent review found no remaining issue in that change.
 Prose references now share a preceding-character boundary, leaving longer paths
 and embedded references as text while standalone references still link.
+Optional null time zones use the browser's local-zone fallback rather than
+passing null to the date formatter. An actual browser regression reproduces
+the prior exception and checks complete rendering and interval disposal.
 
 ## Verification
 
 - `npm run verify` passed after the PR corrections: formatting, lint, 121 unit
-  checks, 42 browser checks
+  checks, 45 browser checks
   across Chromium/Firefox/WebKit, production build, and static artifact gate.
 - `npm audit --audit-level=high` reported no vulnerabilities.
 - The independent reproducers confirm the three dependency corrections and

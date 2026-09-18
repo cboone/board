@@ -346,6 +346,75 @@ test('disposes a mounted report age timer once when its report is replaced', asy
   });
 });
 
+test('renders a valid report with a null optional time zone and disposes its age timer', async ({
+  page,
+}) => {
+  await page.goto('/demo?scenario=empty');
+  const report = structuredClone(fixtures.complete.report);
+  const inventory = structuredClone(fixtures.complete.inventory);
+  report.sync.timeZone = null;
+  inventory.sync.timeZone = null;
+  const outcome = await page.evaluate(
+    async ({ report, inventory }) => {
+      const { renderReport } = await import('/__test__/report/render.js');
+      const mount = document.createElement('div');
+      mount.id = 'null-time-zone-report';
+      document.querySelector('main').append(mount);
+      const originalSetInterval = window.setInterval;
+      const originalClearInterval = window.clearInterval;
+      const activeIntervals = new Set();
+      let scheduledIntervals = 0;
+      let clearedIntervals = 0;
+      window.setInterval = (...arguments_) => {
+        const id = originalSetInterval(...arguments_);
+        scheduledIntervals += 1;
+        activeIntervals.add(id);
+        return id;
+      };
+      window.clearInterval = (id) => {
+        clearedIntervals += 1;
+        activeIntervals.delete(id);
+        originalClearInterval(id);
+      };
+      try {
+        const dispose = renderReport(mount, report, inventory);
+        dispose();
+        dispose();
+        return {
+          scheduledIntervals,
+          clearedIntervals,
+          activeIntervals: activeIntervals.size,
+        };
+      } finally {
+        for (const id of activeIntervals) originalClearInterval(id);
+        window.setInterval = originalSetInterval;
+        window.clearInterval = originalClearInterval;
+      }
+    },
+    { report, inventory },
+  );
+
+  const result = page.locator('#null-time-zone-report');
+  await expect(
+    result.getByRole('heading', { level: 1, name: 'example/widgets' }),
+  ).toBeVisible();
+  for (const heading of [
+    'Start now',
+    'Lanes',
+    'Contention matrix',
+    'Blocked',
+  ]) {
+    await expect(section(result, heading)).toBeVisible();
+  }
+  await expect(result.getByRole('alert')).toHaveCount(0);
+  await expect(result.locator('.when-age')).toContainText('Synced');
+  expect(outcome).toEqual({
+    scheduledIntervals: 1,
+    clearedIntervals: 1,
+    activeIntervals: 0,
+  });
+});
+
 for (const scenario of ['complete', 'empty', 'uncertain']) {
   test(`${scenario} sample remains local and accessible in both themes`, async ({
     page,

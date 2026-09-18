@@ -51,22 +51,27 @@ not establish production completion.
 
 ## Current evidence
 
-Reviewed `main` at `800342dba1980c460812b15205cb41249a6ac584`.
+Foundation baseline: `800342dba1980c460812b15205cb41249a6ac584`.
+Phase 1 implementation is prepared in
+[PR #21](https://github.com/cboone/board/pull/21), pending clean current-head review
+and merge. The phase plan and branch review record its verification.
 `cboone/board` is active, not archived, and not a fork.
 
 - The [foundation phase](2026-09-15-board-foundation.md) landed in
   [PR #18](https://github.com/cboone/board/pull/18).
 - Vite, Alpine CSP, Tailwind CSS, JavaScript modules, npm, pinned dependencies,
   and project verification commands are established.
-- The site is a static welcome screen with a theme control. There is no fixture
-  report renderer, authenticated user flow, repository picker, application API,
-  GitHub client, model client, or report store.
-- Existing unit tests cover a count helper. Browser tests cover the welcome
-  screen, theme control, keyboard interaction, and automated accessibility.
-- CI and secret-scanning runs succeeded on the foundation head. These results
-  do not verify future application behavior. Unit, browser, and security checks
-  were not rerun for this documentation review; formatting and lint checks are
-  recorded separately.
+- The prepared static application has a welcome screen, theme control, and
+  complete/empty/uncertain synthetic reports at `/demo`. It has no authenticated
+  user flow, repository picker, application API, GitHub client, model client, or
+  report store.
+- Unit checks cover the report contract, source links, and lane model. Built
+  browser checks cover report sections, routing, safe rendering, keyboard and
+  narrow-screen behavior, themes, accessibility, and age-timer disposal.
+- The Phase 1 plan and branch review record actual local verification. CI and
+  secret-scanning passed the previous submitted head; the latest submitted head
+  must independently satisfy the phase's merge gates. These results do not
+  establish live-service or production acceptance.
 - Netlify configuration builds `dist`. Production deployment remains unverified.
   Setting a fixture environment variable does not yet enforce future API or
   credential isolation.
@@ -409,8 +414,8 @@ this roadmap in place as decisions settle.
 
 Implementation prepared: independently inventory-bound validation, shared lane
 semantics, complete/empty/uncertain synthetic reports at `/demo`, safe source
-links, and static build/CSP verification. Final local verification passed 112
-unit checks and 42 browser checks in all three engines. See the
+links, and static build/CSP verification. Final local verification passed 121
+unit checks and 45 browser checks in all three engines. See the
 [detailed phase plan](2026-09-18-board-report-fixtures.md) and
 [developer contract](../../report-contract.md). Merge remains subject to clean
 current-head PR checks and review; local verification does not establish live

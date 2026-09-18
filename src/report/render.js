@@ -194,7 +194,7 @@ export function renderReport(mount, report, inventory) {
   const formatSync = (locale, options) =>
     new Intl.DateTimeFormat(locale, {
       ...options,
-      timeZone: report.sync.timeZone,
+      timeZone: report.sync.timeZone ?? undefined,
     }).format(syncedAt);
   const dateText = formatSync('en-GB', {
     day: 'numeric',
