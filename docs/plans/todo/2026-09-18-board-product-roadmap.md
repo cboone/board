@@ -101,6 +101,8 @@ Reviewed `main` at `800342dba1980c460812b15205cb41249a6ac584`.
   a similar available name if that name cannot be allocated. The exact address
   remains unclaimed until site creation confirms availability. A custom domain
   is later work; do not change DNS or register a custom domain in this release.
+  This confirmed choice supersedes issue #16's original `backlog-tracker-app`
+  hostname; that issue now follows the same preferred-name/fallback requirement.
   The authenticated CLI lists the owned `cboone` account, named
   **Catamount Hardware**, with account type **Personal**. Use that explicit
   account destination; its billing configuration and resource charges still
