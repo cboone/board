@@ -85,8 +85,9 @@ No credential files or real repository inputs were used in these reproducers.
 
 The existing owned site is `tracker-boards`, ID
 `9ddf762e-9c92-44da-8636-e03913200664`. Reviewed commit
-`55cbae82894561133905ebdf4b8c35e66723d6c0` is deployed as
-`6aadcb7a2630da02746f4792`, independently reported ready in production context.
+`9295a3a169f0294f475e0fad2da7f6e45bf80101` is deployed as
+`6aadcfbcf08a71c73059a8be`, independently reported ready in production context
+with one Function.
 Its native manifest specifies Node24, runtime API version 2, and `/api/*`.
 Live static/security headers, anonymous session/protected routes, OAuth
 transaction storage/PKCE redirect, invalid callback handling, and immutable
@@ -97,9 +98,13 @@ Manual fixture draft `6aadcd18b83e9e153b9c7bbf` is ready in `deploy-preview`
 context with explicit provider inventory of zero Functions. Its static fixture
 welcome and `/demo` routes, CSP, and fixture-only API JSON `404` pass. Fresh
 isolated staging contained no Edge Functions; confirm the provider's zero Edge
-Functions summary and repeat through an automatic PR preview after repository
-linking. Live owner OAuth, public/private source acceptance, and repository
-connection remain pending.
+Functions summary. Automatic PR #22 preview `6aadce8caab4cf000879539c` is
+separately
+reported ready in `deploy-preview` context from
+`221f4d1fae02b096ebfa7416f01bf4c4bfcf1563`, with zero Functions. Its live
+fixture/CSP and static API JSON `404` checks pass. Live owner OAuth and
+public/private source acceptance remain pending; provider zero Edge Functions
+confirmation remains an owner-visible deploy-summary check.
 
 Record private acceptance as sanitized pass/fail without private repository
 identifiers, counts, source tips, issue titles, or screenshots. Deliberate live

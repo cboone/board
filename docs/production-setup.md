@@ -4,9 +4,11 @@ The production site is
 [tracker-boards.netlify.app](https://tracker-boards.netlify.app), site ID
 `9ddf762e-9c92-44da-8636-e03913200664`, in the owned `cboone` Netlify account.
 The reviewed authentication/source-check composition is deployed from signed
-commit `55cbae82894561133905ebdf4b8c35e66723d6c0`, deploy ID
-`6aadcb7a2630da02746f4792`. The site API independently reports that deployment
-ready in production context. The repository connection, live owner sign-in and
+commit `9295a3a169f0294f475e0fad2da7f6e45bf80101`, deploy ID
+`6aadcfbcf08a71c73059a8be`. The site API independently reports that deployment
+ready in production context with one Function. The project is connected through
+Netlify's GitHub provider to `cboone/board`, production branch `main`, build
+`npm run build`, and publish directory `dist`. Live owner sign-in and
 public/private source acceptance remain pending.
 No custom domain or self-hosting guide is required for this release.
 
@@ -105,14 +107,18 @@ Functions. Its welcome and `/demo` routes serve fixtures with CSP, and
 directory contained no Edge Functions, but provider edge inventory still
 requires confirmation from the per-deploy summary.
 
+Automatic PR #22 preview `6aadce8caab4cf000879539c` is independently reported
+ready in `deploy-preview` context from commit
+`221f4d1fae02b096ebfa7416f01bf4c4bfcf1563`, with an explicit provider
+inventory of zero Functions. Its fixture/CSP and static API JSON `404` checks
+pass. This verifies repository-linked preview composition separately from the
+manual draft.
+
 Verify actual owner sign-in and an eligible public/private source check. Confirm
-the provider summary's zero Edge Functions count and repeat the proven fixture
-behavior through an automatic PR Deploy Preview after repository linking. Connect
-the existing project to `cboone/board` through Netlify's GitHub App flow with
-production branch `main`, build `npm run build`, and publish `dist`. The committed
-production context selects `npm run build:production`; every other context
-produces fixtures. Grant the Netlify GitHub App only the required repository
-access. Avoid the CLI's legacy deploy-key/webhook registration flow.
+the provider summary's zero Edge Functions count. The committed production
+context selects `npm run build:production`; every other context produces
+fixtures. Keep the Netlify GitHub App limited to the required repository access.
+Avoid the CLI's legacy deploy-key/webhook registration flow.
 
 Public evidence records private acceptance pass/fail without private identifiers,
 counts, source tips, issue titles, or screenshots. Keep mocked checks distinct

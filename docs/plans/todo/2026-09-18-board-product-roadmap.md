@@ -6,10 +6,10 @@ Product requirements established as of 2026-09-18. Phase 1 is merged and verifie
 Phase 2 planning passed independent review against that baseline in its distinct
 worktree. Its implementation passes local verification and independent final
 review. Its reviewed production composition is deployed with passing anonymous
-route, header, origin, and OAuth transaction-storage checks. An isolated fixture
-draft proves fixture routes and zero Functions; automatic preview and provider
-Edge Function acceptance remain. Live owner/source acceptance, repository
-connection, and current-head PR checks remain phase gates.
+route, header, origin, and OAuth transaction-storage checks. Isolated and
+automatic PR fixture deploys prove fixture routes and zero Functions; provider
+Edge Function acceptance remains. Live owner/source acceptance and current-head
+PR checks remain phase gates.
 Live authentication, source gathering, analysis, storage, and production
 acceptance remain to be delivered. This is the living roadmap for
 the complete product, not authorization to
@@ -123,8 +123,8 @@ verified; its branch and worktree are removed.
   available and is reserved in `cboone`: site ID
   `9ddf762e-9c92-44da-8636-e03913200664`, address
   `https://tracker-boards.netlify.app`. Its reviewed authentication/source-check
-  composition is deployed; repository connection and full owner/source
-  acceptance remain pending. A custom domain
+  composition is deployed and connected to `cboone/board`; full owner/source
+  acceptance remains pending. A custom domain
   is later work; do not change DNS or register a custom domain in this release.
   This confirmed choice supersedes issue #16's original `backlog-tracker-app`
   hostname; that issue now follows the same preferred-name/fallback requirement.
@@ -306,7 +306,7 @@ the older roadmap's claimed decisions or the README's predictions.
 | Q07 | Issue bodies/comments, labels, milestones, PR descriptions, branches, repository tree, and relevant files selected under bounded limits                                               | Support richer context for public and private repos; select technical bounds; do not fetch arbitrary external URLs             | Confirmed by user; bounds pending   |
 | Q08 | Retain unclear issues and unverified external blockers, show uncertainty, withhold affected starts, and complete the rest of the report                                               | Conservative recommendations without dropping issues; invalid structure and incomplete core collection still fail              | Confirmed by user                   |
 | Q09 | Opus 5 at appropriate effort; $25 total setup budget including paid tests and retries; discuss near the cap; production budget flexible and unspecified                               | Track and reserve all setup costs; notify at $20; settle runtime/input bounds and production policy                            | Confirmed setup; production pending |
-| Q10 | New Netlify site, preferred tracker-boards.netlify.app or similar available name; custom domain later; no self-hosting guide for this release                                         | Owned tracker-boards site has reviewed production deployment; repository connection and owner/source acceptance pending        | Confirmed by user; site deployed    |
+| Q10 | New Netlify site, preferred tracker-boards.netlify.app or similar available name; custom domain later; no self-hosting guide for this release                                         | Owned tracker-boards site has reviewed production deployment and GitHub connection; owner/source acceptance pending            | Confirmed by user; site connected   |
 | Q11 | Original report plus sign-in, repo selection, generation/refresh, freshness, progress/errors, and provenance; report deletion deferred                                                | User confirms this covers initial needs; no additional report types or optional application features are required              | Confirmed by user                   |
 | Q12 | Saved reports stay viewable to the authorized account when the source is archived, transferred, deleted, or inaccessible; mark historical/source-unavailable and disable new analysis | Keep both retained reports until explicit deletion; saved-report retrieval is independent of current source eligibility/access | Confirmed by user                   |
 
@@ -460,8 +460,8 @@ verification, and the server dependency audit pass. These checks use synthetic
 data and establish no live owner sign-in or GitHub source acceptance. Anthropic
 setup spending remains zero.
 
-Reviewed commit `55cbae82894561133905ebdf4b8c35e66723d6c0` is live as production
-deploy `6aadcb7a2630da02746f4792`. The native function manifest specifies Node24,
+Reviewed commit `9295a3a169f0294f475e0fad2da7f6e45bf80101` is live as production
+deploy `6aadcfbcf08a71c73059a8be`. The native function manifest specifies Node24,
 runtime API version 2, and `/api/*`; live anonymous routing/security headers,
 protected-route 401 responses, encrypted OAuth transaction storage/PKCE,
 sanitized invalid callback, and immutable-origin rejection pass. These checks
@@ -470,7 +470,10 @@ do not establish owner authorization or public/private source acceptance.
 Manual fixture draft `6aadcd18b83e9e153b9c7bbf` is ready in
 `deploy-preview` context. The provider reports zero Functions, and live fixture
 routes/CSP plus the fixture-only API JSON `404` pass. Fresh staging contained no
-Edge Functions; the provider summary and an automatic PR preview remain gates.
+Edge Functions; provider summary confirmation remains a gate. Automatic PR #22
+preview `6aadce8caab4cf000879539c` is also ready in `deploy-preview` context
+with explicit provider inventory of zero Functions. Live fixture/CSP and static
+API JSON `404` checks pass.
 
 Implement the agreed GitHub authorization method, server-side token/session
 handling, repository selection, complete gathering, and source verification.
