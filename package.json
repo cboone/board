@@ -15,8 +15,9 @@
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "test": "vitest run",
+    "test:artifact": "node scripts/verify-fixture-build.js",
     "test:browser": "playwright test",
-    "verify": "npm run format:check && npm run lint && npm test && npm run test:browser && npm run build"
+    "verify": "npm run format:check && npm run lint && npm test && npm run test:browser && npm run build && npm run test:artifact"
   },
   "dependencies": {
     "@alpinejs/csp": "3.17.3"

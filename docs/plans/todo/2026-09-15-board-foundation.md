@@ -43,13 +43,16 @@ separate outcome requiring deployed evidence.
 - The application shell supports light and dark color schemes, keyboard navigation, and narrow screens.
 - The README explains the current fixture preview and distinguishes it from the later authenticated product.
 
-## Remaining foundation gaps
+## Foundation follow-up
 
-- There is no report renderer, sample board, repository picker, authentication,
-  persistence, or application API in the current implementation.
-- Browser tests cover the welcome screen and theme control. Report behavior,
-  narrow-screen behavior, application routes, and deployed behavior need their
-  own validation.
+- The foundation did not include a report renderer or sample board. Those are
+  implemented and locally verified in the subsequent
+  [report fixture phase](2026-09-18-board-report-fixtures.md), pending its PR merge.
+  Repository selection, authentication, persistence, and an application API
+  remain later product phases.
+- Foundation browser checks covered the welcome screen and theme control.
+  The report fixture phase adds report, narrow-screen, routing, and built-header
+  checks. Actual deployed behavior remains unverified.
 - Netlify build configuration exists, but a successful production deployment
   has not been established by the evidence reviewed for this plan.
 - Preview and branch deployment configuration sets `VITE_BOARD_MODE`, but the
@@ -60,8 +63,6 @@ separate outcome requiring deployed evidence.
   [#17](https://github.com/cboone/board/issues/17) describe a broader foundation
   than this PR delivered. Reconcile them with the agreed roadmap before marking
   their remaining work complete.
-- The fixture helper's `ready` count excludes issues needing clarification. The
-  original skill defines that header count as open issues minus hard-blocked
-  issues and derives start eligibility separately. Use that original count
-  definition and the agreed uncertainty handling for start recommendations when
-  replacing the simplified helper.
+- The report fixture phase replaces the simplified helper. Its `ready` header
+  count follows the original skill: open issues minus hard-blocked issues.
+  Uncertainty affects start recommendations separately.

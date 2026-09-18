@@ -2,8 +2,10 @@
 
 ## Status and authority
 
-Product requirements established as of 2026-09-18. The detailed Phase 1 plan is
-independently reviewed; fixture delivery is next. This is the living roadmap for
+Product requirements established as of 2026-09-18. Phase 1 implementation is
+prepared and verified in its dedicated feature branch, awaiting PR review and
+merge. Live authentication, source gathering, analysis, storage, and production
+acceptance remain to be delivered. This is the living roadmap for
 the complete product, not authorization to
 assume unanswered spending or service-configuration choices. Production usage
 limits will be proposed using setup calibration evidence before ordinary paid
@@ -49,22 +51,27 @@ not establish production completion.
 
 ## Current evidence
 
-Reviewed `main` at `800342dba1980c460812b15205cb41249a6ac584`.
+Foundation baseline: `800342dba1980c460812b15205cb41249a6ac584`.
+Phase 1 implementation is prepared in
+[PR #21](https://github.com/cboone/board/pull/21), pending clean current-head review
+and merge. The phase plan and branch review record its verification.
 `cboone/board` is active, not archived, and not a fork.
 
 - The [foundation phase](2026-09-15-board-foundation.md) landed in
   [PR #18](https://github.com/cboone/board/pull/18).
 - Vite, Alpine CSP, Tailwind CSS, JavaScript modules, npm, pinned dependencies,
   and project verification commands are established.
-- The site is a static welcome screen with a theme control. There is no fixture
-  report renderer, authenticated user flow, repository picker, application API,
-  GitHub client, model client, or report store.
-- Existing unit tests cover a count helper. Browser tests cover the welcome
-  screen, theme control, keyboard interaction, and automated accessibility.
-- CI and secret-scanning runs succeeded on the foundation head. These results
-  do not verify future application behavior. Unit, browser, and security checks
-  were not rerun for this documentation review; formatting and lint checks are
-  recorded separately.
+- The prepared static application has a welcome screen, theme control, and
+  complete/empty/uncertain synthetic reports at `/demo`. It has no authenticated
+  user flow, repository picker, application API, GitHub client, model client, or
+  report store.
+- Unit checks cover the report contract, source links, and lane model. Built
+  browser checks cover report sections, routing, safe rendering, keyboard and
+  narrow-screen behavior, themes, accessibility, and age-timer disposal.
+- The Phase 1 plan and branch review record actual local verification. CI and
+  secret-scanning passed the previous submitted head; the latest submitted head
+  must independently satisfy the phase's merge gates. These results do not
+  establish live-service or production acceptance.
 - Netlify configuration builds `dist`. Production deployment remains unverified.
   Setting a fixture environment variable does not yet enforce future API or
   credential isolation.
@@ -98,9 +105,11 @@ Reviewed `main` at `800342dba1980c460812b15205cb41249a6ac584`.
   Alpine CSP and Vite foundation unless concrete requirements justify a change.
   The prompt permits React if Alpine cannot keep the application simple.
 - Deploy the working application to Netlify and retain the MIT license.
-- Create a new Netlify production site. Prefer `tracker-boards.netlify.app`, or
-  a similar available name if that name cannot be allocated. The exact address
-  remains unclaimed until site creation confirms availability. A custom domain
+- Create a new Netlify production site. The preferred `tracker-boards` name was
+  available and is reserved in `cboone`: site ID
+  `9ddf762e-9c92-44da-8636-e03913200664`, address
+  `https://tracker-boards.netlify.app`. The site is empty without a repository
+  link or deployment, so production acceptance remains pending. A custom domain
   is later work; do not change DNS or register a custom domain in this release.
   This confirmed choice supersedes issue #16's original `backlog-tracker-app`
   hostname; that issue now follows the same preferred-name/fallback requirement.
@@ -191,9 +200,10 @@ Reviewed `main` at `800342dba1980c460812b15205cb41249a6ac584`.
 The reviewed source is the installed `publish-report-board` version `1.0.0`,
 with the original source under
 [`cboone/agent-harness-plugins`](https://github.com/cboone/agent-harness-plugins/tree/046f1389caf53d6ec8c81e8c88b927a40d154b79/plugins/publish-report-board).
-Its `references/board-types/backlog-triage.md`, `references/sync-metadata.md`,
-`references/design-conventions.md`, template, and validator establish the
-baseline. The installed template and validator byte-match the canonical files
+Its [skill and references](https://github.com/cboone/agent-harness-plugins/tree/046f1389caf53d6ec8c81e8c88b927a40d154b79/plugins/publish-report-board/skills/publish-report-board),
+[template](https://github.com/cboone/agent-harness-plugins/blob/046f1389caf53d6ec8c81e8c88b927a40d154b79/plugins/publish-report-board/templates/backlog-triage.html),
+and [validator](https://github.com/cboone/agent-harness-plugins/blob/046f1389caf53d6ec8c81e8c88b927a40d154b79/plugins/publish-report-board/scripts/report-board)
+establish the baseline. The installed template and validator byte-match the canonical files
 at revision `046f1389caf53d6ec8c81e8c88b927a40d154b79`. Record that source in
 the port's developer documentation so later upstream changes do not silently
 redefine application behavior.
@@ -270,20 +280,20 @@ not itself make Board the source of truth for issue state.
 Record the user's answers here with their consequences. Do not silently inherit
 the older roadmap's claimed decisions or the README's predictions.
 
-| ID  | Decision                                                                                                                                                                              | Why it matters                                                                                                                 | Status                              |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- |
-| Q01 | Only the user's GitHub account (`cboone`), with eligible `cboone/*` repositories; exclude forks, archives, organizations, and other users                                             | Enforce account and repository eligibility server-side across all real-data operations                                         | Confirmed by user                   |
-| Q02 | Public and private eligible repositories; reports require sign-in and are accessible only to the authorized account                                                                   | Support private-repository authorization; prevent unauthenticated access and public sharing                                    | Confirmed by user                   |
-| Q03 | Anthropic, app-managed key, fixed Opus 5 (`claude-opus-5`), and enforced usage limits                                                                                                 | Start at high effort with bounded calibration; server-side key and spending controls                                           | Confirmed by user; limits pending   |
-| Q04 | Assignment alone is insufficient; require a related PR, branch, or in-progress label                                                                                                  | Override the skill's assignment signal; disclose that hosted analysis cannot see unpushed local work                           | Confirmed by user                   |
-| Q05 | Automatic GitHub checks on existing boards; first analysis requires Generate report; paid reanalysis requires explicit refresh; preserve last good report on failure                  | Compare approved report-input changes without a paid call; incomplete checks cannot establish unchanged source                 | Confirmed by user                   |
-| Q06 | Durable server-side current and previous successful reports until a future explicit deletion request; transient raw inputs; retained provenance; logout preserves reports             | Rotate only on success; authenticate reads; deletion controls deferred by the later first-release scope answer                 | Confirmed by user                   |
-| Q07 | Issue bodies/comments, labels, milestones, PR descriptions, branches, repository tree, and relevant files selected under bounded limits                                               | Support richer context for public and private repos; select technical bounds; do not fetch arbitrary external URLs             | Confirmed by user; bounds pending   |
-| Q08 | Retain unclear issues and unverified external blockers, show uncertainty, withhold affected starts, and complete the rest of the report                                               | Conservative recommendations without dropping issues; invalid structure and incomplete core collection still fail              | Confirmed by user                   |
-| Q09 | Opus 5 at appropriate effort; $25 total setup budget including paid tests and retries; discuss near the cap; production budget flexible and unspecified                               | Track and reserve all setup costs; notify at $20; settle runtime/input bounds and production policy                            | Confirmed setup; production pending |
-| Q10 | New Netlify site, preferred tracker-boards.netlify.app or similar available name; custom domain later; no self-hosting guide for this release                                         | CLI verified destination account cboone, named Catamount Hardware, type Personal; site name availability remains unconfirmed   | Confirmed by user; account verified |
-| Q11 | Original report plus sign-in, repo selection, generation/refresh, freshness, progress/errors, and provenance; report deletion deferred                                                | User confirms this covers initial needs; no additional report types or optional application features are required              | Confirmed by user                   |
-| Q12 | Saved reports stay viewable to the authorized account when the source is archived, transferred, deleted, or inaccessible; mark historical/source-unavailable and disable new analysis | Keep both retained reports until explicit deletion; saved-report retrieval is independent of current source eligibility/access | Confirmed by user                   |
+| ID  | Decision                                                                                                                                                                              | Why it matters                                                                                                                       | Status                              |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- |
+| Q01 | Only the user's GitHub account (`cboone`), with eligible `cboone/*` repositories; exclude forks, archives, organizations, and other users                                             | Enforce account and repository eligibility server-side across all real-data operations                                               | Confirmed by user                   |
+| Q02 | Public and private eligible repositories; reports require sign-in and are accessible only to the authorized account                                                                   | Support private-repository authorization; prevent unauthenticated access and public sharing                                          | Confirmed by user                   |
+| Q03 | Anthropic, app-managed key, fixed Opus 5 (`claude-opus-5`), and enforced usage limits                                                                                                 | Start at high effort with bounded calibration; server-side key and spending controls                                                 | Confirmed by user; limits pending   |
+| Q04 | Assignment alone is insufficient; require a related PR, branch, or in-progress label                                                                                                  | Override the skill's assignment signal; disclose that hosted analysis cannot see unpushed local work                                 | Confirmed by user                   |
+| Q05 | Automatic GitHub checks on existing boards; first analysis requires Generate report; paid reanalysis requires explicit refresh; preserve last good report on failure                  | Compare approved report-input changes without a paid call; incomplete checks cannot establish unchanged source                       | Confirmed by user                   |
+| Q06 | Durable server-side current and previous successful reports until a future explicit deletion request; transient raw inputs; retained provenance; logout preserves reports             | Rotate only on success; authenticate reads; deletion controls deferred by the later first-release scope answer                       | Confirmed by user                   |
+| Q07 | Issue bodies/comments, labels, milestones, PR descriptions, branches, repository tree, and relevant files selected under bounded limits                                               | Support richer context for public and private repos; select technical bounds; do not fetch arbitrary external URLs                   | Confirmed by user; bounds pending   |
+| Q08 | Retain unclear issues and unverified external blockers, show uncertainty, withhold affected starts, and complete the rest of the report                                               | Conservative recommendations without dropping issues; invalid structure and incomplete core collection still fail                    | Confirmed by user                   |
+| Q09 | Opus 5 at appropriate effort; $25 total setup budget including paid tests and retries; discuss near the cap; production budget flexible and unspecified                               | Track and reserve all setup costs; notify at $20; settle runtime/input bounds and production policy                                  | Confirmed setup; production pending |
+| Q10 | New Netlify site, preferred tracker-boards.netlify.app or similar available name; custom domain later; no self-hosting guide for this release                                         | Empty tracker-boards site created in owned cboone Personal account; canonical https://tracker-boards.netlify.app; deployment pending | Confirmed by user; site created     |
+| Q11 | Original report plus sign-in, repo selection, generation/refresh, freshness, progress/errors, and provenance; report deletion deferred                                                | User confirms this covers initial needs; no additional report types or optional application features are required                    | Confirmed by user                   |
+| Q12 | Saved reports stay viewable to the authorized account when the source is archived, transferred, deleted, or inaccessible; mark historical/source-unavailable and disable new analysis | Keep both retained reports until explicit deletion; saved-report retrieval is independent of current source eligibility/access       | Confirmed by user                   |
 
 The model is settled as `claude-opus-5`. Select the runtime, session storage,
 report store, and input bounds using the confirmed requirements and current
@@ -403,6 +413,15 @@ detailed plan and an independent second review before implementation. Update
 this roadmap in place as decisions settle.
 
 ### Phase 1: Report contract and fixture experience
+
+Implementation prepared: independently inventory-bound validation, shared lane
+semantics, complete/empty/uncertain synthetic reports at `/demo`, safe source
+links, and static build/CSP verification. Final local verification passed 152
+unit checks and 45 browser checks in all three engines. See the
+[detailed phase plan](2026-09-18-board-report-fixtures.md) and
+[developer contract](../../report-contract.md). Merge remains subject to clean
+current-head PR checks and review; local verification does not establish live
+production acceptance.
 
 Port the agreed report semantics, validator, and responsive renderer. Add a
 usable fixture/demo report and application routes. Replace the simplified count
