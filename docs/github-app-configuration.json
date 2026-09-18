@@ -1,0 +1,16 @@
+{
+  "name": "cboone-tracker-boards",
+  "url": "https://tracker-boards.netlify.app",
+  "description": "Read-only backlog analysis for eligible cboone repositories.",
+  "callback_urls": ["https://tracker-boards.netlify.app/api/auth/callback"],
+  "public": false,
+  "request_oauth_on_install": false,
+  "default_permissions": {
+    "metadata": "read",
+    "issues": "read",
+    "pull_requests": "read",
+    "contents": "read"
+  },
+  "default_events": [],
+  "hook_attributes": { "active": false }
+}

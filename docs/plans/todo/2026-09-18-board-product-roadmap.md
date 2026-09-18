@@ -2,9 +2,10 @@
 
 ## Status and authority
 
-Product requirements established as of 2026-09-18. Phase 1 implementation is
-prepared and verified in its dedicated feature branch, awaiting PR review and
-merge. Live authentication, source gathering, analysis, storage, and production
+Product requirements established as of 2026-09-18. Phase 1 is merged and verified.
+Phase 2 planning passed independent review against that baseline in its distinct
+worktree and is ready for implementation.
+Live authentication, source gathering, analysis, storage, and production
 acceptance remain to be delivered. This is the living roadmap for
 the complete product, not authorization to
 assume unanswered spending or service-configuration choices. Production usage
@@ -52,16 +53,18 @@ not establish production completion.
 ## Current evidence
 
 Foundation baseline: `800342dba1980c460812b15205cb41249a6ac584`.
-Phase 1 implementation is prepared in
-[PR #21](https://github.com/cboone/board/pull/21), pending clean current-head review
-and merge. The phase plan and branch review record its verification.
+Phase 1 landed in [PR #21](https://github.com/cboone/board/pull/21), merge
+`f8b78767babe021754873bd60540fbac8500b186`. Final head
+`47ac8082c3d4bb8d65ad77a03e7e19487399a1cb` passed CI and received Copilot review
+`5253326943`, with approval recommended and no findings. The merge signature is
+verified; its branch and worktree are removed.
 `cboone/board` is active, not archived, and not a fork.
 
 - The [foundation phase](2026-09-15-board-foundation.md) landed in
   [PR #18](https://github.com/cboone/board/pull/18).
 - Vite, Alpine CSP, Tailwind CSS, JavaScript modules, npm, pinned dependencies,
   and project verification commands are established.
-- The prepared static application has a welcome screen, theme control, and
+- The merged static application has a welcome screen, theme control, and
   complete/empty/uncertain synthetic reports at `/demo`. It has no authenticated
   user flow, repository picker, application API, GitHub client, model client, or
   report store.
@@ -69,15 +72,21 @@ and merge. The phase plan and branch review record its verification.
   browser checks cover report sections, routing, safe rendering, keyboard and
   narrow-screen behavior, themes, accessibility, and age-timer disposal.
 - The Phase 1 plan and branch review record actual local verification. CI and
-  secret-scanning passed the previous submitted head; the latest submitted head
-  must independently satisfy the phase's merge gates. These results do not
+  secret scanning passed the final submitted head. These results do not
   establish live-service or production acceptance.
 - Netlify configuration builds `dist`. Production deployment remains unverified.
   Setting a fixture environment variable does not yet enforce future API or
   credential isolation.
-- Foundation issues #12 through #17 remain open and include undelivered or
-  conflicting interpretations. Reconcile their acceptance criteria with agreed
-  requirements before further implementation or closure.
+- Foundation issues #12 through #17 are reconciled with agreed scope. Scaffold
+  issue #13 and fixture quality issue #14 are completed; #12, #15, #16, and #17
+  retain their remaining hosted/protected/isolation acceptance.
+- The empty owned `tracker-boards` site and read-only `cboone-tracker-boards`
+  App are created. The owner confirmed installation for intended repositories.
+  Production-only authentication configuration is installed; secret metadata
+  confirms exactly one production context. On September 18 the owner confirmed
+  863.7 of 1,000 shared credits remaining, expiring September 23. See
+  [production setup](../../production-setup.md). OAuth, live source grants,
+  repository linkage, deployment, and runtime acceptance remain unverified.
 
 ## Established constraints
 
@@ -414,13 +423,13 @@ this roadmap in place as decisions settle.
 
 ### Phase 1: Report contract and fixture experience
 
-Implementation prepared: independently inventory-bound validation, shared lane
+Delivered in PR #21: independently inventory-bound validation, shared lane
 semantics, complete/empty/uncertain synthetic reports at `/demo`, safe source
 links, and static build/CSP verification. Final local verification passed 152
 unit checks and 45 browser checks in all three engines. See the
 [detailed phase plan](2026-09-18-board-report-fixtures.md) and
-[developer contract](../../report-contract.md). Merge remains subject to clean
-current-head PR checks and review; local verification does not establish live
+[developer contract](../../report-contract.md). Final-head CI and review passed;
+the merge and local cleanup are complete. This phase does not establish live
 production acceptance.
 
 Port the agreed report semantics, validator, and responsive renderer. Add a
@@ -434,6 +443,9 @@ rejection. Browser checks cover report interactions, keyboard access, narrow
 screens, light/dark themes, and automated accessibility.
 
 ### Phase 2: GitHub authentication and authoritative gathering
+
+The [detailed phase plan](2026-09-18-board-github-authentication.md) passed
+independent review against the merged Phase 1 baseline before implementation.
 
 Implement the agreed GitHub authorization method, server-side token/session
 handling, repository selection, complete gathering, and source verification.

@@ -2,9 +2,10 @@
 
 ## Status and authority
 
-Phase 1 implementation is prepared and verified on 2026-09-18 after the product
-requirements interview and independent plan review. The dedicated feature
-branch awaits its PR review and merge. This phase implements
+Phase 1 is delivered on 2026-09-18 in
+[PR #21](https://github.com/cboone/board/pull/21), merge
+`f8b78767babe021754873bd60540fbac8500b186`, after independent review and passing
+final-head CI. The branch and worktree are removed. This phase implements
 the report contract and a synthetic fixture experience; live authentication,
 GitHub gathering, paid analysis, and report persistence belong to later phases.
 
