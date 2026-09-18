@@ -2,8 +2,9 @@
 
 ## Status and authority
 
-Product requirements established as of 2026-09-18. Detailed phase planning is
-next. This is the living roadmap for the complete product, not authorization to
+Product requirements established as of 2026-09-18. The detailed Phase 1 plan is
+independently reviewed; fixture delivery is next. This is the living roadmap for
+the complete product, not authorization to
 assume unanswered spending or service-configuration choices. Production usage
 limits will be proposed using setup calibration evidence before ordinary paid
 production usage is enabled.
@@ -380,9 +381,17 @@ calls follow the separate authorization and spending controls above.
   [functions directory](https://docs.netlify.com/build/functions/configuration/#directory),
   and [runtime deploy context](https://docs.netlify.com/build/functions/api/#deploy).
 - Netlify supports Node 24 for Functions. Runtime secrets must be configured
-  through the UI, CLI, or API for production and Functions scope; values declared
-  in `netlify.toml` are not available to Functions at runtime. Redeploy after
-  runtime environment changes. Sources:
+  through the UI, CLI, or API with values only in the production deploy context;
+  values declared in `netlify.toml` are not available to Functions at runtime.
+  Limit them to Functions scope when the account supports that setting. The
+  verified `cboone` account is `credit-personal`, includes Background Functions,
+  and has automatic credit top-ups disabled. Personal does not include selective
+  environment scopes, so production values also reach the trusted production
+  build. Keep them out of `VITE_*` variables, avoid reading them in build code,
+  and verify browser artifacts and absent preview/branch values. No paid plan
+  upgrade or legacy-plan migration is needed for this architecture. Redeploy
+  after runtime environment changes. Sources:
+  [environment contexts and scopes](https://docs.netlify.com/build/environment-variables/overview/),
   [runtime configuration](https://docs.netlify.com/build/functions/configuration/#nodejs-version-for-runtime)
   and
   [function environment variables](https://docs.netlify.com/build/functions/environment-variables/).
