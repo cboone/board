@@ -70,9 +70,17 @@ Optional null time zones use the browser's local-zone fallback rather than
 passing null to the date formatter. An actual browser regression reproduces
 the prior exception and checks complete rendering and interval disposal.
 
+Sparse arrays and custom array prototypes previously bypassed parts of the
+plain JSON inspection and later array traversal. Validation now rejects them,
+including non-enumerable array elements. The independent reproducer confirms
+both bypasses are rejected; dense frozen arrays and the ordinary invalid-pick
+control retain their expected behavior. Ten regression checks cover these
+structural boundaries. The review parser defect that omitted these body findings
+is tracked in [plugin issue #458](https://github.com/cboone/agent-harness-plugins/issues/458).
+
 ## Verification
 
-- `npm run verify` passed after the PR corrections: formatting, lint, 121 unit
+- `npm run verify` passed after the PR corrections: formatting, lint, 131 unit
   checks, 45 browser checks
   across Chromium/Firefox/WebKit, production build, and static artifact gate.
 - `npm audit --audit-level=high` reported no vulnerabilities.

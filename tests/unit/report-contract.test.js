@@ -176,6 +176,152 @@ describe('validateReport', () => {
     expect(codes(report, inventory)).toContain('size_limit');
   });
 
+  it('rejects a sparse pick list in an otherwise valid empty backlog', () => {
+    const { report, inventory } = pair();
+    report.issues = [];
+    report.lanes = [];
+    report.startNow = [];
+    inventory.issues = [];
+    delete report.contention;
+    expect(validateReport(report, inventory)).toEqual({
+      valid: true,
+      errors: [],
+    });
+
+    report.startNow = new Array(1);
+    expect(() => validateReport(report, inventory)).not.toThrow();
+    expect(validateReport(report, inventory)).toEqual({
+      valid: false,
+      errors: [
+        {
+          path: 'report.startNow.0',
+          code: 'not_json',
+          message: expect.any(String),
+        },
+      ],
+    });
+  });
+
+  it.each([
+    { name: 'report issues', path: 'report.issues.1', field: 'issues' },
+    {
+      name: 'source inventory issues',
+      path: 'inventory.issues.1',
+      field: 'inventoryIssues',
+    },
+    {
+      name: 'nested hard references',
+      path: 'report.issues.1.waitingOn.0',
+      field: 'waitingOn',
+    },
+    {
+      name: 'nested lane order',
+      path: 'report.lanes.0.issues.1',
+      field: 'laneIssues',
+    },
+  ])(
+    'rejects a missing own index in $name before semantic traversal',
+    ({ path, field }) => {
+      const { report, inventory } = pair();
+      expect(validateReport(report, inventory).valid).toBe(true);
+      const arrays = {
+        issues: report.issues,
+        inventoryIssues: inventory.issues,
+        waitingOn: report.issues[1].waitingOn,
+        laneIssues: report.lanes[0].issues,
+      };
+      delete arrays[field][field === 'waitingOn' ? 0 : 1];
+
+      expect(() => validateReport(report, inventory)).not.toThrow();
+      expect(validateReport(report, inventory)).toEqual({
+        valid: false,
+        errors: [{ path, code: 'not_json', message: expect.any(String) }],
+      });
+    },
+  );
+
+  it('rejects nonenumerable array elements that would skip structural text limits', () => {
+    const { report, inventory } = pair();
+    report.extra = ['x'.repeat(REPORT_LIMITS.textLength + 1)];
+    Object.defineProperty(report.extra, '0', { enumerable: false });
+    expect(Object.hasOwn(report.extra, 0)).toBe(true);
+    expect(() => validateReport(report, inventory)).not.toThrow();
+    expect(validateReport(report, inventory)).toEqual({
+      valid: false,
+      errors: [
+        {
+          path: 'report.extra.0',
+          code: 'not_json',
+          message: expect.any(String),
+        },
+      ],
+    });
+  });
+
+  it('accepts dense frozen arrays in reports and source inventories', () => {
+    const { report, inventory } = pair();
+    for (const array of [
+      report.issues,
+      report.lanes,
+      report.startNow,
+      report.contention.claims,
+      report.contention.claims[0].issues,
+      report.lanes[0].issues,
+      report.lanes[1].issues,
+      report.issues[1].waitingOn,
+      inventory.issues,
+    ])
+      Object.freeze(array);
+    expect(validateReport(report, inventory)).toEqual({
+      valid: true,
+      errors: [],
+    });
+  });
+
+  it('rejects an Array subclass that skips validation of an invalid dense pick', () => {
+    class SkippedChecksArray extends Array {
+      forEach() {}
+    }
+    const { report, inventory } = pair();
+    report.issues = [];
+    report.lanes = [];
+    inventory.issues = [];
+    delete report.contention;
+    report.startNow = [
+      { issue: 999, why: 'This issue is outside the source.' },
+    ];
+    expect(codes(report, inventory)).toContain('ineligible_pick');
+
+    report.startNow = new SkippedChecksArray(...report.startNow);
+    expect(Object.keys(report.startNow)).toEqual(['0']);
+    expect(() => validateReport(report, inventory)).not.toThrow();
+    expect(validateReport(report, inventory)).toEqual({
+      valid: false,
+      errors: [
+        {
+          path: 'report.startNow',
+          code: 'not_json',
+          message: expect.any(String),
+        },
+      ],
+    });
+  });
+
+  it.each([
+    { name: 'null', prototype: null },
+    { name: 'custom', prototype: Object.create(Array.prototype) },
+  ])('rejects an array with a $name prototype', ({ prototype }) => {
+    const { report, inventory } = pair();
+    report.extra = Object.setPrototypeOf(['Source context'], prototype);
+    expect(() => validateReport(report, inventory)).not.toThrow();
+    expect(validateReport(report, inventory)).toEqual({
+      valid: false,
+      errors: [
+        { path: 'report.extra', code: 'not_json', message: expect.any(String) },
+      ],
+    });
+  });
+
   it('handles accessors that cannot be read safely', () => {
     const { inventory } = pair();
     const report = Object.defineProperty({}, 'issues', {

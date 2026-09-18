@@ -144,16 +144,16 @@ function validateReport(report, inventory) {
             );
           }
         } else if (entry.value !== null && typeof entry.value === 'object') {
+          const prototype = Object.getPrototypeOf(entry.value);
           if (
-            !Array.isArray(entry.value) &&
-            ![Object.prototype, null].includes(
-              Object.getPrototypeOf(entry.value),
-            )
+            Array.isArray(entry.value)
+              ? prototype !== Array.prototype
+              : ![Object.prototype, null].includes(prototype)
           ) {
             add(
               entry.path,
               'not_json',
-              'The payload must contain plain JSON objects.',
+              'The payload must contain plain JSON objects and arrays.',
             );
             return false;
           }
@@ -184,6 +184,19 @@ function validateReport(report, inventory) {
               'The object exceeds the structural limit.',
             );
             return false;
+          }
+          if (Array.isArray(entry.value)) {
+            const indexedKeys = new Set(keys);
+            for (let index = 0; index < entry.value.length; index += 1) {
+              if (!indexedKeys.has(String(index))) {
+                add(
+                  `${entry.path}.${index}`,
+                  'not_json',
+                  'Array elements must be present and enumerable.',
+                );
+                return false;
+              }
+            }
           }
           for (const key of keys) {
             characters += key.length;

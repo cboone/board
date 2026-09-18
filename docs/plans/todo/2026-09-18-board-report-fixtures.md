@@ -224,7 +224,7 @@ and supplies independently authored complete, empty, and uncertain sample inputs
 Source links, theme preferences, responsive layouts, and renderer disposal are
 implemented. Built browser checks use the committed Netlify security headers.
 
-`npm run verify` passed after the PR corrections with 121 unit checks and 45
+`npm run verify` passed after the PR corrections with 131 unit checks and 45
 browser checks across
 Chromium, Firefox, and WebKit, plus build and static artifact verification.
 `npm audit --audit-level=high` reported no vulnerabilities. Independent final
@@ -239,6 +239,12 @@ controls. Current-head PR checks and a fresh review remain required before merge
 Optional null time zones also render through the local-zone fallback; browser
 coverage reproduces the prior formatter exception and verifies report sections
 and interval disposal.
+
+Structural validation rejects sparse arrays, non-enumerable array elements,
+and custom array prototypes before traversing report data. Independent
+reproductions confirm the rejected bypasses while dense frozen arrays retain
+their valid behavior. The review parser's missed body findings are recorded in
+[plugin issue #458](https://github.com/cboone/agent-harness-plugins/issues/458).
 
 No actual Netlify deployment, credentials, GitHub gathering, provider call, or
 report persistence is claimed by this phase. Deployed route/header verification
