@@ -2,8 +2,10 @@
 
 ## Status and authority
 
-Product requirements established as of 2026-09-18. The detailed Phase 1 plan is
-independently reviewed; fixture delivery is next. This is the living roadmap for
+Product requirements established as of 2026-09-18. Phase 1 implementation is
+prepared and verified in its dedicated feature branch, awaiting PR review and
+merge. Live authentication, source gathering, analysis, storage, and production
+acceptance remain to be delivered. This is the living roadmap for
 the complete product, not authorization to
 assume unanswered spending or service-configuration choices. Production usage
 limits will be proposed using setup calibration evidence before ordinary paid
@@ -191,9 +193,10 @@ Reviewed `main` at `800342dba1980c460812b15205cb41249a6ac584`.
 The reviewed source is the installed `publish-report-board` version `1.0.0`,
 with the original source under
 [`cboone/agent-harness-plugins`](https://github.com/cboone/agent-harness-plugins/tree/046f1389caf53d6ec8c81e8c88b927a40d154b79/plugins/publish-report-board).
-Its `references/board-types/backlog-triage.md`, `references/sync-metadata.md`,
-`references/design-conventions.md`, template, and validator establish the
-baseline. The installed template and validator byte-match the canonical files
+Its [skill and references](https://github.com/cboone/agent-harness-plugins/tree/046f1389caf53d6ec8c81e8c88b927a40d154b79/plugins/publish-report-board/skills/publish-report-board),
+[template](https://github.com/cboone/agent-harness-plugins/blob/046f1389caf53d6ec8c81e8c88b927a40d154b79/plugins/publish-report-board/templates/backlog-triage.html),
+and [validator](https://github.com/cboone/agent-harness-plugins/blob/046f1389caf53d6ec8c81e8c88b927a40d154b79/plugins/publish-report-board/scripts/report-board)
+establish the baseline. The installed template and validator byte-match the canonical files
 at revision `046f1389caf53d6ec8c81e8c88b927a40d154b79`. Record that source in
 the port's developer documentation so later upstream changes do not silently
 redefine application behavior.
@@ -403,6 +406,15 @@ detailed plan and an independent second review before implementation. Update
 this roadmap in place as decisions settle.
 
 ### Phase 1: Report contract and fixture experience
+
+Implementation prepared: independently inventory-bound validation, shared lane
+semantics, complete/empty/uncertain synthetic reports at `/demo`, safe source
+links, and static build/CSP verification. Final local verification passed 112
+unit checks and 42 browser checks in all three engines. See the
+[detailed phase plan](2026-09-18-board-report-fixtures.md) and
+[developer contract](../../report-contract.md). Merge remains subject to clean
+current-head PR checks and review; local verification does not establish live
+production acceptance.
 
 Port the agreed report semantics, validator, and responsive renderer. Add a
 usable fixture/demo report and application routes. Replace the simplified count

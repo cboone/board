@@ -2,8 +2,9 @@
 
 ## Status and authority
 
-Phase 1 plan, prepared on 2026-09-18 after the product requirements interview.
-Take an independent second review before implementation. This phase implements
+Phase 1 implementation is prepared and verified on 2026-09-18 after the product
+requirements interview and independent plan review. The dedicated feature
+branch awaits its PR review and merge. This phase implements
 the report contract and a synthetic fixture experience; live authentication,
 GitHub gathering, paid analysis, and report persistence belong to later phases.
 
@@ -12,7 +13,7 @@ Follow the [product roadmap](2026-09-18-board-product-roadmap.md), definitive
 and confirmed user answers. Deletion controls, self-hosting documentation, and
 custom-domain setup are deferred.
 
-## Current evidence
+## Foundation baseline
 
 The foundation at `800342dba1980c460812b15205cb41249a6ac584` provides Vite,
 Alpine CSP, Tailwind CSS, Vitest, Playwright, formatting, and CI. The application
@@ -214,6 +215,25 @@ handling is usable with synthetic data, validator/lane checks are meaningful,
 browser checks pass, and static-only preview isolation remains intact. It does
 not claim live authentication, paid analysis, report storage, or production
 completion.
+
+## Recorded implementation verification
+
+The implementation replaces the unused count helper with inventory-bound
+validation and a shared lane model, renders all original sections at `/demo`,
+and supplies independently authored complete, empty, and uncertain sample inputs.
+Source links, theme preferences, responsive layouts, and renderer disposal are
+implemented. Built browser checks use the committed Netlify security headers.
+
+`npm run verify` passed with 112 unit checks and 42 browser checks across
+Chromium, Firefox, and WebKit, plus build and static artifact verification.
+`npm audit --audit-level=high` reported no vulnerabilities. Independent final
+reviews found three dependency-model defects, all corrected and independently
+verified with positive and negative cases. The source head-freeing defect is
+recorded in [plugin issue #457](https://github.com/cboone/agent-harness-plugins/issues/457).
+
+No actual Netlify deployment, credentials, GitHub gathering, provider call, or
+report persistence is claimed by this phase. Deployed route/header verification
+and the remaining live product are later acceptance requirements.
 
 ## Dependencies and deferred decisions
 

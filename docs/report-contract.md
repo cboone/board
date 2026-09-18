@@ -89,11 +89,13 @@ reason whenever its list is nonempty; a reason without a hard blocker is invalid
 | `{ "url": "https://example.com/design", "label": "Design" }` | A labeled external source                |
 
 Reference objects name exactly one target kind and may include `title`. A `pr`
-cannot mislabel a known issue number. A `ref` matching the current repository and
+cannot mislabel a known issue number because issues and PRs share one repository
+number namespace. A `ref` matching the current repository and
 a known open issue is treated as the same local target as its number, including
 case differences in repository names. An ordinary `/issues/N` URL under the
 source repository's origin and path also resolves to that known local issue.
-Other origins, repository paths, and unlisted numbers remain external. Local
+Other origins, repository paths, unlisted numbers, and `/pull/N` URLs remain
+external. Local
 equivalence applies to dependency cycles, self-references, hard/soft duplicates,
 branch ordering, reverse relations, and head freeing. The displayed reference
 can retain its authored form.
@@ -248,8 +250,9 @@ remain static and contain no application Functions or service credentials.
 
 The semantic and design baseline is `publish-report-board` version `1.0.0` at
 immutable source revision `046f1389caf53d6ec8c81e8c88b927a40d154b79`. Read its
-[original skill and report sources][original-source], especially the backlog
-type, sync metadata, design conventions, validator, and HTML template.
+[original skill and references][original-source], including the backlog type,
+sync metadata, and design conventions, together with its [validator][original-validator]
+and [HTML template][original-template].
 
 The application preserves the original sections, source links, six counts,
 same-branch behavior, lane modes, active overlap, and milestone contention.
@@ -260,9 +263,16 @@ backlogs, and the assignment-only override. The DOM mount API, external assets,
 system fonts, scoped theme styles, and disposable age interval support the Vite
 application and its CSP.
 
+The original head-freeing calculation's successor-companion ordering defect is
+reported in [source issue #457](https://github.com/cboone/agent-harness-plugins/issues/457).
+Board's regression checks preserve the distinction between companion soft
+ordering and independent hard blockers while correcting that calculation.
+
 Application job, freshness, provider, and retention metadata stay outside this
 report payload. Durable current and previous successful reports belong to a
 future server implementation; the fixture contract does not claim that storage
 or authenticated access exists.
 
-[original-source]: https://github.com/cboone/agent-harness-plugins/tree/046f1389caf53d6ec8c81e8c88b927a40d154b79/plugins/publish-report-board
+[original-source]: https://github.com/cboone/agent-harness-plugins/tree/046f1389caf53d6ec8c81e8c88b927a40d154b79/plugins/publish-report-board/skills/publish-report-board
+[original-validator]: https://github.com/cboone/agent-harness-plugins/blob/046f1389caf53d6ec8c81e8c88b927a40d154b79/plugins/publish-report-board/scripts/report-board
+[original-template]: https://github.com/cboone/agent-harness-plugins/blob/046f1389caf53d6ec8c81e8c88b927a40d154b79/plugins/publish-report-board/templates/backlog-triage.html
