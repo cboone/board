@@ -393,6 +393,72 @@ describe('validateReport', () => {
     expect(validateReport(report, inventory).valid).toBe(true);
   });
 
+  it.each(['/feature/api', 'feature/api/', 'feature//api'])(
+    'rejects empty branch path components in %s',
+    (branch) => {
+      const { report, inventory } = pair();
+      report.sync.branch = inventory.sync.branch = branch;
+      expect(codes(report, inventory)).toContain('branch');
+
+      report.sync.branch = inventory.sync.branch = 'main';
+      report.issues[1].waitingOn = [{ branch }];
+      expect(codes(report, inventory)).toContain('branch');
+
+      report.issues[1].waitingOn = [1];
+      report.issues[2].inProgress = inventory.issues[2].inProgress = branch;
+      expect(codes(report, inventory)).toContain('progress');
+    },
+  );
+
+  it.each([
+    'example/other#9007199254740992',
+    `example/other#${'9'.repeat(100)}`,
+  ])('rejects repository reference with an unsafe issue number %s', (ref) => {
+    const { report, inventory } = pair();
+    report.issues[1].waitingOn = [{ ref }];
+    expect(validateReport(report, inventory)).toMatchObject({
+      valid: false,
+      errors: expect.arrayContaining([
+        {
+          path: 'report.issues.1.waitingOn.0.ref',
+          code: 'reference',
+          message: expect.any(String),
+        },
+      ]),
+    });
+  });
+
+  it.each(['9007199254740992', '9'.repeat(100)])(
+    'rejects a PR progress marker with unsafe number %s',
+    (number) => {
+      const { report, inventory } = pair();
+      report.issues[2].inProgress =
+        inventory.issues[2].inProgress = `PR #${number}`;
+      expect(codes(report, inventory)).toContain('progress');
+    },
+  );
+
+  it('accepts nested branch paths and a maximum safe repository issue number', () => {
+    const { report, inventory } = pair();
+    report.sync.branch = inventory.sync.branch = 'release/next';
+    report.issues[2].inProgress = inventory.issues[2].inProgress =
+      'feature/3/cache';
+    report.issues[1].waitingOn = [
+      { branch: 'feature/parser/api' },
+      { ref: `example/other#${Number.MAX_SAFE_INTEGER}` },
+    ];
+    expect(validateReport(report, inventory)).toEqual({
+      valid: true,
+      errors: [],
+    });
+    report.issues[2].inProgress =
+      inventory.issues[2].inProgress = `PR #${Number.MAX_SAFE_INTEGER}`;
+    expect(validateReport(report, inventory)).toEqual({
+      valid: true,
+      errors: [],
+    });
+  });
+
   it.each([
     'https://github.com/other/widgets',
     'https://github.com/example/widgets?q=x',

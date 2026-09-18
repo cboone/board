@@ -15,10 +15,16 @@ const isObject = (value) =>
 const isText = (value) => typeof value === 'string' && /\S/u.test(value);
 const isNumber = (value) => Number.isSafeInteger(value) && value > 0;
 const isBranch = (value) =>
-  isText(value) && !/\s/u.test(value) && !/(^|\/)\.{1,2}(\/|$)/u.test(value);
+  isText(value) &&
+  !/\s/u.test(value) &&
+  value
+    .split('/')
+    .every((part) => part !== '' && part !== '.' && part !== '..');
 const isProgress = (value) =>
   value === 'the in progress label' ||
-  (typeof value === 'string' && /^PR #[1-9]\d*$/u.test(value)) ||
+  (typeof value === 'string' &&
+    /^PR #[1-9]\d*$/u.test(value) &&
+    isNumber(Number(value.slice(4)))) ||
   isBranch(value);
 const has = (object, key) => Object.hasOwn(object, key);
 const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
@@ -298,7 +304,7 @@ function validateReport(report, inventory) {
         isBranch(value.sync.branch),
         `${prefix}.sync.branch`,
         'branch',
-        'Expected a branch name without dot path segments.',
+        'Expected a branch name without empty or dot path segments.',
       );
       check(
         isText(value.sync.commit) &&
@@ -685,17 +691,18 @@ function validateReport(report, inventory) {
           isBranch(value.branch),
           `${path}.branch`,
           'branch',
-          'Expected a branch without dot path segments.',
+          'Expected a branch without empty or dot path segments.',
         );
       if (kind === 'ref')
         check(
           isText(value.ref) &&
             /^(?!\.{1,2}\/)[a-z0-9_.-]+\/(?!\.{1,2}#)[a-z0-9_.-]+#[1-9]\d*$/iu.test(
               value.ref,
-            ),
+            ) &&
+            isNumber(Number(value.ref.slice(value.ref.lastIndexOf('#') + 1))),
           `${path}.ref`,
           'reference',
-          'Expected owner/repository#number.',
+          'Expected owner/repository#number with a positive safe integer.',
         );
       check(
         issueNumber == null ||

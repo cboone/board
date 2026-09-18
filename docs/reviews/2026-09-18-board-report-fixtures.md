@@ -78,9 +78,15 @@ control retain their expected behavior. Ten regression checks cover these
 structural boundaries. The review parser defect that omitted these body findings
 is tracked in [plugin issue #458](https://github.com/cboone/agent-harness-plugins/issues/458).
 
+Source identifier validation now rejects branch names with empty path components
+and typed issue/PR numbers beyond the safe-integer range. The independent
+reproducer confirms both reference gaps and the matching PR progress case.
+Nested branch names and maximum-safe-integer references retain valid links;
+generic HTTPS reference URLs retain their existing behavior.
+
 ## Verification
 
-- `npm run verify` passed after the PR corrections: formatting, lint, 131 unit
+- `npm run verify` passed after the PR corrections: formatting, lint, 139 unit
   checks, 45 browser checks
   across Chromium/Firefox/WebKit, production build, and static artifact gate.
 - `npm audit --audit-level=high` reported no vulnerabilities.

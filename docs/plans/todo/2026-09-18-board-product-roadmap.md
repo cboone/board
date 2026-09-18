@@ -414,7 +414,7 @@ this roadmap in place as decisions settle.
 
 Implementation prepared: independently inventory-bound validation, shared lane
 semantics, complete/empty/uncertain synthetic reports at `/demo`, safe source
-links, and static build/CSP verification. Final local verification passed 131
+links, and static build/CSP verification. Final local verification passed 139
 unit checks and 45 browser checks in all three engines. See the
 [detailed phase plan](2026-09-18-board-report-fixtures.md) and
 [developer contract](../../report-contract.md). Merge remains subject to clean

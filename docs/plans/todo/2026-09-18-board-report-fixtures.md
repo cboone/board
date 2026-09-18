@@ -224,7 +224,7 @@ and supplies independently authored complete, empty, and uncertain sample inputs
 Source links, theme preferences, responsive layouts, and renderer disposal are
 implemented. Built browser checks use the committed Netlify security headers.
 
-`npm run verify` passed after the PR corrections with 131 unit checks and 45
+`npm run verify` passed after the PR corrections with 139 unit checks and 45
 browser checks across
 Chromium, Firefox, and WebKit, plus build and static artifact verification.
 `npm audit --audit-level=high` reported no vulnerabilities. Independent final
@@ -245,6 +245,11 @@ and custom array prototypes before traversing report data. Independent
 reproductions confirm the rejected bypasses while dense frozen arrays retain
 their valid behavior. The review parser's missed body findings are recorded in
 [plugin issue #458](https://github.com/cboone/agent-harness-plugins/issues/458).
+
+Branch identifiers reject empty path components, and typed issue/PR references
+require positive safe integers. Nested branch names and the safe-integer boundary
+remain valid. These checks keep validated identifiers consistent with source
+link generation; arbitrary HTTPS reference paths retain their existing policy.
 
 No actual Netlify deployment, credentials, GitHub gathering, provider call, or
 report persistence is claimed by this phase. Deployed route/header verification
