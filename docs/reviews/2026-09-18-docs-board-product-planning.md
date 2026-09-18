@@ -1,9 +1,10 @@
 # Branch review: docs/board-product-planning
 
 Base: `main` (merge base: `800342d`)
-Commits: 3
-Files changed: 4 (3 added, 1 modified, 0 deleted, 0 renamed)
-Reviewed through: `11e81d6`
+Commits: 5
+Files changed: 6 (4 added, 2 modified, 0 deleted, 0 renamed)
+Reviewed through: `61efb45`, with the subsequent documentation corrections
+reviewed as an uncommitted diff
 Reviewed on: 2026-09-18
 
 ## Summary
@@ -28,11 +29,15 @@ delivery is complete.
   semantics, synthetic fixtures, safe rendering, responsive themes, CSP
   verification, and meaningful unit/browser checks. The independent plan review
   records the resolved same-branch companion correction.
+- **Entry point and provenance:** Points README at the living roadmap, links
+  the skill's immutable source revision, clarifies optional top-level fields,
+  and specifies safe links and dependency relation checks.
 
 ## File inventory
 
 Modified:
 
+- `README.md`
 - `docs/plans/todo/2026-09-15-board-foundation.md`
 
 Added:
@@ -40,9 +45,12 @@ Added:
 - `docs/plans/todo/2026-09-18-board-product-roadmap.md`
 - `docs/plans/todo/2026-09-18-board-report-fixtures.md`
 - `docs/reviews/2026-09-18-board-report-fixtures-plan.md`
+- `docs/reviews/2026-09-18-docs-board-product-planning.md`
 
-This review file is a subsequent review artifact and is outside the reviewed
-commit's file count.
+The file inventory covers the complete committed range through `61efb45`,
+including the earlier version of this review artifact and README's roadmap link.
+The subsequent corrections are confined to the roadmap, detailed fixture plan,
+and this review. The source documents and diff were read directly.
 
 ## Plan compliance
 
@@ -63,8 +71,9 @@ issues from runnable capacity and recommended starts, handles uncertainty and
 empty backlogs explicitly, and preserves the original rule that an independently
 hard-blocked companion does not automatically block its runnable root.
 
-Phase 1 implementation has not started: none of its six implementation
-deliverables is delivered by this documentation branch. Phases 2 through 4 and
+None of Phase 1's six implementation deliverables is delivered by this
+documentation branch. Work in its separate feature worktree is outside this
+review's scope. Phases 2 through 4 and
 production acceptance also remain future work. These are correctly described
 states, not omissions from this branch's planning scope. No scope deviation or
 fidelity concern requires correction before merging the planning documents.
@@ -88,7 +97,7 @@ service resources are unchanged.
 
 ## Validation
 
-- Read all four changed documents and compared them with the original prompt,
+- Read all six changed files and compared them with the original prompt,
   current foundation, and original skill source reviewed during this session.
 - `git diff --check main...HEAD` passed.
 - Formatted and checked this review with the project's installed Prettier.

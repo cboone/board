@@ -187,7 +187,7 @@ Reviewed `main` at `800342dba1980c460812b15205cb41249a6ac584`.
 
 The reviewed source is the installed `publish-report-board` version `1.0.0`,
 with the original source under
-[`cboone/agent-harness-plugins`](https://github.com/cboone/agent-harness-plugins/tree/main/plugins/publish-report-board).
+[`cboone/agent-harness-plugins`](https://github.com/cboone/agent-harness-plugins/tree/046f1389caf53d6ec8c81e8c88b927a40d154b79/plugins/publish-report-board).
 Its `references/board-types/backlog-triage.md`, `references/sync-metadata.md`,
 `references/design-conventions.md`, template, and validator establish the
 baseline. The installed template and validator byte-match the canonical files

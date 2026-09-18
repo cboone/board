@@ -38,8 +38,10 @@ adapt those deliberately when porting into the application.
 
 ## Data and validation
 
-Keep the original report fields: `board`, `title`, `repo`, `sync`, `summary`,
-`issues`, `lanes`, `startNow`, and optional milestone/contention/notes fields.
+Keep the required original report fields: `board`, `title`, `repo`, `sync`,
+`summary`, `issues`, `lanes`, and `startNow`. Preserve optional top-level
+`repoUrl`, `milestones`, `contention`, and `notes`. Every issue requires
+`milestone`, using `null` when absent.
 Keep application job, freshness-check, provider, and retention metadata outside
 that report payload. Later server and browser code share the validator.
 
@@ -54,7 +56,10 @@ Validate types, required fields, positive issue numbers, unique issue/lane/claim
 identities, calendar-valid timestamps, full commit SHA, time zones, lane modes,
 complete lane membership, reference shapes, dependency cycles, branch units,
 and legal start picks. Detect cycles across hard and soft issue relations,
-including mixed cycles. Validate contention references and reject a shared
+including mixed cycles and cycles between branch units. Normalize a reference
+to the current repository's issue as a local dependency. Reject an `after`
+target also listed in `waitingOn`, and reject soft ordering within a branch
+unit. Validate contention references and reject a shared
 claimed component split across independent lanes. Semantic analysis remains
 responsible for identifying actual footprints; shape validation cannot prove
 that a model understood the repository correctly.
@@ -138,8 +143,16 @@ introducing the template's remote font request.
 
 Render untrusted strings with text nodes. Do not use `innerHTML`, dynamic script
 execution, or unvalidated URL interpolation. Encode branch names, paths, and
-search queries. Permit only approved source-link schemes/destinations; external
-references remain ordinary safe links rather than network fetch instructions.
+search queries. Generated issue, PR, branch, commit, and milestone links use
+`https://github.com` or the inventory-verified optional `repoUrl` base. Explicit
+external references may target an HTTPS URL with a valid DNS-style hostname;
+they require a visible label and
+are navigation links only. Reject non-HTTPS URLs, credentials in URLs, whitespace,
+backslashes, double quotes, and angle brackets during validation. Link helpers return
+no destination for unsafe values, which defensive rendering shows as plain
+text. Source links use the current browser context and the site's `no-referrer`
+policy; any future links opening another tab require `noopener noreferrer`.
+Never fetch external references.
 
 Externalize script/styles/data. Adapt the template's inline style assignments
 to classes or another verified CSP-compatible form. Define and verify the built
