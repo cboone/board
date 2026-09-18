@@ -2,9 +2,10 @@
 
 Date: 2026-09-18
 
-Status: ready for implementation against merged baseline
-`f8b78767babe021754873bd60540fbac8500b186`. Preliminary corrections and independent
-baseline reviews are complete. Implementation and live acceptance remain pending.
+Status: implementation passes local verification against merged baseline
+`f8b78767babe021754873bd60540fbac8500b186`. Independent baseline reviews preceded
+implementation. Final independent implementation reviews are clean. Deployed
+acceptance and current-head PR checks are the remaining phase gates.
 
 ## Outcome and authority
 
@@ -54,10 +55,10 @@ implemented. Report deletion controls remain deferred.
 Dependencies before implementation or live acceptance:
 
 1. Phase 1 merged in [PR #21](https://github.com/cboone/board/pull/21), with
-   baseline `f8b78767babe021754873bd60540fbac8500b186`. The final head has passing
-   CI and a clean current-head Copilot review; its merge signature is verified.
-   Verify this integrated plan against that baseline and obtain independent
-   review before implementation.
+   baseline `f8b78767babe021754873bd60540fbac8500b186`. The final head has
+   passing CI and a clean current-head Copilot review; its merge signature is
+   verified. Verify this integrated plan against that baseline and obtain
+   independent review before implementation.
 2. The authorized new Netlify site was created in the owned `cboone` Personal
    account, displayed as Catamount Hardware: `tracker-boards`, site ID
    `9ddf762e-9c92-44da-8636-e03913200664`, canonical URL
@@ -281,8 +282,8 @@ Production composition checks use a valid synthetic encryption key and
 unmistakably synthetic client-secret values, never real credentials. Run fixture
 composition after production composition to prove stale Functions are removed,
 and assert no server install is invoked for missing, unknown, preview, or branch
-build context. These commands/jobs are future implementation deliverables, not
-commands already added or run.
+build context. These commands and CI jobs are implemented; the branch review
+records their local verification. CI acceptance remains a current-head PR gate.
 
 ## GitHub App configuration
 
@@ -497,6 +498,22 @@ loops have explicit deadlines/attempt caps and never retry the provider refresh
 itself. A confirmed current-generation 401 can require reauthorization;
 distinguish it from a 401 produced by a superseded access-token generation.
 
+The complete-pair publication retains its claim and deadline. Only a successful
+storage acknowledgement received within that deadline permits a subsequent
+exact-ETag write to record the acknowledgement time. No request may lease a
+published pair without that evidence. An expired unacknowledged publication
+requires reauthorization. A delayed acknowledgement-record write can establish
+the earlier confirmed publication, but cannot overwrite a newer login or
+reauthorization fence. This distinguishes uncertainty about saving the token
+pair from uncertainty about saving evidence of an already acknowledged pair.
+
+All storage operations share the application deadline, including full response
+body reads. The production Blobs adapter supplies a bounded transport and
+prevents the SDK's internal retry policy from continuing after a failure or
+timeout. Remote cancellation cannot prove that a received conditional write did
+not commit; retained publication evidence and exact ETags enforce the account
+state guarantees when such a write completes later.
+
 ## Repository picker and provider client
 
 Use the GitHub App user token for `GET /user/installations`, followed by
@@ -625,6 +642,7 @@ within one synchronous invocation.
 | Boundary                      | Proposed limit                           |
 | ----------------------------- | ---------------------------------------- |
 | GitHub page size              | 100                                      |
+| Eligible repository inventory | 10,000                                   |
 | Open issues                   | 1,000                                    |
 | Open PRs                      | 1,000                                    |
 | Remote branches               | 500                                      |
