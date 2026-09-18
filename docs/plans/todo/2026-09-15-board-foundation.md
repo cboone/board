@@ -10,7 +10,7 @@ The static application and tooling foundation landed in
 [PR #18](https://github.com/cboone/board/pull/18). This document records that
 limited phase. It is not the complete product roadmap. The living
 [product roadmap](2026-09-18-board-product-roadmap.md) covers the remaining work
-and the requirements interview.
+and confirmed product requirements.
 
 ## Goal
 
@@ -62,5 +62,6 @@ separate outcome requiring deployed evidence.
   their remaining work complete.
 - The fixture helper's `ready` count excludes issues needing clarification. The
   original skill defines that header count as open issues minus hard-blocked
-  issues and derives start eligibility separately. Settle any product extension
-  explicitly and replace the simplified helper when implementing the report.
+  issues and derives start eligibility separately. Use that original count
+  definition and the agreed uncertainty handling for start recommendations when
+  replacing the simplified helper.

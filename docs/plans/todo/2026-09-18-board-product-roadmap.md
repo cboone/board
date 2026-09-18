@@ -2,9 +2,11 @@
 
 ## Status and authority
 
-Requirements interview in progress as of 2026-09-18. This is the living roadmap
-for the complete product, not authorization to assume unanswered product,
-privacy, spending, or service-configuration choices.
+Product requirements established as of 2026-09-18. Detailed phase planning is
+next. This is the living roadmap for the complete product, not authorization to
+assume unanswered spending or service-configuration choices. Production usage
+limits will be proposed using setup calibration evidence before ordinary paid
+production usage is enabled.
 
 The definitive requirements are the original
 [project prompt](../project-prompt.md), the original `publish-report-board`
@@ -29,8 +31,11 @@ to confirm, not substitutes for the current interview.
 The first production release supports only the user's GitHub account, `cboone`.
 After signing in with GitHub, the user selects an eligible public or private
 `cboone/*` repository and receives a backlog triage report modeled on the
-original skill. Forks and archived repositories are excluded. Reports require
-sign-in and are accessible only to the authorized account, including reports
+original skill. Forks and archived repositories are excluded from new analysis.
+Previously saved reports remain viewable when the source later becomes
+ineligible or inaccessible, with clear historical/source-unavailable status.
+Reports require sign-in and are accessible only to the authorized account,
+including reports
 for public repositories.
 
 The report answers what to start, what can proceed in parallel, and what is
@@ -76,8 +81,15 @@ Reviewed `main` at `800342dba1980c460812b15205cb41249a6ac584`.
   outside the first-release scope.
 - Support both public and private eligible repositories. Enforce the account and
   repository restrictions server-side for repository listing, gathering,
-  analysis, report retrieval, and refresh. Filtering the picker is insufficient.
-  Direct requests must not bypass eligibility or expose another account's data.
+  analysis, and refresh. Filtering the picker is insufficient. Direct requests
+  must not bypass eligibility or expose another account's data. Previously saved
+  reports remain accessible to the authorized account if the source is later
+  archived, transferred, deleted, or inaccessible to the GitHub App. Clearly mark
+  them historical/source-unavailable, disclose the source status, and disable new
+  analysis while the source is ineligible or inaccessible. Retain them until
+  a future explicit deletion request. A deletion control is deferred from this
+  release. All saved-report access requires the authorized account;
+  it does not require a currently eligible or accessible source.
 - Require authentication and the authorized account for all real report data,
   regardless of the source repository's visibility. Public report sharing is
   outside the first-release scope. Fixture demonstrations must contain no real
@@ -86,6 +98,16 @@ Reviewed `main` at `800342dba1980c460812b15205cb41249a6ac584`.
   Alpine CSP and Vite foundation unless concrete requirements justify a change.
   The prompt permits React if Alpine cannot keep the application simple.
 - Deploy the working application to Netlify and retain the MIT license.
+- Create a new Netlify production site. Prefer `tracker-boards.netlify.app`, or
+  a similar available name if that name cannot be allocated. The exact address
+  remains unclaimed until site creation confirms availability. A custom domain
+  is later work; do not change DNS or register a custom domain in this release.
+  The authenticated CLI lists the owned `cboone` account, named
+  **Catamount Hardware**, with account type **Personal**. Use that explicit
+  account destination; its billing configuration and resource charges still
+  require verification before depending on them.
+- Document using this hosted instance for the authorized user. A self-hosting
+  guide is explicitly outside the first-release scope.
 - Keep provider keys and GitHub tokens out of browser code. Secrets use
   environment variables and approved server-side handling.
 - AI analysis uses Anthropic with an app-managed key and the fixed Opus 5 model,
@@ -113,21 +135,45 @@ Reviewed `main` at `800342dba1980c460812b15205cb41249a6ac584`.
 - Store successful reports server-side so the authorized user can reopen them
   across browsers and devices. Browser storage is not the authoritative report
   store. Keep access authenticated and restricted to the approved GitHub account.
-  The storage service, report retention, explicit deletion, backup/recovery,
-  and retention of raw analysis inputs remain to be specified.
+  Retain the current and previous successful reports per repository until
+  explicit deletion. A new successful report rotates the previous pair; failed
+  attempts do not rotate or replace it. The storage service and backup/recovery
+  behavior remain implementation decisions.
+- Use raw GitHub and file inputs transiently for analysis; do not persist them
+  as source snapshots, prompts, or diagnostic logs after analysis. Retain input
+  provenance with reports, such as source identities, revisions, timestamps,
+  selected paths, hashes, and disclosed limits. Saved reports contain the source
+  titles and derived analysis needed to render them, rather than raw issue
+  bodies, comments, or file contents.
+- Signing out ends the session without deleting saved reports. Report deletion
+  controls are explicitly deferred from the first release. Preserve the agreed
+  retention baseline until a future explicit deletion request. Extended report
+  history is outside this baseline.
 - When an existing board opens, automatically check GitHub for relevant source
   changes. Paid reanalysis of an existing board requires the user's explicit
   refresh request. Load the last successful report independently of the
   freshness check, and show its analysis provenance separately from the latest
   check result. Check failures preserve that report and disclose that current
   source freshness could not be established.
+- Check for changes in the approved report inputs, including issues and their
+  comments, labels, milestones, PRs, relevant remote branches, and source
+  revisions. Do not claim the report is current merely because the default
+  branch SHA is unchanged. Bound and disclose the check's scope; incomplete or
+  failed checks cannot establish unchanged source. This is an implementation
+  consequence of the agreed freshness behavior, not an additional paid feature.
+- For a repository with no saved report, selecting it opens the repository page
+  without a paid analysis call. Show a **Generate report** button; that explicit
+  action initiates the first Anthropic analysis. Existing reports use an explicit
+  refresh action for paid reanalysis.
 - The authorized Anthropic inputs include issue bodies and comments, labels,
   milestones, PR descriptions, branches, the repository tree, and relevant files
   selected under bounded limits, for both public and private eligible
   repositories. Record which files and inputs informed the report. Select
   relevant text files conservatively, enforce total input bounds, and exclude
-  credential locations and secret-bearing files from model input. Linked
-  external content and raw-input retention are separate unresolved policies.
+  credential locations and secret-bearing files from model input. Do not fetch
+  arbitrary external URLs for model input in the first release. Retain linked
+  references and disclose unverifiable external blockers as uncertainty. Raw
+  input retention follows the transient-input baseline above.
 - Assignment alone does not establish work in progress. Require evidence from a
   related PR, branch, or in-progress label. Preserve assignment as source
   metadata, but do not let it occupy a lane or suppress a start recommendation
@@ -145,8 +191,10 @@ with the original source under
 [`cboone/agent-harness-plugins`](https://github.com/cboone/agent-harness-plugins/tree/main/plugins/publish-report-board).
 Its `references/board-types/backlog-triage.md`, `references/sync-metadata.md`,
 `references/design-conventions.md`, template, and validator establish the
-baseline. Record the exact source revision when porting so later upstream changes
-do not silently redefine application behavior.
+baseline. The installed template and validator byte-match the canonical files
+at revision `046f1389caf53d6ec8c81e8c88b927a40d154b79`. Record that source in
+the port's developer documentation so later upstream changes do not silently
+redefine application behavior.
 
 ### Inventory and analysis
 
@@ -187,8 +235,10 @@ do not silently redefine application behavior.
 - A GitHub collection failure or partial response must not produce a report
   presented as complete. Inaccessible external blockers and unclear scope remain
   visible uncertainties and suppress affected recommendations while the rest of
-  a valid report completes. Repositories beyond supported analysis bounds still
-  need an agreed admission policy.
+  a valid report completes. If the complete core inventory cannot fit supported
+  analysis bounds, explain the limit and refuse generation rather than silently
+  dropping issues. Trim optional file and comment context within explicit bounds
+  and disclose that reduced context in report provenance.
 - Preserve a stable repository identity and report address. Record the gathering
   timestamp, default branch, and full SHA of its remote tip, plus the scope and
   limitations of the gathered inputs.
@@ -213,29 +263,32 @@ the skill's delivery mechanism. They do not automatically determine the hosted
 app's storage, sharing, authentication, or refresh design. Report caching does
 not itself make Board the source of truth for issue state.
 
-## Decisions to settle in the interview
+## Decision record
 
 Record the user's answers here with their consequences. Do not silently inherit
 the older roadmap's claimed decisions or the README's predictions.
 
-| ID  | Decision                                                                                                                                                | Why it matters                                                                                                    | Status                               |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
-| Q01 | Only the user's GitHub account (`cboone`), with eligible `cboone/*` repositories; exclude forks, archives, organizations, and other users               | Enforce account and repository eligibility server-side across all real-data operations                            | Confirmed by user                    |
-| Q02 | Public and private eligible repositories; reports require sign-in and are accessible only to the authorized account                                     | Support private-repository authorization; prevent unauthenticated access and public sharing                       | Confirmed by user                    |
-| Q03 | Anthropic, app-managed key, fixed Opus 5 (`claude-opus-5`), and enforced usage limits                                                                   | Start at high effort with bounded calibration; server-side key and spending controls                              | Confirmed by user; limits pending    |
-| Q04 | Assignment alone is insufficient; require a related PR, branch, or in-progress label                                                                    | Override the skill's assignment signal; disclose that hosted analysis cannot see unpushed local work              | Confirmed by user                    |
-| Q05 | Automatically check GitHub when opening an existing board; paid analysis only on explicit refresh; preserve last good report on failure                 | Keep freshness checks distinct from analysis; initial generation and check scope still need specifics             | Confirmed by user; details pending   |
-| Q06 | Store reports server-side for access across browsers and devices; retention, deletion, and raw-input storage policy remain open                         | Use durable authenticated storage rather than browser-only reports; settle the data lifecycle                     | Confirmed by user; lifecycle pending |
-| Q07 | Issue bodies/comments, labels, milestones, PR descriptions, branches, repository tree, and relevant files selected under bounded limits                 | Support richer context for public and private repos; specify selection bounds and external-link policy            | Confirmed by user; bounds pending    |
-| Q08 | Retain unclear issues and unverified external blockers, show uncertainty, withhold affected starts, and complete the rest of the report                 | Conservative recommendations without dropping issues; invalid structure and incomplete core collection still fail | Confirmed by user                    |
-| Q09 | Opus 5 at appropriate effort; $25 total setup budget including paid tests and retries; discuss near the cap; production budget flexible and unspecified | Track and reserve all setup costs; notify at $20; settle runtime/input bounds and production policy               | Confirmed setup; production pending  |
-| Q10 | Production site identity, account resources, self-hosting requirement, and operational expectations                                                     | Controls provisioning, deployment acceptance, and documentation                                                   | Pending                              |
-| Q11 | Report fidelity beyond the baseline, release/tag policy, and first-release extras                                                                       | Separates required delivery from optional expansion                                                               | Pending                              |
+| ID  | Decision                                                                                                                                                                              | Why it matters                                                                                                                 | Status                              |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- |
+| Q01 | Only the user's GitHub account (`cboone`), with eligible `cboone/*` repositories; exclude forks, archives, organizations, and other users                                             | Enforce account and repository eligibility server-side across all real-data operations                                         | Confirmed by user                   |
+| Q02 | Public and private eligible repositories; reports require sign-in and are accessible only to the authorized account                                                                   | Support private-repository authorization; prevent unauthenticated access and public sharing                                    | Confirmed by user                   |
+| Q03 | Anthropic, app-managed key, fixed Opus 5 (`claude-opus-5`), and enforced usage limits                                                                                                 | Start at high effort with bounded calibration; server-side key and spending controls                                           | Confirmed by user; limits pending   |
+| Q04 | Assignment alone is insufficient; require a related PR, branch, or in-progress label                                                                                                  | Override the skill's assignment signal; disclose that hosted analysis cannot see unpushed local work                           | Confirmed by user                   |
+| Q05 | Automatic GitHub checks on existing boards; first analysis requires Generate report; paid reanalysis requires explicit refresh; preserve last good report on failure                  | Compare approved report-input changes without a paid call; incomplete checks cannot establish unchanged source                 | Confirmed by user                   |
+| Q06 | Durable server-side current and previous successful reports until a future explicit deletion request; transient raw inputs; retained provenance; logout preserves reports             | Rotate only on success; authenticate reads; deletion controls deferred by the later first-release scope answer                 | Confirmed by user                   |
+| Q07 | Issue bodies/comments, labels, milestones, PR descriptions, branches, repository tree, and relevant files selected under bounded limits                                               | Support richer context for public and private repos; select technical bounds; do not fetch arbitrary external URLs             | Confirmed by user; bounds pending   |
+| Q08 | Retain unclear issues and unverified external blockers, show uncertainty, withhold affected starts, and complete the rest of the report                                               | Conservative recommendations without dropping issues; invalid structure and incomplete core collection still fail              | Confirmed by user                   |
+| Q09 | Opus 5 at appropriate effort; $25 total setup budget including paid tests and retries; discuss near the cap; production budget flexible and unspecified                               | Track and reserve all setup costs; notify at $20; settle runtime/input bounds and production policy                            | Confirmed setup; production pending |
+| Q10 | New Netlify site, preferred tracker-boards.netlify.app or similar available name; custom domain later; no self-hosting guide for this release                                         | CLI verified destination account cboone, named Catamount Hardware, type Personal; site name availability remains unconfirmed   | Confirmed by user; account verified |
+| Q11 | Original report plus sign-in, repo selection, generation/refresh, freshness, progress/errors, and provenance; report deletion deferred                                                | User confirms this covers initial needs; no additional report types or optional application features are required              | Confirmed by user                   |
+| Q12 | Saved reports stay viewable to the authorized account when the source is archived, transferred, deleted, or inaccessible; mark historical/source-unavailable and disable new analysis | Keep both retained reports until explicit deletion; saved-report retrieval is independent of current source eligibility/access | Confirmed by user                   |
 
 The model is settled as `claude-opus-5`. Select the runtime, session storage,
 report store, and input bounds using the confirmed requirements and current
-platform documentation. Settle the remaining lifecycle and production spending
-decisions before relying on those policies or provisioning affected resources.
+platform documentation. The historical-report lifecycle is settled. Settle the
+production spending policy before enabling ordinary production paid usage;
+implementation and setup acceptance can proceed under the separate $25 setup
+authorization.
 
 ## Setup spending controls
 
@@ -267,8 +320,9 @@ not a claim about the user's overall Anthropic account balance or prior usage.
 
 ## Architecture research
 
-These are current constraints and candidates, not settled architecture or
-authorization to provision resources or make paid provider calls.
+These are current constraints and candidates, not settled architecture. Research
+alone does not authorize resource provisioning or provider spending. Setup paid
+calls follow the separate authorization and spending controls above.
 
 - The selected fixed Opus 5 model has standard base input/output prices of $5/$25
   per million tokens and supports structured JSON output. Start at `high`
@@ -302,6 +356,35 @@ authorization to provision resources or make paid provider calls.
   prevent that copy. Any use requires a verified provisioning boundary compatible
   with the prohibition on production data in previews. Current account plan,
   resource configuration, and actual storage charges remain unverified.
+- Netlify synchronous and streaming functions have a 60-second execution limit;
+  streaming does not extend it. Background Functions allow 15 minutes, return
+  an immediate empty `202`, and cannot stream results. Background analysis with
+  authenticated job initiation and status polling is a candidate, rather than
+  a measured requirement. Background invocation errors trigger automatic retries;
+  duplicate delivery must not repeat paid analysis. Pass a small job reference
+  and gather raw source inside the worker instead of persisting raw input for
+  handoff. Sources:
+  [function configuration](https://docs.netlify.com/build/functions/configuration/)
+  and
+  [Background Functions](https://docs.netlify.com/build/functions/background-functions/).
+- Enforce fixture-only deploys through the deployed artifacts. A documented
+  global functions directory combined with context-specific build commands can
+  leave that directory empty for previews and populate it only for production.
+  This composition needs verification against actual deployments. Keep server
+  bundles outside the static publish directory and check for zero preview
+  function bundles. Runtime checks can use the documented
+  `context.deploy.context`; a frontend flag does not isolate the backend.
+  Sources:
+  [deploy-context configuration](https://docs.netlify.com/build/configure-builds/file-based-configuration/#deploy-contexts),
+  [functions directory](https://docs.netlify.com/build/functions/configuration/#directory),
+  and [runtime deploy context](https://docs.netlify.com/build/functions/api/#deploy).
+- Netlify supports Node 24 for Functions. Runtime secrets must be configured
+  through the UI, CLI, or API for production and Functions scope; values declared
+  in `netlify.toml` are not available to Functions at runtime. Redeploy after
+  runtime environment changes. Sources:
+  [runtime configuration](https://docs.netlify.com/build/functions/configuration/#nodejs-version-for-runtime)
+  and
+  [function environment variables](https://docs.netlify.com/build/functions/environment-variables/).
 
 ## Delivery phases
 
@@ -336,7 +419,9 @@ unauthorized repository requests, pagination, rate limits, collection failures,
 and fixture-only preview artifacts and API behavior. Reject requests from other
 GitHub accounts and requests for forks, archived repositories, or repositories
 owned by another account or organization. A source snapshot alone is not a
-completed analysis report.
+completed analysis report. Saved historical report retrieval is a separate
+authorized-account operation and must not be rejected solely because the source
+has since become ineligible or inaccessible.
 
 ### Phase 3: Analysis, report persistence, and refresh
 
@@ -351,10 +436,14 @@ cannot overwrite a newer successful report.
 Store successful reports durably server-side. On opening a saved report,
 automatically check GitHub for changes and display the check outcome separately
 from the saved analysis. Anthropic reanalysis of an existing report requires an
-explicit refresh request. The trigger for generating the first report remains
-an interview decision.
+explicit refresh request. When no saved report exists, show a **Generate report**
+button and initiate paid analysis only through that action. Selecting a repository
+never initiates a paid call.
 Collect the approved issue, comment, PR, branch, tree, and relevant-file context
 within agreed bounds; expose input provenance and limitations.
+Retain only the current and previous successful reports per repository, keeping
+raw inputs transient and preserving provenance. Logout retains saved reports.
+Report deletion controls are deferred from this release.
 
 Exit when a real supported repository produces the full report, repeated use
 follows the agreed freshness policy, and failures preserve the last successful
@@ -366,6 +455,14 @@ Verify that a report generated in one browser or device can be retrieved in
 another after signing in. Opening a saved report must make no paid model call,
 including when the automatic GitHub check detects changes or fails. Verify file
 selection, input-size checks, and handling of untrusted source text.
+Selecting a repository with no saved report must make no paid call either;
+the **Generate report** action must initiate bounded, authorized analysis.
+Verify successful report rotation, unchanged retention on failure, report access
+after sign-out/sign-in, and absence of persisted raw source inputs and prompts.
+Verify that source archival, transfer, deletion, and lost GitHub App access keep
+saved reports discoverable and viewable only to the authorized account, with
+historical/source-unavailable status and disabled new analysis. An unavailable
+source must not trigger a paid model call.
 Verify that assignment alone does not create active-work evidence. Unclear scope
 and unverifiable external blockers must remain visible and withhold affected
 recommendations while allowing the rest of a valid report to complete.
@@ -373,7 +470,7 @@ Include provider metadata and input provenance needed to explain the analysis.
 
 ### Phase 4: Production delivery and operational acceptance
 
-Complete the user guide and the agreed self-hosting path. Reconcile remaining
+Complete the user guide for the hosted instance. Reconcile remaining
 issues, verify deployed security and environment boundaries, add operational
 failure visibility and recovery guidance, and deliver the working Netlify app.
 Choose account resources and spending settings through concrete user decisions.
@@ -431,12 +528,15 @@ specific dependency or approval rule; do not add repeated approval gates.
 
 ## Potential later scope
 
-No feature in this section is accepted or deferred solely by being listed here.
-The interview must settle which remaining extras belong in the first release:
-multi-repository boards, GitHub Enterprise, extended historical browsing,
-additional board types, and a custom domain.
+The first release implements the agreed single-repository GitHub backlog report
+and the application controls needed to use it. Multi-repository boards, GitHub
+Enterprise, extended historical browsing, and additional board types are possible
+later work rather than requirements inferred from earlier interpretations.
 Organization-owned repositories, other users, publicly shared reports, and
 multi-user billing are outside the confirmed first-release scope.
 Automatic paid reanalysis is outside the confirmed refresh policy. Background
 execution of an explicitly requested operation remains a possible runtime
 implementation, rather than a separate automatic-analysis feature.
+Self-hosting documentation and custom-domain setup are deferred beyond this
+release by the user's explicit answers. Report deletion controls are also
+explicitly deferred.
