@@ -98,7 +98,7 @@ test('refresh requires an exact basis report while generate forbids one', () => 
 
 test('strict job projection rejects unknown fields, raw text and inconsistent terminal or accounting shapes', () => {
   const job = createAnalysisJob(input);
-  for (const candidate of [
+  const candidates = [
     { ...job, rawPrompt: 'private source' },
     {
       ...job,
@@ -118,10 +118,13 @@ test('strict job projection rejects unknown fields, raw text and inconsistent te
         job.attempts[1],
       ],
     },
-  ])
-    assert.throws(() => projectAnalysisJob(candidate), {
-      code: 'service_unavailable',
-    });
+  ];
+  for (const [index, candidate] of candidates.entries())
+    assert.throws(
+      () => projectAnalysisJob(candidate),
+      { code: 'service_unavailable' },
+      `candidate ${index}`,
+    );
 });
 
 test('dispatch capability hashing is exact and never exposes the raw capability', () => {
@@ -134,4 +137,92 @@ test('dispatch capability hashing is exact and never exposes the raw capability'
     false,
   );
   assert.equal(matchesDispatchCapability(hash, 'not-a-capability'), false);
+});
+
+test('projector rejects impossible attempt, state, lease, terminal and publication combinations', () => {
+  const initial = createAnalysisJob(input);
+  const accounting = {
+    status: 'pending',
+    ledgerRevision: 1,
+    accountingSequence: 1,
+    accountingDigest: '1'.repeat(64),
+    transitionId: '2'.repeat(64),
+  };
+  const paidBase = {
+    ...initial,
+    updatedAt: '2026-09-18T12:01:00.000Z',
+    state: 'primary-response-complete',
+    stateVersion: 6,
+    stateDeadlineAt: '2026-09-18T12:10:00.000Z',
+    dispatchCapabilityHash: '3'.repeat(64),
+    pricePolicyId: 'setup-v1',
+    sourceFingerprint: '4'.repeat(64),
+    accounting,
+  };
+  const incompleteAttempt = {
+    ...initial.attempts[0],
+    reservationMicrousd: 10_000,
+    state: 'response-complete',
+  };
+  const completeAttempt = {
+    ...incompleteAttempt,
+    tokenHash: '5'.repeat(64),
+    startedAt: '2026-09-18T12:02:00.000Z',
+    deadlineAt: '2026-09-18T12:09:00.000Z',
+    completedAt: '2026-09-18T12:03:00.000Z',
+    terminalClass: 'complete-response',
+    terminalStopReason: 'end_turn',
+    inputTokens: 100,
+    cacheCreationInputTokens: 0,
+    cacheReadInputTokens: 0,
+    outputTokens: 10,
+    costMicrousd: 1000,
+  };
+  const reservedCorrection = {
+    ...initial.attempts[1],
+    reservationMicrousd: 10_000,
+    state: 'reserved',
+  };
+  for (const candidate of [
+    paidBase,
+    {
+      ...paidBase,
+      attempts: [incompleteAttempt, reservedCorrection],
+    },
+    {
+      ...initial,
+      freeLease: {
+        tokenHash: '6'.repeat(64),
+        expiresAt: initial.stateDeadlineAt,
+      },
+    },
+    {
+      ...initial,
+      publication: { ...initial.publication, pointerRevision: 1 },
+    },
+    {
+      ...paidBase,
+      state: 'succeeded',
+      stateDeadlineAt: null,
+      attempts: [
+        { ...completeAttempt, state: 'settled' },
+        { ...reservedCorrection, state: 'released' },
+      ],
+      publication: {
+        ...initial.publication,
+        candidateDigest: '7'.repeat(64),
+        pointerRevision: 1,
+        publishedAt: '2026-09-18T12:05:00.000Z',
+      },
+      accounting: { ...accounting, status: 'complete' },
+      terminal: {
+        status: 'succeeded',
+        completedAt: '2026-09-18T12:06:00.000Z',
+        errorCode: 'analysis_output_invalid',
+      },
+    },
+  ])
+    assert.throws(() => projectAnalysisJob(candidate), {
+      code: 'service_unavailable',
+    });
 });

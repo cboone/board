@@ -54,11 +54,17 @@ const ACCOUNTING_STATES = new Set([
 ]);
 const ERROR_CODES = new Set([
   'analysis_ambiguous',
+  'analysis_input_too_large',
   'analysis_output_invalid',
+  'analysis_provider_rate_limited',
+  'analysis_provider_unavailable',
+  'analysis_sensitive_input',
+  'analysis_unavailable',
   'budget_discussion_required',
   'budget_exhausted',
   'idempotency_conflict',
   'pricing_review_required',
+  'provider_rate_limited',
   'provider_unavailable',
   'source_authorization_required',
   'source_incomplete',
@@ -189,22 +195,70 @@ function projectAttempt(value, expectedNumber) {
     !nullable(value.costMicrousd, integer)
   )
     fail();
+  const timestamps = [value.startedAt, value.deadlineAt, value.completedAt];
+  const terminalFacts = [value.terminalClass, value.terminalStopReason];
+  const usage = [
+    value.inputTokens,
+    value.cacheCreationInputTokens,
+    value.cacheReadInputTokens,
+    value.outputTokens,
+    value.costMicrousd,
+  ];
+  const allFacts = [value.tokenHash, ...timestamps, ...terminalFacts, ...usage];
+  if (value.state === 'unreserved') {
+    if (
+      value.reservationMicrousd !== 0 ||
+      allFacts.some((item) => item !== null)
+    )
+      fail();
+  } else if (value.state === 'reserved' || value.state === 'released') {
+    if (
+      value.reservationMicrousd === 0 ||
+      allFacts.some((item) => item !== null)
+    )
+      fail();
+  } else if (value.state === 'in-flight') {
+    if (
+      value.reservationMicrousd === 0 ||
+      value.tokenHash === null ||
+      value.startedAt === null ||
+      value.deadlineAt === null ||
+      value.completedAt !== null ||
+      terminalFacts.some((item) => item !== null) ||
+      usage.some((item) => item !== null)
+    )
+      fail();
+  } else if (value.state === 'response-complete' || value.state === 'settled') {
+    if (
+      value.reservationMicrousd === 0 ||
+      value.tokenHash === null ||
+      timestamps.some((item) => item === null) ||
+      terminalFacts.some((item) => item === null) ||
+      usage.some((item) => item === null) ||
+      value.costMicrousd > value.reservationMicrousd
+    )
+      fail();
+  } else if (
+    value.reservationMicrousd === 0 ||
+    value.tokenHash === null ||
+    value.startedAt === null ||
+    value.deadlineAt === null ||
+    value.costMicrousd !== null
+  ) {
+    fail();
+  }
   if (
-    value.state === 'unreserved' &&
-    (value.reservationMicrousd !== 0 ||
-      [
-        value.tokenHash,
-        value.startedAt,
-        value.deadlineAt,
-        value.completedAt,
-        value.terminalClass,
-        value.terminalStopReason,
-        value.inputTokens,
-        value.cacheCreationInputTokens,
-        value.cacheReadInputTokens,
-        value.outputTokens,
-        value.costMicrousd,
-      ].some((item) => item !== null))
+    value.startedAt !== null &&
+    value.deadlineAt !== null &&
+    Date.parse(value.startedAt) >= Date.parse(value.deadlineAt)
+  )
+    fail();
+  if (
+    value.completedAt !== null &&
+    (value.startedAt === null ||
+      value.deadlineAt === null ||
+      Date.parse(value.completedAt) < Date.parse(value.startedAt) ||
+      Date.parse(value.completedAt) > Date.parse(value.deadlineAt))
   )
     fail();
   return clone(value);
@@ -264,12 +318,13 @@ function projectAccounting(value) {
     value.accountingDigest,
     value.transitionId,
   ];
-  if (
-    value.status === 'unreserved'
-      ? facts.some((item) => item !== null)
-      : facts.some((item) => item === null)
-  )
-    fail();
+  const allNull = facts.every((item) => item === null);
+  const allPresent = facts.every((item) => item !== null);
+  if (value.status === 'unreserved') {
+    if (!allNull) fail();
+  } else if (value.status === 'complete') {
+    if (!allNull && !allPresent) fail();
+  } else if (!allPresent) fail();
   return clone(value);
 }
 
@@ -287,6 +342,173 @@ function projectTerminal(value, state) {
     fail();
   iso(value.completedAt);
   return clone(value);
+}
+
+function validateJobShape(job) {
+  const [primary, corrective] = job.attempts;
+  const allUnreserved = job.attempts.every(
+    (attempt) => attempt.state === 'unreserved',
+  );
+  const allAccounted = job.attempts.every((attempt) =>
+    ['settled', 'released'].includes(attempt.state),
+  );
+  const hasUnknown = job.attempts.some(
+    (attempt) => attempt.state === 'unknown',
+  );
+  const primaryPublication =
+    primary.state === 'response-complete' && corrective.state === 'reserved';
+  const correctivePublication =
+    primary.state === 'settled' && corrective.state === 'response-complete';
+  const free = ['collecting', 'counting'].includes(job.state);
+  const finalizing = [
+    'validating-primary',
+    'primary-invalid',
+    'validating-corrective',
+  ].includes(job.state);
+  if (
+    free !== (job.freeLease !== null) ||
+    finalizing !== (job.finalizationLease !== null) ||
+    (free && job.freeLease.expiresAt !== job.stateDeadlineAt) ||
+    (finalizing && job.finalizationLease.expiresAt !== job.stateDeadlineAt)
+  )
+    fail();
+  if (
+    !['published', 'succeeded'].includes(job.state) &&
+    (job.publication.pointerRevision !== null ||
+      job.publication.publishedAt !== null ||
+      job.publication.cleanupCandidateKey !== null)
+  )
+    fail();
+  if (
+    ![
+      'validating-primary',
+      'validating-corrective',
+      'version-written',
+      'published',
+      'succeeded',
+    ].includes(job.state) &&
+    job.publication.candidateDigest !== null
+  )
+    fail();
+  if (
+    (job.accounting.status === 'unreserved' && !allUnreserved) ||
+    (job.accounting.status === 'complete' && !allUnreserved && !allAccounted) ||
+    (job.accounting.status === 'complete' &&
+      job.accounting.ledgerRevision === null &&
+      !allUnreserved) ||
+    (job.accounting.status === 'unknown' && !hasUnknown)
+  )
+    fail();
+  const inFlight =
+    job.state === 'primary-in-flight'
+      ? primary
+      : job.state === 'corrective-in-flight'
+        ? corrective
+        : null;
+  if (inFlight !== null && inFlight.deadlineAt !== job.stateDeadlineAt) fail();
+  if (TERMINAL.has(job.state)) {
+    if (
+      job.freeLease !== null ||
+      job.finalizationLease !== null ||
+      (job.state === 'succeeded') !== (job.terminal.errorCode === null)
+    )
+      fail();
+    if (
+      job.state === 'succeeded' &&
+      (job.accounting.status !== 'complete' ||
+        job.attempts.some(
+          (attempt) => !['settled', 'released'].includes(attempt.state),
+        ) ||
+        job.publication.candidateDigest === null ||
+        job.publication.pointerRevision === null ||
+        job.publication.publishedAt === null)
+    )
+      fail();
+    return job;
+  }
+  if (job.state === 'created') {
+    if (
+      primary.state !== 'unreserved' ||
+      corrective.state !== 'unreserved' ||
+      job.accounting.status !== 'unreserved' ||
+      job.pricePolicyId !== null ||
+      job.dispatchCapabilityHash !== null ||
+      job.sourceFingerprint !== null
+    )
+      fail();
+    return job;
+  }
+  if (
+    job.pricePolicyId === null ||
+    job.accounting.status === 'unreserved' ||
+    primary.state === 'unreserved' ||
+    corrective.state === 'unreserved'
+  )
+    fail();
+  if (job.state === 'reserved') {
+    if (
+      primary.state !== 'reserved' ||
+      corrective.state !== 'reserved' ||
+      job.dispatchCapabilityHash !== null ||
+      job.sourceFingerprint !== null
+    )
+      fail();
+    return job;
+  }
+  if (job.dispatchCapabilityHash === null) fail();
+  if (['dispatchable', 'collecting', 'counting'].includes(job.state)) {
+    if (
+      primary.state !== 'reserved' ||
+      corrective.state !== 'reserved' ||
+      job.sourceFingerprint !== null
+    )
+      fail();
+    return job;
+  }
+  if (job.sourceFingerprint === null) fail();
+  if (!['published'].includes(job.state) && job.accounting.status !== 'pending')
+    fail();
+  if (
+    (job.state === 'primary-in-flight' &&
+      (primary.state !== 'in-flight' || corrective.state !== 'reserved')) ||
+    (['primary-response-complete', 'validating-primary'].includes(job.state) &&
+      (primary.state !== 'response-complete' ||
+        corrective.state !== 'reserved')) ||
+    (job.state === 'primary-invalid' &&
+      (!['response-complete', 'settled'].includes(primary.state) ||
+        corrective.state !== 'reserved' ||
+        job.publication.candidateDigest !== null)) ||
+    (job.state === 'corrective-in-flight' &&
+      (primary.state !== 'settled' || corrective.state !== 'in-flight')) ||
+    (['corrective-response-complete', 'validating-corrective'].includes(
+      job.state,
+    ) &&
+      (primary.state !== 'settled' || corrective.state !== 'response-complete'))
+  )
+    fail();
+  if (
+    ['version-written', 'published'].includes(job.state) &&
+    job.publication.candidateDigest === null
+  )
+    fail();
+  if (
+    job.state === 'version-written' &&
+    (!['pending'].includes(job.accounting.status) ||
+      (!primaryPublication && !correctivePublication))
+  )
+    fail();
+  if (
+    job.state === 'published' &&
+    (job.publication.pointerRevision === null ||
+      job.publication.publishedAt === null ||
+      (job.accounting.status === 'pending' &&
+        !primaryPublication &&
+        !correctivePublication) ||
+      (job.accounting.status === 'complete' && !allAccounted) ||
+      !['pending', 'complete'].includes(job.accounting.status))
+  )
+    fail();
+  return job;
 }
 
 export function projectAnalysisJob(value) {
@@ -346,8 +568,9 @@ export function projectAnalysisJob(value) {
     if (value.stateDeadlineAt !== null) fail();
   } else {
     iso(value.stateDeadlineAt);
+    if (Date.parse(updatedAt) >= Date.parse(value.stateDeadlineAt)) fail();
   }
-  return {
+  return validateJobShape({
     ...clone(value),
     freeLease: projectLease(value.freeLease),
     finalizationLease: projectLease(value.finalizationLease),
@@ -362,7 +585,7 @@ export function projectAnalysisJob(value) {
     ),
     accounting: projectAccounting(value.accounting),
     terminal: projectTerminal(value.terminal, value.state),
-  };
+  });
 }
 
 const emptyAttempt = (number) => ({
