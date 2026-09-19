@@ -459,6 +459,7 @@ function fixture({
   revokeDuringPublicationOwnerRead = false,
   messageClient = null,
   reconcileBeforeErrorAt = null,
+  rotateCapabilityDuringInitialReconcile = false,
   faultBoundary = null,
   faultOutcome = null,
   faultAttempt = null,
@@ -589,6 +590,32 @@ function fixture({
     now: time.now,
     versionDigest: (envelope) => envelope.digest,
   });
+  const workerReconciler = rotateCapabilityDuringInitialReconcile
+    ? Object.freeze({
+        reconcile: async (input) => {
+          const currentJob = await jobs.readJob({
+            jobId: job.jobId,
+            budget,
+          });
+          const rotated = await jobs.applyTransition({
+            jobId: job.jobId,
+            expectedEtag: currentJob.etag,
+            event: {
+              type: 'dispatch-rotated',
+              at: new Date(time.now()).toISOString(),
+              deadlineAt: currentJob.value.stateDeadlineAt,
+              previousCapabilityHash: currentJob.value.dispatchCapabilityHash,
+              capabilityHash: hashDispatchCapability(
+                Buffer.alloc(32, 8).toString('base64url'),
+              ),
+            },
+            budget,
+          });
+          assert.equal(rotated.status, 'updated');
+          return reconciler.reconcile(input);
+        },
+      })
+    : reconciler;
   let messages = 0;
   let counts = 0;
   let modelRetrievals = 0;
@@ -626,7 +653,7 @@ function fixture({
     auth,
     sourceOperations: source,
     anthropicClient: anthropic,
-    reconciler,
+    reconciler: workerReconciler,
     deployId: 'deploy-1',
     now: time.now,
     randomBytes: () => Buffer.alloc(32, random++),
@@ -892,6 +919,19 @@ test('full worker success publishes once and duplicate delivery performs no paid
   });
   assert.equal(duplicate.state, 'succeeded');
   assert.equal(setup.metrics.messages(), 1);
+});
+
+test('capability rotation during reconciliation fences the paused worker before it claims work', async () => {
+  const setup = fixture({ rotateCapabilityDuringInitialReconcile: true });
+
+  await assert.rejects(runWorker(setup), { code: 'forbidden' });
+
+  assert.equal(setup.jobs.value().state, 'dispatchable');
+  assert.equal(setup.metrics.sourceCalls(), 0);
+  assert.equal(setup.metrics.modelRetrievals(), 0);
+  assert.equal(setup.metrics.counts(), 0);
+  assert.equal(setup.metrics.messages(), 0);
+  assert.equal(setup.spend.preflightReads(), 0);
 });
 
 test('a missing preflight marker at the primary paid boundary prevents every Messages call', async () => {

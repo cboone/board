@@ -91,6 +91,13 @@ remaining runtime before either paid transition. It permits at most one
 strictly bounded corrective attempt and treats incomplete billing evidence as
 conservative unknown exposure without replaying a paid request.
 
+The background Function authorizes the current dispatchable state, capability,
+and deployment before reading server secrets or opening any store beyond the
+job store. The worker repeats the capability and deployment proof after
+reconciliation, then uses the reconciled ETag for its conditional free-work
+claim. A replay or concurrent capability rotation therefore stops before
+source or provider work.
+
 Primary files: `server/lib/anthropic.mjs`,
 `server/lib/analysis-admission.mjs`, `server/lib/analysis-worker.mjs`,
 `server/lib/analysis-reconciler.mjs`, and
@@ -244,6 +251,17 @@ phase-plan documents.
     requires budget discussion clears only the matching stale admission error.
     Reload and decision paths preserve unrelated analysis failures and resume
     any aggregate refresh deferred by terminal accounting.
+12. **Background-entry capability replay:** The native background entry now
+    uses the job store's dispatch authorization before reading authentication
+    or analysis secrets or opening the auth, report, and spend stores. The real
+    store rejects a valid capability after the job leaves `dispatchable`, and a
+    Function regression observes only the job store on that rejection.
+13. **Capability rotation during reconciliation:** The worker rechecks the
+    deployment and capability on the reconciled job before claiming free work.
+    Its conditional claim still uses that exact snapshot, so a later rotation
+    conflicts safely. A paused-worker regression rotates the capability during
+    reconciliation and observes no source, model, counting, preflight, or
+    Messages activity.
 
 ## Plan compliance
 
@@ -321,7 +339,7 @@ Current-tree validation includes:
 - paid-boundary tests that revoke authorization as primary and corrective
   preflight reads complete;
 - `npm test`: 182 of 182 Vitest checks;
-- `npm run test:server`: 453 of 453 native backend checks;
+- `npm run test:server`: 455 of 455 native backend checks;
 - `npm run test:composition`: 5 of 5 composition checks;
 - `npm run test:browser:production`: 189 of 189 checks across Chromium,
   Firefox, and WebKit;
@@ -348,9 +366,9 @@ reported separately from the presence of each commit's `gpgsig` block.
 
 ## Remaining Phase 3 work
 
-1. Create signed logical commit(s) for the current setup-budget, preflight, and
-   review changes, push them to PR #23, and resolve exact-head CI, review,
-   unresolved-thread, and mergeability findings.
+1. Create a signed logical commit for the current capability-review fixes, push
+   it to PR #23, and resolve exact-head CI, review, unresolved-thread, and
+   mergeability findings.
 2. Obtain the user's explicit merge approval, merge with a signed merge commit,
    and verify the automatic production deploy from that exact merge, including
    two Functions, zero Edge Functions, production guards, protected routes, and

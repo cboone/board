@@ -1067,6 +1067,14 @@ export function createAnalysisWorker(input) {
       throw new BoardError('forbidden');
 
     current = await reconciler.reconcile({ jobId, budget });
+    if (
+      current.value.admissionDeployId !== deployId ||
+      !matchesDispatchCapability(
+        current.value.dispatchCapabilityHash,
+        capability,
+      )
+    )
+      throw new BoardError('forbidden');
     if (current.value.state !== 'dispatchable') return current.value;
 
     const freeToken = randomToken(randomBytes, 'board-free-work-v1');

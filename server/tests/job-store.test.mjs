@@ -187,7 +187,7 @@ test('safe polling and dispatch authorization expose no capability or internal a
     },
   });
   const dispatchCapability = capability(3);
-  await jobs.applyTransition({
+  const dispatched = await jobs.applyTransition({
     jobId: created.value.jobId,
     budget,
     expectedEtag: reserved.etag,
@@ -226,6 +226,26 @@ test('safe polling and dispatch authorization expose no capability or internal a
     jobs.authorizeDispatch({
       jobId: created.value.jobId,
       capability: capability(4),
+      budget,
+    }),
+    { code: 'forbidden' },
+  );
+  await jobs.applyTransition({
+    jobId: created.value.jobId,
+    budget,
+    expectedEtag: dispatched.etag,
+    event: {
+      type: 'free-lease-claimed',
+      at: '2026-09-18T12:03:00.000Z',
+      phase: 'collecting',
+      tokenHash: hash('c'),
+      expiresAt: '2026-09-18T12:10:00.000Z',
+    },
+  });
+  await assert.rejects(
+    jobs.authorizeDispatch({
+      jobId: created.value.jobId,
+      capability: dispatchCapability,
       budget,
     }),
     { code: 'forbidden' },

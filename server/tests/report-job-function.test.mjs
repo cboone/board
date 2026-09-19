@@ -4,6 +4,7 @@ import {
   config as routeConfig,
   createHandler,
 } from '../functions/report-job.mjs';
+import { BoardError } from '../lib/errors.mjs';
 import { hashDispatchCapability } from '../lib/jobs.mjs';
 
 const ORIGIN = 'https://tracker-boards.example';
@@ -28,10 +29,16 @@ const published = {
 const authorizedJobStore =
   (capability = CAPABILITY) =>
   () => ({
-    async readJob({ jobId }) {
+    async authorizeDispatch({ jobId, capability: presentedCapability }) {
       assert.equal(jobId, JOB_ID);
+      if (
+        hashDispatchCapability(presentedCapability) !==
+        hashDispatchCapability(capability)
+      )
+        throw new BoardError('forbidden');
       return {
         value: {
+          state: 'dispatchable',
           admissionDeployId: 'deploy-1',
           dispatchCapabilityHash: hashDispatchCapability(capability),
         },
@@ -123,6 +130,47 @@ test('a valid-shaped wrong capability opens only the job store and reads no secr
 
   const response = await handler(invocation(), published);
   assert.equal(response.status, 403);
+  assert.equal(secretReads, 0);
+  assert.deepEqual(storeNames, ['board-jobs']);
+});
+
+test('a replayed valid capability opens only the job store after dispatch ends', async () => {
+  let secretReads = 0;
+  const storeNames = [];
+  let authorizationCalls = 0;
+  const env = {
+    BOARD_APP_ORIGIN: ORIGIN,
+    get GITHUB_APP_CLIENT_SECRET() {
+      secretReads += 1;
+      throw new Error('Must not read an authentication secret.');
+    },
+    get ANTHROPIC_API_KEY() {
+      secretReads += 1;
+      throw new Error('Must not read an analysis secret.');
+    },
+  };
+  const handler = createHandler({
+    env,
+    storageFactory: async ({ storeName }) => {
+      storeNames.push(storeName);
+      return { storeName };
+    },
+    jobStoreFactory: () => ({
+      async authorizeDispatch({ jobId, capability }) {
+        authorizationCalls += 1;
+        assert.equal(jobId, JOB_ID);
+        assert.equal(capability, CAPABILITY);
+        throw new BoardError('forbidden');
+      },
+    }),
+    workerFactory: () => {
+      assert.fail('A replayed capability must not create a worker.');
+    },
+  });
+
+  const response = await handler(invocation(), published);
+  assert.equal(response.status, 403);
+  assert.equal(authorizationCalls, 1);
   assert.equal(secretReads, 0);
   assert.deepEqual(storeNames, ['board-jobs']);
 });

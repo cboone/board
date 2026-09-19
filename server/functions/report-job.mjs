@@ -16,7 +16,6 @@ import {
 import { BoardError, errorResponse } from '../lib/errors.mjs';
 import { createSourceOperations } from '../lib/gather.mjs';
 import { createJobStore } from '../lib/job-store.mjs';
-import { matchesDispatchCapability } from '../lib/jobs.mjs';
 import { createOperationBudget } from '../lib/source-limits.mjs';
 import { REVIEWED_SETUP_PRICING_ATTESTATION } from '../lib/spend.mjs';
 import { createProductionStorage } from '../lib/storage.mjs';
@@ -61,18 +60,14 @@ export function createHandler({
         storeName: 'board-jobs',
         fetchImpl,
       });
-      const current = await jobStoreFactory({ storage: jobStorage }).readJob({
+      const current = await jobStoreFactory({
+        storage: jobStorage,
+      }).authorizeDispatch({
         jobId: invocation.jobId,
+        capability: invocation.capability,
         budget,
       });
-      if (
-        current === null ||
-        current.value.admissionDeployId !== deployId ||
-        !matchesDispatchCapability(
-          current.value.dispatchCapabilityHash,
-          invocation.capability,
-        )
-      )
+      if (current.value.admissionDeployId !== deployId)
         return errorResponse(new BoardError('forbidden'));
 
       const environment = readEnvironment(env);
