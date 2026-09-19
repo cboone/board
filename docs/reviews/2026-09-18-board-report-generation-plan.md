@@ -320,8 +320,8 @@ pending accounting and every expired nonterminal entry before each reservation.
 Add an explicit test in which repository A stops after its terminal job CAS and
 before ledger settlement, then repository B admission must finish A's
 ledger/accounting/claim order through the global pre-reservation sweep. It must
-settle A exactly once, mark A accounting-complete, clear A's claim last, remove
-A's active entry, and only then reserve for B.
+settle A exactly once, mark A accounting-complete, remove A's active entry,
+clear A's claim last, and only then reserve for B.
 
 Disposition: resolved in the fifth corrected plan; exact-commit re-review
 pending.
@@ -392,6 +392,27 @@ facts only after proving no entry exists. Describe `complete` and `unknown` as
 final accounting states and test both interruption branches exactly.
 
 Disposition: resolved in the eighth corrected plan; exact-commit re-review
+pending.
+
+### R23 Interrupted reservation adoption and sweep
+
+Finding: exact commit `b131cb02e42738b6a97973e68ceb45459f8ddacf`
+handled release of a reservation interrupted before the job's `reserved` CAS,
+but did not define the promised identical-admission resume path. It also allowed
+a second interruption after terminal fencing to leave a terminal/`unreserved`
+job with an active entry that a sweep keyed only to accounting status `pending`
+could miss.
+
+Required resolution: when identical admission finds a `created`/`unreserved`
+job with an exact valid active entry and matching claim, adopt the entry's full
+tuple into `reserved`/`pending` without another reservation; define its race with
+terminal recovery. Treat any terminal job with a matching active entry as
+pending bookkeeping regardless of its current accounting status, include an
+expired `created` job with an active entry in the global sweep, and prove a
+different-repository admission completes the interrupted cleanup and restores
+capacity.
+
+Disposition: resolved in the ninth corrected plan; exact-commit re-review
 pending.
 
 ## Confirmed design decisions

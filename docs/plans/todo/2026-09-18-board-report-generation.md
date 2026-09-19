@@ -1014,15 +1014,18 @@ only active or unresolved exposure, while job records retain terminal history.
 
 Before every new reservation, inspect all at-most-four active entries and their
 jobs. Run the state-specific nonpaid reconciler for every terminal entry with
-pending accounting and every expired nonterminal entry, including pre-provider
-`reserved`, `dispatchable`, `collecting`, and `counting` jobs from other
-repositories; remove entries whose jobs prove known accounting complete. Leave
-only live nonterminal work and unresolved unknown exposure untouched. Do not
-admit new paid work while a terminal-pending or expired entry remains
-unreconciled. Setup exposure permits at most two simultaneously fully reserved
-jobs and at most four full-ceiling unknown attempts, so the four-entry bound is
-compatible with the cap. A future production policy must define its own
-compatible active-entry and byte bounds before it can be enabled.
+pending bookkeeping and every expired nonterminal entry, including pre-provider
+`created` jobs with matching active entries and `reserved`, `dispatchable`,
+`collecting`, and `counting` jobs from other repositories. Pending bookkeeping
+includes a terminal job whose accounting status is still `unreserved` but whose
+matching active ledger entry proves an interrupted reservation. Remove entries
+whose jobs prove known accounting complete. Leave only live nonterminal work
+and unresolved unknown exposure untouched. Do not admit new paid work while a
+terminal-pending or expired entry remains unreconciled. Setup exposure permits
+at most two simultaneously fully reserved jobs and at most four full-ceiling
+unknown attempts, so the four-entry bound is compatible with the cap. A future
+production policy must define its own compatible active-entry and byte bounds
+before it can be enabled.
 
 On every strong read, validate `settledMicrousd`, accounting sequence/digest,
 the fixed active-entry shapes, and recompute total exposure as the aggregate
@@ -1101,22 +1104,32 @@ one job and one paid CAS boundary. It must never create a second job or
 reservation.
 
 Repeating an identical admission resumes a job that is still safely before its
-paid boundary. It may rotate the dispatch-capability hash and redispatch only
-after a strong read proves that no worker has claimed the job. When a `created`,
-`reserved`, `dispatchable`, `collecting`, or `counting` job cannot be resumed,
-recovery first CAS-fences that exact job and lease as terminal. It then
-CAS-releases any still-reserved exact ledger attempts, CAS-marks the job's
-accounting complete with the resulting ledger revision, accounting sequence,
-accounting digest, and transition ID, and finally CAS-clears only its matching
-repository claim. For a `created` job, strongly read the ledger because an
-interruption after the reservation CAS but before the job CAS can leave a
-matching active entry. If one exists, release it, copy the full resulting
-accounting tuple into the job, mark accounting complete, and remove the entry;
-nullable accounting facts remain only when the strong read proves no matching
-entry. If the terminal job CAS loses to a paid transition, recovery releases
-nothing and reconciles the newly read state. A new explicit Generate/Refresh
-action is required after terminal cleanup. A report GET or job poll never
-creates a new reservation or dispatches a new paid attempt.
+paid boundary. For `created`/`unreserved`, strongly read the ledger. When an
+exact matching active entry proves an interrupted reservation, validate its
+owner, job, policy, complete attempts, ceilings, and repository claim, then CAS
+the job to `reserved`/accounting `pending` with the entry's full resulting
+tuple. Continue without another reservation. Resolve an adoption CAS loss by
+strong re-read; a competing terminal fence wins and enters cleanup. A safely
+resumable job may rotate the dispatch-capability hash and redispatch only after
+a strong read proves that no worker has claimed it.
+
+When a `created`, `reserved`, `dispatchable`, `collecting`, or `counting` job
+cannot be resumed, recovery first CAS-fences that exact job and lease as
+terminal. It then CAS-releases any still-reserved exact ledger attempts,
+CAS-marks the job's accounting complete with the resulting ledger revision,
+accounting sequence, accounting digest, and transition ID, and finally
+CAS-clears only its matching repository claim. For a `created` job, strongly
+read the ledger because an interruption after the reservation CAS but before
+the job CAS can leave a matching active entry. If one exists, release it, copy
+the full resulting accounting tuple into the job, mark accounting complete, and
+remove the entry; nullable accounting facts remain only when the strong read
+proves no matching entry. If cleanup stops after the terminal fence, that
+terminal/`unreserved` job plus matching active entry is pending bookkeeping and
+the bounded global sweep resumes it. If the terminal job CAS loses to a paid
+transition, recovery releases nothing and reconciles the newly read state. A
+new explicit Generate/Refresh action is required after terminal cleanup. A
+report GET or job poll never creates a new reservation or dispatches a new paid
+attempt.
 
 The worker performs:
 
@@ -1465,7 +1478,7 @@ Before any paid call, verify in the deployed artifact:
   bound before reserving. Separately, commit repository A's terminal job CAS and
   interrupt before its ledger settlement; prove a new repository B admission
   uses the global pre-reservation sweep to settle A exactly once, mark A
-  accounting-complete, clear A's claim last, remove A's active entry, and only
+  accounting-complete, remove A's active entry, clear A's claim last, and only
   then reserve for B.
 - Race identical and different idempotency keys, concurrent repositories,
   global cross-repository UUID reuse, active-job claims, source checks, catalog
@@ -1494,10 +1507,15 @@ Before any paid call, verify in the deployed artifact:
   publication resumes without another model call, and ambiguous paid states
   never replay.
 - Interrupt after the reservation ledger CAS and before the job moves from
-  `created` to `reserved`. Prove recovery fences the job, finds and releases the
-  matching active entry exactly once, persists the full resulting accounting
-  tuple, marks accounting complete, removes the entry, and clears the claim
-  last. Also prove the no-entry branch moves directly from `unreserved` to
+  `created` to `reserved`. Prove identical admission validates and adopts the
+  matching entry's full tuple into `reserved`/`pending` without a second
+  reservation, including its race with terminal recovery. When resumption is
+  unavailable, prove recovery fences the job, finds and releases the matching
+  active entry exactly once, persists the full resulting accounting tuple,
+  marks accounting complete, removes the entry, and clears the claim last. Stop
+  once more after the terminal fence, then prove a different-repository
+  admission's global sweep resumes that pending bookkeeping and restores
+  capacity. Also prove the no-entry branch moves directly from `unreserved` to
   `complete` with nullable facts.
 - Interrupt after lightweight eligibility, capability generation, capability
   installation, and committed-but-unacknowledged installation. Race the
