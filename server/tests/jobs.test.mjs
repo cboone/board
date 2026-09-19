@@ -1,0 +1,137 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {
+  createAnalysisJob,
+  deriveAnalysisJobIdentity,
+  hashDispatchCapability,
+  matchesDispatchCapability,
+  projectAnalysisJob,
+  projectSafeJob,
+} from '../lib/jobs.mjs';
+
+const input = {
+  ownerId: 99961,
+  repositoryId: 17,
+  idempotencyKey: '018f0f11-1111-7111-8111-111111111111',
+  operation: 'generate',
+  expectedCurrentReportId: null,
+  authorizationEpoch: 2,
+  admissionDeployId: 'deploy-1',
+  at: '2026-09-18T12:00:00.000Z',
+  deadlineAt: '2026-09-18T12:02:00.000Z',
+};
+
+test('global idempotency identity is stable and repository-independent while report keys remain repository-bound', () => {
+  const first = deriveAnalysisJobIdentity(input);
+  const second = deriveAnalysisJobIdentity({ ...input, repositoryId: 18 });
+  assert.equal(first.jobId, second.jobId);
+  assert.equal(first.reportId, second.reportId);
+  assert.notEqual(first.versionKey, second.versionKey);
+  assert.match(first.jobId, /^[a-f0-9]{64}$/u);
+  assert.equal(
+    deriveAnalysisJobIdentity({
+      ...input,
+      idempotencyKey: input.idempotencyKey.toUpperCase(),
+    }).jobId,
+    first.jobId,
+  );
+});
+
+test('inert jobs preallocate deterministic publication and accounting shapes without raw source', () => {
+  const job = createAnalysisJob(input);
+  assert.equal(job.state, 'created');
+  assert.equal(job.accounting.status, 'unreserved');
+  assert.deepEqual(Object.values(job.accounting).slice(1), [
+    null,
+    null,
+    null,
+    null,
+  ]);
+  assert.deepEqual(
+    job.attempts.map(({ number, state, reservationMicrousd }) => ({
+      number,
+      state,
+      reservationMicrousd,
+    })),
+    [
+      { number: 1, state: 'unreserved', reservationMicrousd: 0 },
+      { number: 2, state: 'unreserved', reservationMicrousd: 0 },
+    ],
+  );
+  assert.equal(job.publication.basisReportId, null);
+  assert.equal(JSON.stringify(job).includes('body'), false);
+  assert.deepEqual(projectSafeJob(job), {
+    id: job.jobId,
+    operation: 'generate',
+    state: 'created',
+    createdAt: input.at,
+    updatedAt: input.at,
+    terminal: null,
+  });
+});
+
+test('refresh requires an exact basis report while generate forbids one', () => {
+  assert.throws(
+    () =>
+      createAnalysisJob({
+        ...input,
+        operation: 'refresh',
+        expectedCurrentReportId: null,
+      }),
+    { code: 'service_unavailable' },
+  );
+  assert.throws(
+    () =>
+      createAnalysisJob({
+        ...input,
+        expectedCurrentReportId: 'a'.repeat(64),
+      }),
+    { code: 'service_unavailable' },
+  );
+  const job = createAnalysisJob({
+    ...input,
+    operation: 'refresh',
+    expectedCurrentReportId: 'a'.repeat(64),
+  });
+  assert.equal(job.publication.basisReportId, 'a'.repeat(64));
+});
+
+test('strict job projection rejects unknown fields, raw text and inconsistent terminal or accounting shapes', () => {
+  const job = createAnalysisJob(input);
+  for (const candidate of [
+    { ...job, rawPrompt: 'private source' },
+    {
+      ...job,
+      terminal: { status: 'failed', completedAt: input.at, errorCode: null },
+    },
+    {
+      ...job,
+      accounting: {
+        ...job.accounting,
+        status: 'complete',
+      },
+    },
+    {
+      ...job,
+      attempts: [
+        { ...job.attempts[0], rawOutput: 'private output' },
+        job.attempts[1],
+      ],
+    },
+  ])
+    assert.throws(() => projectAnalysisJob(candidate), {
+      code: 'service_unavailable',
+    });
+});
+
+test('dispatch capability hashing is exact and never exposes the raw capability', () => {
+  const capability = Buffer.alloc(32, 7).toString('base64url');
+  const hash = hashDispatchCapability(capability);
+  assert.match(hash, /^[a-f0-9]{64}$/u);
+  assert.equal(matchesDispatchCapability(hash, capability), true);
+  assert.equal(
+    matchesDispatchCapability(hash, Buffer.alloc(32, 8).toString('base64url')),
+    false,
+  );
+  assert.equal(matchesDispatchCapability(hash, 'not-a-capability'), false);
+});

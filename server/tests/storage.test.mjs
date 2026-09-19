@@ -60,6 +60,46 @@ test('coordination listing stops at its limit and account records cannot be dele
     code: 'service_unavailable',
   });
 });
+test('fixed report, job and spend stores reject cross-namespace keys and unsafe deletion', async () => {
+  const calls = [];
+  const store = {
+    getWithMetadata: async (key) => {
+      calls.push(['read', key]);
+      return null;
+    },
+    delete: async (key) => calls.push(['delete', key]),
+  };
+  const reports = createStorage({ store, storeName: 'board-reports' });
+  const jobs = createStorage({ store, storeName: 'board-jobs' });
+  const spend = createStorage({ store, storeName: 'board-spend' });
+  await reports.read('owners/99961/catalog');
+  await reports.read('owners/99961/repositories/17/state');
+  await reports.read(`owners/99961/repositories/17/versions/${'a'.repeat(64)}`);
+  await jobs.read(`jobs/${'b'.repeat(64)}`);
+  await spend.read('setup/v1');
+  await spend.read('production/policy.v1/2026-09');
+  await reports.delete(
+    `owners/99961/repositories/17/versions/${'c'.repeat(64)}`,
+  );
+  for (const [adapter, unsafeKey] of [
+    [reports, 'account/99961'],
+    [jobs, `jobs/${'A'.repeat(64)}`],
+    [spend, 'production/../2026-09'],
+  ])
+    await assert.rejects(adapter.read(unsafeKey), {
+      code: 'service_unavailable',
+    });
+  await assert.rejects(reports.delete('owners/99961/repositories/17/state'), {
+    code: 'service_unavailable',
+  });
+  await assert.rejects(jobs.delete(`jobs/${'b'.repeat(64)}`), {
+    code: 'service_unavailable',
+  });
+  await assert.rejects(spend.listKeys({ prefix: 'production/', limit: 1 }), {
+    code: 'service_unavailable',
+  });
+  assert.equal(calls.filter(([operation]) => operation === 'delete').length, 1);
+});
 test('production SDK import and store open happen only when explicitly requested', async () => {
   let loaded = 0;
   const result = await createProductionStorage({
@@ -83,6 +123,32 @@ test('production SDK import and store open happen only when explicitly requested
         throw new Error('provider sensitive text');
       },
     }),
+    { code: 'service_unavailable' },
+  );
+});
+test('production storage opens only fixed namespaces', async () => {
+  const opened = [];
+  const loadBlobs = async () => ({
+    getStore(options) {
+      opened.push(options.name);
+      return {};
+    },
+  });
+  for (const storeName of [
+    'board-auth',
+    'board-reports',
+    'board-jobs',
+    'board-spend',
+  ])
+    await createProductionStorage({ storeName, loadBlobs });
+  assert.deepEqual(opened, [
+    'board-auth',
+    'board-reports',
+    'board-jobs',
+    'board-spend',
+  ]);
+  await assert.rejects(
+    createProductionStorage({ storeName: 'board-untrusted', loadBlobs }),
     { code: 'service_unavailable' },
   );
 });
