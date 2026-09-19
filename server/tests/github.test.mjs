@@ -170,6 +170,10 @@ for (const [name, next] of [
     'https://api.github.com/repos/cboone/widgets/issues?state=open&per_page=100&page=1',
   ],
   [
+    'skipped page',
+    'https://api.github.com/repos/cboone/widgets/issues?state=open&per_page=100&page=3',
+  ],
+  [
     'unsafe page number',
     'https://api.github.com/repos/cboone/widgets/issues?state=open&per_page=100&page=9007199254740992',
   ],

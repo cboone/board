@@ -70,6 +70,9 @@ Independent synthetic reproducers identified and verified corrections for:
    check result gathered with older credentials.
 10. A session ending after durable refresh acknowledgement cannot strip the
     confirmed shared token pair or require unrelated sessions to reauthorize.
+11. REST pagination requires each provider next link to advance by exactly one
+    page; a skipped page fails the source check instead of producing an
+    incomplete authoritative inventory.
 
 No credential files or real repository inputs were used in these reproducers.
 
@@ -77,7 +80,7 @@ No credential files or real repository inputs were used in these reproducers.
 
 - `npm run verify`: formatting, linting, 152 report unit checks, 45 fixture
   browser checks across three engines, build, and static artifact gate passed.
-- `npm run test:server`: all 165 native backend checks passed.
+- `npm run test:server`: all 166 native backend checks passed.
 - `npm run lint:server` and `npm run audit:server` passed; the dependency audit
   reports zero vulnerabilities.
 - `npm run test:composition`: all five checks passed, including actual Vite

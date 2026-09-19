@@ -54,7 +54,7 @@ function nextPage(link, initial, previous) {
     next.searchParams.getAll('page').length !== 1 ||
     !/^[1-9]\d*$/u.test(next.searchParams.get('page') ?? '') ||
     !Number.isSafeInteger(Number(next.searchParams.get('page'))) ||
-    Number(next.searchParams.get('page')) <= previous
+    Number(next.searchParams.get('page')) !== previous + 1
   )
     throw new BoardError('source_incomplete');
   const expected = [...initial.searchParams]
