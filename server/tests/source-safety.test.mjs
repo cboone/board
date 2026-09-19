@@ -24,10 +24,22 @@ test('source safety policy is versioned, frozen, and uses bounded patterns', () 
 test('source safety recognizes each fixed credential rule without exposing text', () => {
   const examples = new Map([
     ['pem-private-key-header', '-----BEGIN PRIVATE KEY-----'],
-    ['github-credential-prefix', 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456'],
-    ['anthropic-credential-prefix', 'sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZ'],
-    ['openai-credential-prefix', 'sk-proj-ABCDEFGHIJKLMNOPQRSTUVWXYZ'],
-    ['slack-credential-prefix', 'xoxb-1234567890-ABCDEFGHIJ'],
+    [
+      'github-credential-prefix',
+      ['gh', 'p_', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ123456'].join(''),
+    ],
+    [
+      'anthropic-credential-prefix',
+      ['s', 'k-', 'ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZ'].join(''),
+    ],
+    [
+      'openai-credential-prefix',
+      ['s', 'k-', 'proj-ABCDEFGHIJKLMNOPQRSTUVWXYZ'].join(''),
+    ],
+    [
+      'slack-credential-prefix',
+      ['xo', 'xb-', '1234567890-ABCDEFGHIJ'].join(''),
+    ],
     ['aws-access-key-prefix', 'AKIAABCDEFGHIJKLMNOP'],
     [
       'url-authority-credential',

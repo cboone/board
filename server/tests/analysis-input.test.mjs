@@ -279,7 +279,11 @@ test('unsafe and oversized optional items are omitted whole with safe provenance
   const snapshot = source();
   snapshot.comments[0].body = 'password=synthetic-optional-sensitive';
   snapshot.comments[1].body = 'x'.repeat(11);
-  snapshot.files[0].content = 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456';
+  snapshot.files[0].content = [
+    'gh',
+    'p_',
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZ123456',
+  ].join('');
   snapshot.files[1].content = new Uint8Array([0xff]);
   snapshot.files[2].content = 'binary\u0000content';
   snapshot.tree.push({
