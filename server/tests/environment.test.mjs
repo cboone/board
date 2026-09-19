@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  readAnalysisEnvironment,
   readEnvironment,
   readPublicOrigin,
   requirePublishedDeploy,
@@ -42,6 +43,18 @@ test('configuration enforces the fixed numeric owner and complete bounded keyrin
     config.callbackUrl,
     'https://tracker-boards.example/api/auth/callback',
   );
+});
+
+test('analysis credentials are read separately only from the server environment', () => {
+  assert.equal(
+    readAnalysisEnvironment({ ANTHROPIC_API_KEY: 'synthetic-key' }).apiKey,
+    'synthetic-key',
+  );
+  for (const value of [undefined, '', 'line\nbreak', 'x'.repeat(4097)])
+    assert.throws(() => readAnalysisEnvironment({ ANTHROPIC_API_KEY: value }), {
+      code: 'service_unavailable',
+    });
+  assert.equal(Object.hasOwn(readEnvironment(env()), 'apiKey'), false);
 });
 test('public guards reject unknown deployment contexts and noncanonical HTTPS origins', () => {
   for (const context of [

@@ -98,3 +98,15 @@ export function readEnvironment(env) {
     keyring: Object.freeze({ currentId: keyId, keys }),
   });
 }
+
+export function readAnalysisEnvironment(env) {
+  const apiKey = env.ANTHROPIC_API_KEY;
+  if (
+    typeof apiKey !== 'string' ||
+    apiKey.length < 1 ||
+    apiKey.length > 4096 ||
+    /[\r\n\0]/u.test(apiKey)
+  )
+    fail();
+  return Object.freeze({ apiKey });
+}
