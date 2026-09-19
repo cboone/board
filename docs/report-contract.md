@@ -1,11 +1,15 @@
 # Report contract
 
-Board's fixture experience uses a source-bound backlog report, a shared lane
-model, and a DOM renderer. These modules do not authenticate users, gather GitHub
-data, call a model, or persist reports. The synthetic inputs are in
+Board's fixture experience and production report view use the same source-bound
+backlog report, shared lane model, and DOM renderer. These browser modules do
+not authenticate users, gather GitHub data, call a model, or persist reports.
+The production server performs those operations around the validated report and
+inventory. Synthetic inputs are in
 [the fixture module](../src/fixtures/reports.js).
 
 ## Module interfaces
+
+<!-- markdownlint-disable MD013 -->
 
 | Module                                               | Interface                                | Result                                                   |
 | ---------------------------------------------------- | ---------------------------------------- | -------------------------------------------------------- |
@@ -13,6 +17,8 @@ data, call a model, or persist reports. The synthetic inputs are in
 | [Lane model](../src/domain/lane-model.js)            | `deriveReport(report)`                   | Lookups, branch units, lane state, relations, and counts |
 | [Renderer](../src/report/render.js)                  | `renderReport(mount, report, inventory)` | An idempotent disposal function                          |
 | [Source links](../src/report/links.js)               | `createSourceLinks(report)`              | Encoded source URL builders                              |
+
+<!-- markdownlint-enable MD013 -->
 
 The validator accepts external input without throwing on malformed data. Each
 error has `path`, `code`, and `message`, for example:
@@ -37,27 +43,29 @@ for eligibility; presentation code must not calculate a separate set of starts.
 
 ## Report and inventory
 
-The report requires `board`, `title`, `repo`, `sync`, `summary`, `issues`, `lanes`,
-and `startNow`. The supported `board` value is `backlog-triage`. Optional top-level
-fields are `repoUrl`, `milestones`, `contention`, and `notes`.
+The report requires `board`, `title`, `repo`, `sync`, `summary`, `issues`,
+`lanes`, and `startNow`. The supported `board` value is `backlog-triage`.
+Optional top-level fields are `repoUrl`, `milestones`, `contention`, and
+`notes`.
 
-The independent inventory requires `board`, `title`, `repo`, `sync`, and `issues`;
-it may also supply `repoUrl`. Its issue records contain canonical `number`,
-`title`, `milestone`, and `inProgress`. Use explicit `null` for absent inventory
-milestones and progress evidence. It does not need analysis fields such as lanes
-or dependencies.
+The independent inventory requires `board`, `title`, `repo`, `sync`, and
+`issues`; it may also supply `repoUrl`. Its issue records contain canonical
+`number`, `title`, `milestone`, and `inProgress`. Use explicit `null` for absent
+inventory milestones and progress evidence. It does not need analysis fields
+such as lanes or dependencies.
 
-Author fixture inventories independently of the report under validation. A future
-collector must assemble complete, paginated source inventories before analysis;
-the model's returned issue list cannot serve as its own inventory. Validation
-detects omissions and additions relative to the inventory, but cannot prove that
-an incorrectly assembled inventory includes every source issue.
+Author fixture inventories independently of the report under validation. The
+production collector assembles complete, paginated source inventories before
+analysis; the model's returned issue list cannot serve as its own inventory.
+Validation detects omissions and additions relative to the inventory, but cannot
+prove that an incorrectly assembled inventory includes every source issue.
 
 Report identity, normalized repository URL, sync metadata, issue titles,
 milestone membership, and progress evidence must match the inventory. Omitting
-`repoUrl` means `https://github.com/OWNER/REPOSITORY`; an equivalent explicit URL
-with a trailing slash is accepted. Canonical issue titles remain verbatim even
-when an optional `short` title is used in recommendations or blocked summaries.
+`repoUrl` means `https://github.com/OWNER/REPOSITORY`; an equivalent explicit
+URL with a trailing slash is accepted. Canonical issue titles remain verbatim
+even when an optional `short` title is used in recommendations or blocked
+summaries.
 
 ### Sync fields
 
@@ -65,20 +73,23 @@ when an optional `short` title is used in recommendations or blocked summaries.
 `sync.branch` names the source branch without whitespace or dot path segments.
 `sync.commit` is a full lowercase hexadecimal SHA, either 40 or 64 characters.
 Optional fields are a recognized IANA `timeZone`, a nonnegative
-`openPullRequests` count, and an `extra` list of nonempty facts. Supply `timeZone`
-when viewers should see the same display zone. All supplied sync facts are bound
-to the independent inventory.
+`openPullRequests` count, and an `extra` list of nonempty facts. Supply
+`timeZone` when viewers should see the same display zone. All supplied sync
+facts are bound to the independent inventory.
 
 ### Issue fields and references
 
 Each report issue requires a unique positive safe-integer `number`, a nonempty
 `title`, and `milestone`, using `null` when absent. Optional analysis fields are
-`short`, `waitingOn`, `blockedBecause`, `after`, `sameBranchAs`, `inProgress`, and
-`uncertainty`.
+`short`, `waitingOn`, `blockedBecause`, `after`, `sameBranchAs`, `inProgress`,
+and `uncertainty`.
 
 `waitingOn` expresses a hard blocker. It requires a nonempty `blockedBecause`
-reason whenever its list is nonempty; a reason without a hard blocker is invalid.
-`after` expresses soft ordering. Both lists accept these reference forms:
+reason whenever its list is nonempty; a reason without a hard blocker is
+invalid. `after` expresses soft ordering. Both lists accept these reference
+forms:
+
+<!-- markdownlint-disable MD013 -->
 
 | Form                                                         | Meaning                                  |
 | ------------------------------------------------------------ | ---------------------------------------- |
@@ -88,14 +99,15 @@ reason whenever its list is nonempty; a reason without a hard blocker is invalid
 | `{ "ref": "other/package#17" }`                              | A repository issue reference             |
 | `{ "url": "https://example.com/design", "label": "Design" }` | A labeled external source                |
 
+<!-- markdownlint-enable MD013 -->
+
 Reference objects name exactly one target kind and may include `title`. A `pr`
 cannot mislabel a known issue number because issues and PRs share one repository
-number namespace. A `ref` matching the current repository and
-a known open issue is treated as the same local target as its number, including
-case differences in repository names. An ordinary `/issues/N` URL under the
-source repository's origin and path also resolves to that known local issue.
-Other origins, repository paths, unlisted numbers, and `/pull/N` URLs remain
-external. Local
+number namespace. A `ref` matching the current repository and a known open issue
+is treated as the same local target as its number, including case differences in
+repository names. An ordinary `/issues/N` URL under the source repository's
+origin and path also resolves to that known local issue. Other origins,
+repository paths, unlisted numbers, and `/pull/N` URLs remain external. Local
 equivalence applies to dependency cycles, self-references, hard/soft duplicates,
 branch ordering, reverse relations, and head freeing. The displayed reference
 can retain its authored form.
@@ -112,8 +124,8 @@ correct. Source gathering and analysis remain responsible for those judgments.
 ### Lanes, recommendations, and contention
 
 Every open issue belongs to exactly one lane position. Each lane has a unique
-`key`, nonempty `name`, `mode` (`serial`, `head`, or `any`), and a nonempty `issues`
-list. Optional `owns` and `note` describe its footprint and ordering.
+`key`, nonempty `name`, `mode` (`serial`, `head`, or `any`), and a nonempty
+`issues` list. Optional `owns` and `note` describe its footprint and ordering.
 
 Each `startNow` pick has an `issue`, a concrete `why`, and optional `touches`.
 Picks are unique, eligible new branch roots. Recommendations may use fewer
@@ -121,10 +133,10 @@ eligible branches when `notes.startNow` provides a nonempty explanation. The
 other supported notes are `blocked` and `contention`.
 
 `milestones` supplies display records with `title` and optional `short`.
-`contention` has optional `rowLabel` and a `claims` list. Each claim has a unique
-`name`, optional issue-search `query`, and at least two distinct issue numbers.
-Claimed issues must be present and share one lane; a shared component cannot
-span independently runnable lanes.
+`contention` has optional `rowLabel` and a `claims` list. Each claim has a
+unique `name`, optional issue-search `query`, and at least two distinct issue
+numbers. Claimed issues must be present and share one lane; a shared component
+cannot span independently runnable lanes.
 
 ## Branch units and lane state
 
@@ -139,8 +151,8 @@ Uncertainty on any member suppresses new starts for the unit.
 
 - A `serial` lane skips roots that cannot run and permits its first eligible
   root when no active branch holds the slot.
-- A `head` lane permits only its head until that work lands. Blocked, queued,
-  or uncertain heads hold later roots. `freedAfter` counts subsequent roots
+- A `head` lane permits only its head until that work lands. Blocked, queued, or
+  uncertain heads hold later roots. `freedAfter` counts subsequent roots
   released by the head and its admitted companions, excluding roots still held
   by independent blockers, companion soft ordering, or uncertainty.
 - An `any` lane counts independently runnable branch units and retains existing
@@ -156,18 +168,20 @@ Hosted reports can observe only GitHub-visible source evidence. Unpushed local
 branches and worktrees are outside the source inventory.
 
 `deriveReport` returns `byNumber`, `laneOf`, `units`, `lanes`, `blockedIssues`,
-`unblocks`, `eases`, and `stats`. `laneOf` values are raw report lanes. `units` is
-keyed by root number and exposes companions, active issues, progress evidence,
-root blocking, soft queuing, and uncertainty. Each derived lane exposes roots,
-active/running/startable roots, `nowIssues`, `rankByIssue`, `stateByIssue`,
-`capacity`, and `freedAfter`. Visible issue states are `now`, `queued`, `blocked`,
-or `uncertain`; an active issue can still display a blocked or uncertain state.
-The lane module also exports
+`unblocks`, `eases`, and `stats`. `laneOf` values are raw report lanes. `units`
+is keyed by root number and exposes companions, active issues, progress
+evidence, root blocking, soft queuing, and uncertainty. Each derived lane
+exposes roots, active/running/startable roots, `nowIssues`, `rankByIssue`,
+`stateByIssue`, `capacity`, and `freedAfter`. Visible issue states are `now`,
+`queued`, `blocked`, or `uncertain`; an active issue can still display a blocked
+or uncertain state. The lane module also exports
 `localIssueNumber(reference, repo, byNumber, repoUrl?)`, which resolves numeric
 or known current-repository issue references and source issue URLs to a number,
 and returns `null` for other targets.
 
 ### Header counts
+
+<!-- markdownlint-disable MD013 -->
 
 | Model field      | Definition                                                       |
 | ---------------- | ---------------------------------------------------------------- |
@@ -178,9 +192,11 @@ and returns `null` for other targets.
 | `branchesAtOnce` | Sum of lane capacity, counting branch roots and active occupancy |
 | `picks`          | Number of recommended new branches                               |
 
-Ready is not a start count. Queued, active, and uncertain issues can remain ready
-under the original header definition. Companions count as issues, but count only
-once with their root when measuring branch capacity.
+<!-- markdownlint-enable MD013 -->
+
+Ready is not a start count. Queued, active, and uncertain issues can remain
+ready under the original header definition. Companions count as issues, but
+count only once with their root when measuring branch capacity.
 
 ## Uncertainty and empty backlogs
 
@@ -192,8 +208,8 @@ Keep the affected issue visible, withhold its unit's start, and render the rest
 of the valid report. An uncertain head also holds its lane.
 
 An empty source backlog is valid when issues, lanes, and picks are all empty.
-The renderer shows zero counts and meaningful Start now, Lanes, Contention matrix,
-and Blocked sections. Empty lanes cannot conceal a nonempty inventory.
+The renderer shows zero counts and meaningful Start now, Lanes, Contention
+matrix, and Blocked sections. Empty lanes cannot conceal a nonempty inventory.
 
 ## Report safety limits
 
@@ -201,6 +217,8 @@ The validator exports `REPORT_LIMITS`. Structural inspection applies separately
 to the report and inventory, including unknown fields. Strings and field names
 must not contain control characters; values must be plain JSON without circular
 objects or nonfinite numbers.
+
+<!-- markdownlint-disable MD013 -->
 
 | Limit                | Value     | Scope                                           |
 | -------------------- | --------- | ----------------------------------------------- |
@@ -213,19 +231,71 @@ objects or nonfinite numbers.
 | `totalTextLength`    | 2,000,000 | Combined string and field-name length per input |
 | `errors`             | 100       | Returned errors per validation call             |
 
+<!-- markdownlint-enable MD013 -->
+
 Text lengths use JavaScript string length. These are report safety and rendering
-bounds. They do not authorize paid analysis, define provider token budgets, or
-set future repository-file and model-input gathering limits.
+bounds. They do not authorize paid analysis or define the separate repository-
+file and provider-token admission limits.
+
+## Production envelope and persistence
+
+The Phase 3 production build composes two native Netlify Functions. The
+synchronous `api` Function serves authenticated `/api/*` routes, while the
+`report-job` background Function gathers source data, calls the fixed provider,
+validates the result, and publishes a successful report. Both use server-only
+configuration. `ANTHROPIC_API_KEY` is read only by the production background
+Function and never appears in a report, browser bundle, preview, or branch
+deployment.
+
+Durable data is divided among four Blob stores:
+
+| Store           | Durable contents                                      |
+| --------------- | ----------------------------------------------------- |
+| `board-auth`    | OAuth transactions, sessions, and owner token records |
+| `board-reports` | Repository state and immutable successful versions    |
+| `board-jobs`    | Analysis state machines                               |
+| `board-spend`   | Setup and future production spending ledgers          |
+
+A successful immutable version envelope contains its schema and report identity,
+generation time, validated `report` and independent `inventory`, comparison,
+source summary and provenance, and fixed-analysis metadata. Raw GitHub/file
+inputs, prompts, provider output, credentials, and provider thinking remain
+transient and are not part of this envelope.
+
+Repository state holds separate `current` and `previous` pointers. Each pointer
+identifies a successful report by report ID, generation time, source
+fingerprint, and an internal version key. The authenticated
+`GET /api/repositories/:id/report` response is a current-envelope view: it
+returns the current `report`, `inventory`, `comparison`, `source`, and
+`analysis` values together with browser-safe current/previous pointer metadata,
+the latest source check, the last analysis attempt, any active safe job, and
+spending availability. It does not return the previous envelope's report
+content.
+
+Only a successful publication rotates the pointers. The former current becomes
+previous; a failed, ambiguous, budget-blocked, or superseded attempt leaves both
+unchanged. Before a later success attempts the pointer rotation, it records
+every non-null former-previous version key on the job as `cleanupCandidateKey`.
+That field is inert retention metadata. It does not authorize or trigger
+deletion. The displaced immutable version remains physically stored, but it is
+outside the logical current/previous history and unavailable through the initial
+API and browser.
+
+The initial release has no report history listing or retrieval endpoint and no
+report deletion endpoint. Owner authorization for saved-report reads remains
+separate from current GitHub source eligibility, allowing the current saved
+report to remain viewable with a source-unavailable status after access changes.
+Deletion and extended history require a separately approved retention policy and
+API design.
 
 ## Rendering, links, and CSP
 
 `renderReport` builds text nodes and elements without `innerHTML`, inline style
 attributes, or dynamic script execution. The stylesheet is scoped to `.report`,
-uses system fonts, and follows the shell's light/dark theme. Dispose the previous
-render before replacing its mount or changing scenarios; successful renders use
-one age interval updating once per minute, and invalid renders allocate none.
-Disposal clears
-the interval and is safe to call repeatedly.
+uses system fonts, and follows the shell's light/dark theme. Dispose the
+previous render before replacing its mount or changing scenarios; successful
+renders use one age interval updating once per minute, and invalid renders
+allocate none. Disposal clears the interval and is safe to call repeatedly.
 
 Generated issue, PR, branch, commit, and milestone links use GitHub or the
 inventory-verified optional repository base. Branch path segments and search
@@ -243,16 +313,18 @@ fetch instructions.
 
 [The static response headers](../public/_headers) restrict scripts, styles,
 fonts, and connections to the site's own origin. The built-site browser suite
-exercises those headers with Alpine CSP and external Vite assets. Fixture routes
-remain static and contain no application Functions or service credentials.
+exercises those headers with Alpine CSP and external Vite assets. Deploy
+previews and branch deployments remain static fixtures with zero Functions, zero
+Edge Functions, no server package, no service credentials, and no
+production-store access.
 
 ## Source provenance and deliberate adaptations
 
 The semantic and design baseline is `publish-report-board` version `1.0.0` at
 immutable source revision `046f1389caf53d6ec8c81e8c88b927a40d154b79`. Read its
 [original skill and references][original-source], including the backlog type,
-sync metadata, and design conventions, together with its [validator][original-validator]
-and [HTML template][original-template].
+sync metadata, and design conventions, together with its
+[validator][original-validator] and [HTML template][original-template].
 
 The application preserves the original sections, source links, six counts,
 same-branch behavior, lane modes, active overlap, and milestone contention.
@@ -264,14 +336,14 @@ system fonts, scoped theme styles, and disposable age interval support the Vite
 application and its CSP.
 
 The original head-freeing calculation's successor-companion ordering defect is
-reported in [source issue #457](https://github.com/cboone/agent-harness-plugins/issues/457).
+reported in
+[source issue #457](https://github.com/cboone/agent-harness-plugins/issues/457).
 Board's regression checks preserve the distinction between companion soft
 ordering and independent hard blockers while correcting that calculation.
 
-Application job, freshness, provider, and retention metadata stay outside this
-report payload. Durable current and previous successful reports belong to a
-future server implementation; the fixture contract does not claim that storage
-or authenticated access exists.
+Application job, freshness, provider, and retention metadata stay outside the
+core report payload. The production envelope and authenticated API layer add
+those concerns without changing the report validator or renderer contract.
 
 [original-source]: https://github.com/cboone/agent-harness-plugins/tree/046f1389caf53d6ec8c81e8c88b927a40d154b79/plugins/publish-report-board/skills/publish-report-board
 [original-validator]: https://github.com/cboone/agent-harness-plugins/blob/046f1389caf53d6ec8c81e8c88b927a40d154b79/plugins/publish-report-board/scripts/report-board

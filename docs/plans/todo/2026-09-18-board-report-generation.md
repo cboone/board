@@ -2,10 +2,16 @@
 
 Date: 2026-09-18
 
-Status: reviewed and ready for implementation. Independent exact-commit reviews
-of `314f598db6044fafeed5e27c8427690a9f7c7382` found no material planning
-blocker. No Anthropic credential has been read, no provider request has been
-made, and recorded Anthropic setup spend remains $0.
+Status: implementation active in the `feature/report-generation` worktree. The
+source contract, fixed provider client, report/job/spend stores, analysis
+worker, authenticated API and browser flows, a production composition with two
+Functions, and mocked coverage are implemented for review. Documentation, final
+local verification, independent review resolution, PR delivery, deployment, key
+setup, paid calibration, and the ordinary production spending-policy decision
+remain. The reviewed planning baseline
+`314f598db6044fafeed5e27c8427690a9f7c7382` had no material planning blocker. No
+Anthropic credential has been read, no provider request has been made, and
+recorded Anthropic setup spend remains $0.
 
 ## Outcome and authority
 
@@ -13,10 +19,9 @@ An authenticated authorized owner can open a stable page for an eligible
 `cboone/*` repository, view its last successful backlog report across browsers
 and devices, and explicitly generate or refresh that report. Opening a saved
 report automatically performs a free GitHub source check. It never starts paid
-analysis. A successful analysis publishes a complete, inventory-bound report;
-an incomplete source, rejected model response, failed refresh, ambiguous
-provider outcome, or concurrent stale job leaves the last successful report
-unchanged.
+analysis. A successful analysis publishes a complete, inventory-bound report; an
+incomplete source, rejected model response, failed refresh, ambiguous provider
+outcome, or concurrent stale job leaves the last successful report unchanged.
 
 The [original project prompt](../project-prompt.md), the original
 `publish-report-board` skill and backlog-triage reference at version `1.0.0`,
@@ -33,9 +38,11 @@ The controlling product decisions are:
   owner authentication, including a report for a public repository.
 - Use the app-managed Anthropic key, fixed model `claude-opus-5`, and `high`
   effort. There is no provider or model selector.
-- Spend at most $25 total on setup, calibration, retries, and acceptance. Stop
+- Spend at most
+  $25 total on setup, calibration, retries, and acceptance. Stop
   for discussion before another dispatch would bring settled, reserved, and
-  unknown setup exposure to $20 or more.
+  unknown setup exposure to $20
+  or more.
 - Do not infer a production monthly cap or maximum cost per report. Measure
   calibration and acceptance calls, present a concrete policy proposal, obtain
   the user's decision, and deploy that policy before ordinary paid production
@@ -44,9 +51,13 @@ The controlling product decisions are:
   **Generate report**. A saved board opens with its report and automatically
   checks GitHub for changes, while paid reanalysis requires an explicit
   **Refresh report** action.
-- Retain the current and previous successful reports per repository. Raw source
-  inputs and provider request/output remain transient. Sign-out preserves saved
-  reports. Report deletion is deferred.
+- Expose the current and previous successful report pointers per repository.
+  Return only current-envelope content through the initial report API. Raw
+  source inputs and provider request/output remain transient. Displaced
+  immutable versions remain physically stored outside the logical
+  current/previous history; `cleanupCandidateKey` is inert retention metadata.
+  Sign-out preserves saved reports. History and report deletion APIs are
+  deferred.
 - Keep a saved report available when its source becomes archived, transferred,
   deleted, or inaccessible. Mark it historical/source-unavailable and disable
   new analysis until the source is eligible and accessible again.
@@ -67,9 +78,9 @@ source, sign-out, and zero Edge Functions. Issue #16 is closed as completed.
 Phase 2 supplies these reviewed boundaries:
 
 - Production-only native Netlify Functions guarded by production context,
-  canonical origin, and strict environment validation. Phase 3 must add an
-  explicit published-deploy runtime guard; Phase 2 did not implement that
-  check.
+  canonical origin, and strict environment validation. Phase 2 omitted an
+  explicit published-deploy runtime guard; the active Phase 3 Functions add it
+  before secret configuration or site-wide application stores are opened.
 - Owner-only GitHub OAuth sessions, CSRF protection, encrypted renewable tokens,
   and source authorization that remains separate from Board authentication.
 - Eligible repository listing and a two-observation source collector with
@@ -83,28 +94,28 @@ Phase 2 supplies these reviewed boundaries:
 - A shared inventory-bound report validator, lane model, renderer, safe source
   links, and complete/empty/uncertain fixtures.
 
-Phase 3 implements analysis, report/job/spend persistence, source freshness,
-and Generate/Refresh behavior. Phase 4 retains final hosted-user guidance,
-operational recovery documentation, remaining issue reconciliation, and final
-whole-product acceptance unless those artifacts are required to use or validate
-Phase 3 safely.
+Phase 3 implements analysis, report/job/spend persistence, source freshness, and
+Generate/Refresh behavior. Its active implementation remains undeployed and
+uncalibrated. Phase 4 retains final hosted-user guidance, operational recovery
+documentation, remaining issue reconciliation, and final whole-product
+acceptance unless those artifacts are required to use or validate Phase 3
+safely.
 
-Before implementation, update package metadata research for dependencies that
-will actually be used. Keep native `fetch`; do not add an Anthropic SDK. Retain
-`@netlify/blobs` as the only server runtime package unless a concrete reviewed
-need establishes another dependency.
+The active implementation keeps native `fetch` and adds no Anthropic SDK.
+`@netlify/blobs` remains the only server runtime package.
 
 ## Architecture and trust boundaries
 
-Use a synchronous authenticated admission endpoint and a native Netlify
-background function. Admission creates an inert durable job, claims the
-repository's one active-analysis slot, reserves its full authorized exposure,
-and dispatches only a job ID plus a random capability. The background function
-gathers GitHub data in memory, performs free token admission, crosses a durable
-at-most-once paid boundary, validates the result, writes an immutable successful
-report version, and conditionally rotates the repository pointer.
+The active implementation uses a synchronous authenticated admission endpoint
+and a native Netlify background Function. Admission creates an inert durable
+job, claims the repository's one active-analysis slot, reserves its full
+authorized exposure, and dispatches only a job ID plus a random capability. The
+background function gathers GitHub data in memory, performs free token
+admission, crosses a durable at-most-once paid boundary, validates the result,
+writes an immutable successful report version, and conditionally rotates the
+repository pointer.
 
-Implement the worker as `server/functions/report-job.mjs` with an explicit
+The worker is `server/functions/report-job.mjs` with an explicit
 `config.background: true` export, following Netlify's current
 [Background Functions guidance](https://docs.netlify.com/build/functions/background-functions/).
 Invoke its default `/.netlify/functions/report-job` endpoint directly; do not
@@ -133,22 +144,22 @@ Keep four data classes separate:
 4. Setup and later production spending ledgers use a `board-spend` store.
 
 Every store adapter validates an explicit key grammar, requests strong reads,
-requires `onlyIfNew` or `onlyIfMatch` writes, bounds transport size and duration,
-and exposes no unguarded production singleton during module evaluation. Preview
-and branch artifacts contain no adapter or function bundle.
+requires `onlyIfNew` or `onlyIfMatch` writes, bounds transport size and
+duration, and exposes no unguarded production singleton during module
+evaluation. Preview and branch artifacts contain no adapter or function bundle.
 
 ## Source collection prerequisite and analysis input
 
 Add canonical issue `createdAt` and bounded canonical assignee IDs/logins to
-both matched GitHub observations, the transient source snapshot, saved
-inventory metadata, and the canonical fingerprint. Each issue always has an
-ID-sorted assignee array, including an empty one; reject duplicate IDs and
-conflicting ID/login facts and retain no other profile data. The original report
-uses issue age to break otherwise equal starts; do not infer age from an issue
-number or prose. Assignment changes freshness and remains visible source
-metadata, but it never establishes progress or affects start eligibility. A
-mismatch in either new field between observations makes the source unstable
-like any other authoritative field.
+both matched GitHub observations, the transient source snapshot, saved inventory
+metadata, and the canonical fingerprint. Each issue always has an ID-sorted
+assignee array, including an empty one; reject duplicate IDs and conflicting
+ID/login facts and retain no other profile data. The original report uses issue
+age to break otherwise equal starts; do not infer age from an issue number or
+prose. Assignment changes freshness and remains visible source metadata, but it
+never establishes progress or affects start eligibility. A mismatch in either
+new field between observations makes the source unstable like any other
+authoritative field.
 
 Project each matched `sourceSnapshot` into one normalized analysis JSON value:
 
@@ -213,13 +224,13 @@ expose only safe rule IDs and counts.
 
 Known credential paths and their descendants never enter the provider's
 `repositoryTree`, even as metadata. Retain only their path/blob identities in
-the complete source fingerprint so a later change still affects freshness.
-Do not use an entropy-only heuristic.
+the complete source fingerprint so a later change still affects freshness. Do
+not use an entropy-only heuristic.
 
 An invalid UTF-8, binary, oversized, or safety-matching optional file is omitted
-as a whole. A safety-matching or oversized optional comment is likewise
-omitted. GitHub JSON, including comment text, must already pass the transport's
-strict whole-response UTF-8 and JSON decoding; a malformed response fails source
+as a whole. A safety-matching or oversized optional comment is likewise omitted.
+GitHub JSON, including comment text, must already pass the transport's strict
+whole-response UTF-8 and JSON decoding; a malformed response fails source
 collection instead of salvaging individual items. Omission provenance records
 only canonical identity, existing content hash, safe rule ID, and omission
 count. A match in mandatory provider input, including an issue title or body,
@@ -231,8 +242,8 @@ enter a durable record, response, or log.
 
 For refresh, `priorAnalysis` projects the current validated report's relations,
 uncertainty, lanes, starts, contention, and reasons. It omits canonical titles,
-milestones, progress, sync, and provenance. Treat it as advisory continuity;
-the new snapshot remains authoritative. Omit it for initial generation or an
+milestones, progress, sync, and provenance. Treat it as advisory continuity; the
+new snapshot remains authoritative. Omit it for initial generation or an
 identity mismatch.
 
 The mandatory provider projection retains every open issue and its entire body,
@@ -250,8 +261,8 @@ take one comment from each nonempty issue in that issue order on every
 round-robin pass. Classify files in this priority order: a repository-relative
 path explicitly named by issue or comment text through the versioned path
 extractor; repository guidance (`README*`, `AGENTS.md`, then `CLAUDE.md`);
-package, build, and test configuration recognized by the existing
-`CONFIG_FILE` policy; then every remaining Phase 2 selected path. Sort ties with
+package, build, and test configuration recognized by the existing `CONFIG_FILE`
+policy; then every remaining Phase 2 selected path. Sort ties with
 `compareSourceKeys(path)`. Preserve the class in transient collection metadata
 or recompute it from the matched snapshot with the same versioned extractor.
 Replace the collector's global path-sort admission with this class order before
@@ -271,12 +282,12 @@ largest possible passing prefix. The final counted and paid requests must match
 in every input-affecting field.
 
 Persist an exact `analysisSelection` provenance manifest with version, mandatory
-manifest hash, selected comment IDs/body hashes, selected paths/blob IDs,
-file relevance classes, safe omission rule IDs, selected and omitted counts,
-the exact tried prefix lengths and count results, named limits, limited flag,
-and limitations. Never persist comment bodies or file contents. Optional
-omission does not change the complete source fingerprint, so changes to omitted
-context still affect the later freshness check.
+manifest hash, selected comment IDs/body hashes, selected paths/blob IDs, file
+relevance classes, safe omission rule IDs, selected and omitted counts, the
+exact tried prefix lengths and count results, named limits, limited flag, and
+limitations. Never persist comment bodies or file contents. Optional omission
+does not change the complete source fingerprint, so changes to omitted context
+still affect the later freshness check.
 
 Use these reviewed setup-calibration bounds initially:
 
@@ -286,8 +297,8 @@ Use these reviewed setup-calibration bounds initially:
   UTF-8 JSON body of both count and Messages requests, covered at its exact
   boundary. This app cap stays below Anthropic's current 32 MB limit for both
   endpoints, as documented in the official
-  [API overview](https://platform.claude.com/docs/en/api/overview). Reverify that
-  upstream limit before live calibration; never assume the Netlify inbound
+  [API overview](https://platform.claude.com/docs/en/api/overview). Reverify
+  that upstream limit before live calibration; never assume the Netlify inbound
   limit governs an outbound provider request.
 - A structural-output floor check based on the actual issue count and required
   lane partition. Reject a request that cannot plausibly encode all issues
@@ -321,11 +332,10 @@ The fixed policy requires the model to:
 - Write concrete reasons in neutral language without em dashes, work estimates,
   effort proxies, or unsupported certainty. Preserve canonical GitHub titles
   verbatim; these prose restrictions apply only to model-authored fields.
-- Do not intentionally quote or reproduce source bodies, comments,
-  pull-request descriptions, milestone or label descriptions, reference text,
-  or file content. Summarize only the evidence needed for an analysis
-  conclusion. Prior accepted analysis may be preserved when the source still
-  supports it.
+- Do not intentionally quote or reproduce source bodies, comments, pull-request
+  descriptions, milestone or label descriptions, reference text, or file
+  content. Summarize only the evidence needed for an analysis conclusion. Prior
+  accepted analysis may be preserved when the source still supports it.
 - Return analysis fields only. It cannot return or override repository identity,
   source IDs, canonical titles, milestones, progress, sync, fingerprint, or
   provenance.
@@ -388,10 +398,9 @@ Notes
 
 All properties are required to stay within provider grammar limits. Empty
 strings, empty arrays, `sameBranchAs:0`, `kind:"none"`, and an empty claim
-`query` are wire sentinels;
-the strict application validator controls where they are legal. Use only local,
-nonrecursive schema definitions. Keep `issueAnalysis` sparse; every issue still
-appears once in `lanes[].issues`.
+`query` are wire sentinels; the strict application validator controls where they
+are legal. Use only local, nonrecursive schema definitions. Keep `issueAnalysis`
+sparse; every issue still appears once in `lanes[].issues`.
 
 The application validator applies tighter field, count, prose, reference, and
 sentinel limits than the provider schema. The trusted assembler then:
@@ -414,10 +423,10 @@ sentinel limits than the provider schema. The trusted assembler then:
    claim query is validated and copied as the exact rendered search; an empty
    query becomes the report contract's absent value. Comparison uses the
    renderer's effective search, `claim.query || "is:open " + claim.name`, so an
-   absent query and an explicit default are reader-equivalent. Rejects model prose
-   containing prohibited em dashes or estimate patterns and applies bounded
-   string/count checks; human quality acceptance still evaluates concreteness
-   and neutral wording that deterministic checks cannot prove.
+   absent query and an explicit default are reader-equivalent. Rejects model
+   prose containing prohibited em dashes or estimate patterns and applies
+   bounded string/count checks; human quality acceptance still evaluates
+   concreteness and neutral wording that deterministic checks cannot prove.
 6. Runs `validateReport(report, inventory)`, then `deriveReport(report)`, and
    verifies that the derived display/count state is safe for the renderer.
 7. Binds the candidate to the exact source fingerprint and job generation that
@@ -443,23 +452,23 @@ trim. Count Unicode code points with string iteration, not UTF-16 code units.
 Reject when any nonempty normalized model prose field exactly equals any
 complete normalized raw-source field, when it contains a normalized source line
 of at least 32 code points, or when it contains a contiguous normalized source
-window of 64 code points. The deterministic validator permits shorter
-incidental overlap that is neither a complete-field equality nor long enough
-for those thresholds; the system policy still forbids intentional quoting.
-Implement line/window matching with bounded hashes over already bounded inputs,
-then confirm every hash match by exact normalized comparison. Canonical source
-fields inserted by the server, including titles and display identities, are not
-model prose and are outside this corpus check. Apply
-`SOURCE_SAFETY_POLICY_V1` to model output as well, regardless of match length. A
-violation is a strict output-validation failure; no raw match enters its safe
-error, job, report version, or log.
+window of 64 code points. The deterministic validator permits shorter incidental
+overlap that is neither a complete-field equality nor long enough for those
+thresholds; the system policy still forbids intentional quoting. Implement
+line/window matching with bounded hashes over already bounded inputs, then
+confirm every hash match by exact normalized comparison. Canonical source fields
+inserted by the server, including titles and display identities, are not model
+prose and are outside this corpus check. Apply `SOURCE_SAFETY_POLICY_V1` to
+model output as well, regardless of match length. A violation is a strict
+output-validation failure; no raw match enters its safe error, job, report
+version, or log.
 
 ## Provider transport and paid-attempt policy
 
-Use server-side native HTTP with `redirect:'error'`. Read
-`ANTHROPIC_API_KEY` only after all production runtime guards pass. Send
-`x-api-key`, `anthropic-version: 2023-06-01`, and JSON content type to the exact
-Anthropic API origin. Configure no SDK or HTTP automatic retry.
+Use server-side native HTTP with `redirect:'error'`. Read `ANTHROPIC_API_KEY`
+only after all production runtime guards pass. Send `x-api-key`,
+`anthropic-version: 2023-06-01`, and JSON content type to the exact Anthropic
+API origin. Configure no SDK or HTTP automatic retry.
 
 The primary Messages request is fixed to:
 
@@ -497,22 +506,29 @@ decreasing, contradictory, or incomplete final usage or billing classification
 makes the attempt financially unknown and retains its full reservation. Select
 content by block type and never persist thinking blocks, signatures, SSE frames,
 raw model JSON, the provider request, or provider error bodies. From invocation
-start, stop provider work at 810,000 ms and reserve the final 90,000 ms of Netlify's
-15-minute limit for durable classification and bookkeeping. Bound complete
-source collection to 90,000 ms, all count requests together to 60,000 ms, and
-each Messages attempt to 300,000 ms or the earlier provider cutoff. Cross a paid
-boundary only when its full configured attempt window and the finalization
-margin remain. If a correction cannot start within that rule, release its
-never-dispatched reservation and fail with the primary's safe validation code.
-Abort a live stream at its attempt deadline and durably classify the outcome as
-ambiguous within the remaining margin when execution remains available.
+start, stop provider work at 810,000 ms and reserve the final 90,000 ms of
+Netlify's 15-minute limit for durable classification and bookkeeping. Bound
+complete source collection to 90,000 ms, all count requests together to 60,000
+ms, and each Messages attempt to 300,000 ms or the earlier provider cutoff.
+Cross a paid boundary only when its full configured attempt window and the
+finalization margin remain. If a correction cannot start within that rule,
+release its never-dispatched reservation and fail with the primary's safe
+validation code. Abort a live stream at its attempt deadline and durably
+classify the outcome as ambiguous within the remaining margin when execution
+remains available.
+
+The 90,000 ms collection and 60,000 ms counting limits are maximum durable state
+windows. Authentication, token refresh, prior-report retrieval, and every other
+operation in a state consume its committed `stateDeadlineAt` window. Every
+downstream signal and operation budget uses only the time remaining before the
+earlier of that durable deadline and the provider cutoff.
 
 Allow at most one corrective attempt during setup calibration. Reserve both
 attempt ceilings atomically before the first dispatch. A corrective attempt is
 permitted only in the same worker invocation after a definitive, billed,
-terminal first response fails the strict wire or report-domain validator and
-the exact corrective request passes token admission. It uses the same fixed
-model, effort, output cap, source input, and a bounded machine-readable list of
+terminal first response fails the strict wire or report-domain validator and the
+exact corrective request passes token admission. It uses the same fixed model,
+effort, output cap, source input, and a bounded machine-readable list of
 validation errors. It may use the first delta transiently, but persists neither
 delta. Do not retry refusals, `max_tokens`, model mismatch, rate limits,
 provider/server errors, transport interruption, source instability, or any
@@ -525,20 +541,21 @@ assume hard termination or the platform's 15-minute limit produces another
 delivery. A duplicate invocation that observes a paid-boundary state performs
 only the nonpaid reconciliation described below and never calls the provider.
 
-Before the first paid calibration request, use the configured credential to
-read live metadata for exact model `claude-opus-5`. Require positive current
-limits that support the reviewed context and output reservation. Separately
-verify current official pricing and every billed feature used by the request,
-record a bounded-validity pricing attestation tied to the setup policy version,
-deploy ID, exact rates, source, and verification time, and require that
-attestation at admission. A mismatch or expired attestation disables paid
-dispatch and returns a sanitized configuration error.
+Before the first paid calibration request, use the configured credential to read
+live metadata for exact model `claude-opus-5`. Require positive current limits
+that support the reviewed context and output reservation. Separately verify
+current official pricing and every billed feature used by the request. Append
+that exact bounded-validity pricing attestation to the reviewed code registry
+and use only its last entry for new admission. Bind each immutable setup policy
+ID to that exact attestation plus the deploy ID. A missing, mismatched, or
+expired current attestation disables paid dispatch and returns a sanitized
+configuration error.
 
 The model metadata endpoint does not attest pricing. Keep the manually verified
 official rates, billed-feature exclusions, source URL, verification time, and
 valid-through time in a reviewed immutable policy constant; compare that exact
-constant with the durable policy and runtime deploy. Use model metadata only
-for model identity and supported positive limits.
+constant with the durable policy and runtime deploy. Use model metadata only for
+model identity and supported positive limits.
 
 ## Durable keys and schemas
 
@@ -555,8 +572,8 @@ read, including a 5 MiB maximum authenticated report envelope.
 
 ### Repository state
 
-Use `board-reports` key
-`owners/99961/repositories/<repository-id>/state`. The validated record contains:
+Use `board-reports` key `owners/99961/repositories/<repository-id>/state`. The
+validated record contains:
 
 ```text
 schemaVersion
@@ -579,8 +596,8 @@ lastAnalysisAttempt
 
 `current`, `previous`, `activeJob`, `sourceCheck`, and `lastAnalysisAttempt` are
 nullable. The repository identity is the last trusted identity and lets an
-authenticated owner discover a saved report without current GitHub access.
-Never use the saved identity alone to authorize new analysis.
+authenticated owner discover a saved report without current GitHub access. Never
+use the saved identity alone to authorize new analysis.
 
 Starting a source check increments `sourceCheck.sequence` through CAS. Only the
 matching sequence may publish its result. A complete check stores the safe Phase
@@ -593,12 +610,12 @@ one.
 
 Use strongly read `board-reports` key `owners/99961/catalog` as the bounded
 discovery root. Its validated schema contains `schemaVersion`, `ownerId`,
-`revision`, `membershipRevision`, `updatedAt`, and an ID-sorted
-`repositories[]` array. Each entry contains only repository ID, last trusted
-display identity, repository-state key, catalog-entry creation time, and safe
-current-report summary metadata. Permit at most 1,000 entries and 1,048,576
-serialized UTF-8 bytes, including the complete record. Validate both exact
-ceilings before each conditional write and after each read.
+`revision`, `membershipRevision`, `updatedAt`, and an ID-sorted `repositories[]`
+array. Each entry contains only repository ID, last trusted display identity,
+repository-state key, catalog-entry creation time, and safe current-report
+summary metadata. Permit at most 1,000 entries and 1,048,576 serialized UTF-8
+bytes, including the complete record. Validate both exact ceilings before each
+conditional write and after each read.
 
 Before initial Generate admission can reserve or dispatch paid work, CAS-upsert
 the repository entry and resolve a lost write acknowledgement with a strong
@@ -610,30 +627,29 @@ for an uncataloged repository fails with `report_catalog_full` before job
 creation, repository claim, or spend reservation. Existing members may still
 generate or refresh, and no current or historical report is deleted.
 
-`GET /api/reports` pages over at most 50 catalog entries, strongly reads at
-most those 50 repository states, filters entries without a current report, and
+`GET /api/reports` pages over at most 50 catalog entries, strongly reads at most
+those 50 repository states, filters entries without a current report, and
 projects current state rather than trusting stale summary metadata. It repairs
 at most five stale safe catalog summaries per request. A versioned base64url
 cursor contains the validated membership revision/digest and last numeric
 repository ID; it contains no authority or secret. Reject malformed cursors and
 return `report_catalog_changed` when membership changed so the browser can
-restart from page one. Summary-only repairs do not change the membership
-digest. Return `nextCursor` after the last examined entry, including when a
-page contains no saved reports. The browser deduplicates by repository ID and
-follows at most 20 pages per pass; after one membership-change restart it stops
-after another 20 pages and shows a retryable list error.
+restart from page one. Summary-only repairs do not change the membership digest.
+Return `nextCursor` after the last examined entry, including when a page
+contains no saved reports. The browser deduplicates by repository ID and follows
+at most 20 pages per pass; after one membership-change restart it stops after
+another 20 pages and shows a retryable list error.
 
 Publication and direct report reads idempotently repair a stale entry after
-pointer rotation within the same five-repair request budget. If projected
-repair would exceed the catalog byte cap, leave its summary stale and still
-return state-derived data. Normal discovery never relies on Blob prefix
-listing; a bounded operator audit may compare prefixes only as recovery
-evidence. Test concurrent first reports, a lost
-catalog CAS acknowledgement, publication interruption, later source deletion,
-direct-route repair, exact 1,000-entry and 1,048,576-byte limits, 50-entry pages,
-empty filtered pages, malformed and stale cursors, a stale later-page entry,
-both browser pass bounds, and uncataloged versus existing-member behavior at
-each ceiling.
+pointer rotation within the same five-repair request budget. If projected repair
+would exceed the catalog byte cap, leave its summary stale and still return
+state-derived data. Normal discovery never relies on Blob prefix listing; a
+bounded operator audit may compare prefixes only as recovery evidence. Test
+concurrent first reports, a lost catalog CAS acknowledgement, publication
+interruption, later source deletion, direct-route repair, exact 1,000-entry and
+1,048,576-byte limits, 50-entry pages, empty filtered pages, malformed and stale
+cursors, a stale later-page entry, both browser pass bounds, and uncataloged
+versus existing-member behavior at each ceiling.
 
 ### Successful report version
 
@@ -670,10 +686,9 @@ analysis
 
 The saved `report` and independent `inventory` contain canonical titles,
 milestones, assignees, progress evidence, and derived analysis required for
-rendering.
-Allowed provenance includes source identity, revisions, observation timestamps,
-selected paths and blob IDs, reference verification counts, bounds, and
-limitations. The version never contains bodies, comments, pull-request
+rendering. Allowed provenance includes source identity, revisions, observation
+timestamps, selected paths and blob IDs, reference verification counts, bounds,
+and limitations. The version never contains bodies, comments, pull-request
 descriptions, selected file content, the repository tree, prompts, hidden
 thinking, raw provider output, provider error bodies, credentials, or tokens.
 
@@ -681,60 +696,61 @@ Compute a bounded, strictly validated `comparison` deterministically against the
 current report admitted as the refresh basis. Port every reader-visible category
 from the pinned original comparator: board identity where applicable; opened and
 closed issues; title, displayed milestone, assignment, progress, hard blocker,
-blocker reason, soft ordering, uncertainty, and branch-unit changes; lane membership,
-addition, removal, mode, issue order, lane order, name, ownership, and note;
-start membership, order, reason, and footprint; contention claim membership,
-issue order, claim order, claim name, effective rendered claim search, row label,
-and displayed milestone labels; summary, notes, and displayed short titles.
-The trusted report stores every claim's `query`, using the report contract's
-absent value after the empty wire sentinel. Initial generation has an explicit
-`initial` comparison state, distinct from a refresh with no reader-visible
-changes. Render this saved comparison separately from source freshness so a
-later free check cannot rewrite what changed at analysis time.
+blocker reason, soft ordering, uncertainty, and branch-unit changes; lane
+membership, addition, removal, mode, issue order, lane order, name, ownership,
+and note; start membership, order, reason, and footprint; contention claim
+membership, issue order, claim order, claim name, effective rendered claim
+search, row label, and displayed milestone labels; summary, notes, and displayed
+short titles. The trusted report stores every claim's `query`, using the report
+contract's absent value after the empty wire sentinel. Initial generation has an
+explicit `initial` comparison state, distinct from a refresh with no
+reader-visible changes. Render this saved comparison separately from source
+freshness so a later free check cannot rewrite what changed at analysis time.
 
 Define comparison `kind` as a closed enum and validate kind-specific optional
-fields and `before`/`after` shapes. Bound entry count, nested arrays, text, depth,
-and serialized bytes. Sort by the pinned comparator's category order and stable
-source order while preserving reader-visible order inside lanes, picks, and
-claims. The three statuses are `initial`, `unchanged`, and `changed`; no entries
-is not enough to conflate the first two.
+fields and `before`/`after` shapes. Bound entry count, nested arrays, text,
+depth, and serialized bytes. Sort by the pinned comparator's category order and
+stable source order while preserving reader-visible order inside lanes, picks,
+and claims. The three statuses are `initial`, `unchanged`, and `changed`; no
+entries is not enough to conflate the first two.
 
 Use the deterministic `reportId` and `versionKey` stored in the inert job.
 Canonically serialize the exact projected envelope and compute
 `candidateDigest`. Write with `onlyIfNew` while holding bounded finalization
-ownership. A conflict or lost acknowledgement is success only when a strong
-read validates the entire stored envelope and proves the same digest, owner,
+ownership. A conflict or lost acknowledgement is success only when a strong read
+validates the entire stored envelope and proves the same digest, owner,
 repository, and job. Then CAS the token-owned job to `version-written` with the
 digest. A missing version after finalization expires produces a paid, known-
 usage failure; it never permits another provider request.
 
-Publication CAS-updates repository state only when `activeJob.jobId` and
-`current.reportId` still equal the job's admitted values. Rotation sets
-`previous` to the old `current` and `current` to the new version. Resolve a lost
-pointer-CAS acknowledgement by strong read: exact `current.reportId == reportId`
-and expected rotation is success; unchanged admitted state may be retried within
-a bound; any different state fences the job as superseded. A stale worker cannot
-replace a newer report. A reconciler can resume publication from a validated
-immutable version without another paid call.
+Publication first derives the displaced former-previous key from the strong
+pre-rotation repository read. When that key is non-null, CAS it into the
+`version-written` job before attempting pointer rotation. The value cannot be
+overwritten, and `report-published` preserves the staged value instead of
+accepting one from its caller. Publication then CAS-updates repository state
+only when `activeJob.jobId` and `current.reportId` still equal the job's
+admitted values. Rotation sets `previous` to the old `current` and `current` to
+the new version. Resolve a lost pointer-CAS acknowledgement by strong read:
+exact `current.reportId == reportId` and expected rotation is success; unchanged
+admitted state may be retried within a bound; any different state fences the job
+as superseded. A stale worker cannot replace a newer report. A reconciler can
+resume publication from a validated immutable version and its durable retention
+metadata without another paid call.
 
-After successful rotation, record only the displaced former-previous key as the
-cleanup candidate. Do not scan and delete arbitrary unreferenced versions.
-Before deletion, strongly re-read repository state and the active job and prove
-the candidate is neither `current` nor `previous`; skip the repository whenever
-any `activeJob` exists. A grace interval and bounded idempotent cleanup apply.
-Interruption may retain an extra immutable version but never removes current,
-previous, or a validated version awaiting publication. Later authenticated
-access, admission, or publication resumes cleanup. The logical report history
-exposes exactly current and previous.
+The displaced former-previous key is inert retention metadata. This release does
+not automatically delete immutable report versions. The authenticated API and
+browser expose exactly current and previous, while displaced physical versions
+remain stored until an explicit retention and deletion policy is approved. Do
+not scan or delete unreferenced versions.
 
 ### Analysis job
 
 Validate a browser idempotency key as a UUID and derive a stable URL-safe global
 job ID from a domain-separated SHA-256 digest of owner ID and that key. Use
-`board-jobs` key `jobs/<job-id>`, created with `onlyIfNew`; repository, operation,
-and expected report remain stored attributes, so reuse of the UUID for another
-request is detectably an `idempotency_conflict`. The record contains only
-coordination and audit facts. Derive `reportId` and `versionKey`
+`board-jobs` key `jobs/<job-id>`, created with `onlyIfNew`; repository,
+operation, and expected report remain stored attributes, so reuse of the UUID
+for another request is detectably an `idempotency_conflict`. The record contains
+only coordination and audit facts. Derive `reportId` and `versionKey`
 deterministically from the job ID and store them when this inert record is
 created, before any paid boundary:
 
@@ -780,12 +796,12 @@ sets status `pending` and fills those facts. A terminal job keeps its current
 accounting status between the terminal-state CAS and later ledger/job-accounting
 CAS operations; its final accounting status is `complete` after all exposure is
 known and the active entry can be removed, or `unknown` while conservative
-exposure remains active. A transition ID is a 64-character lowercase
-hexadecimal domain-separated SHA-256 digest of the canonical job/attempt
-transition. Accounting digests use the same fixed representation; ledger
-revisions and sequences are nonnegative safe integers. Project the maximum
-terminal widths before the first paid boundary. Persist the job's resulting
-accounting facts before removing its active ledger entry.
+exposure remains active. A transition ID is a 64-character lowercase hexadecimal
+domain-separated SHA-256 digest of the canonical job/attempt transition.
+Accounting digests use the same fixed representation; ledger revisions and
+sequences are nonnegative safe integers. Project the maximum terminal widths
+before the first paid boundary. Persist the job's resulting accounting facts
+before removing its active ledger entry.
 
 Admission copies the authenticated session's `authorizationEpoch`, not its
 cookie or token. The worker uses a job-only auth helper to acquire the current
@@ -799,31 +815,37 @@ explicitly admitted; reconnecting or revoking GitHub authorization still fences
 the job through the account epoch and token-generation checks.
 
 After a candidate report validates and immediately before the immutable version
-write,
-repeat the authorization-epoch, active-account, and token-generation check. A
-reconnect or GitHub authorization revocation after paid analysis prevents the
-immutable write and publication, settles any definitive billed usage, and
-terminates the job safely. Ordinary Board sign-out alone still does not cancel
-the admitted job.
+write, repeat the authorization-epoch, active-account, and token-generation
+check. A reconnect or GitHub authorization revocation after paid analysis
+prevents the immutable write and publication, settles any definitive billed
+usage, and terminates the job safely. Ordinary Board sign-out alone still does
+not cancel the admitted job.
 
 Only one nonterminal job may occupy a repository's `activeJob`. Repeating the
 same idempotency key returns the existing job. A different key while a job is
 active returns `analysis_in_progress` without another reservation or dispatch.
 Admission verifies `operation:'generate'` only when no current report exists and
 `operation:'refresh'` only when `expectedCurrentReportId` exactly matches the
-current report. Stale tabs receive `report_state_changed` and reload.
-Reusing one idempotency key with different repository, operation, or expected
-report values is an `idempotency_conflict`, never a reinterpretation of the
-existing job.
+current report. Stale tabs receive `report_state_changed` and reload. Reusing
+one idempotency key with different repository, operation, or expected report
+values is an `idempotency_conflict`, never a reinterpretation of the existing
+job.
 
-Free source collection uses a bounded renewable lease. A duplicate may recover
-after lease expiry because no provider call has occurred. Immediately before an
-Anthropic request, CAS the job to the numbered primary or corrective in-flight
-state with an invocation-unique attempt-token hash and a hard deadline. The CAS
-winner may continue. If the write response is lost, it may continue only when a
-strong read proves its own token and unexpired deadline; all other invocations
-exit. Every later worker CAS requires that same token. A paid boundary never
-becomes lease-recoverable.
+Free source collection uses bounded collecting and counting leases. After
+acquiring the GitHub token and, for refresh, reading the prior report, the
+worker strongly rereads the job and requires the same live collecting token
+before any GitHub request. Collection gets only the time remaining in the
+committed 90,000 ms `stateDeadlineAt` window and provider cutoff. Counting
+likewise checks the committed 60,000 ms window before model metadata and token
+count requests and gives them only its remaining time. An expired worker cannot
+adopt a replacement lease; reconciliation owns expiry finalization.
+
+Immediately before an Anthropic request, CAS the job to the numbered primary or
+corrective in-flight state with an invocation-unique attempt-token hash and a
+hard deadline. The CAS winner may continue. If the write response is lost, it
+may continue only when a strong read proves its own token and unexpired
+deadline; all other invocations exit. Every later worker CAS requires that same
+token. A paid boundary never becomes lease-recoverable.
 
 When a stream ends definitively, first CAS the token-owned attempt to persist
 its terminal class and complete usage. Move `primary-in-flight` to
@@ -832,11 +854,10 @@ its terminal class and complete usage. Move `primary-in-flight` to
 CAS-claims its finalization token and moves to `validating-primary` or
 `validating-corrective` before validating or assembling in memory. If the first
 output is invalid but eligible for correction, persist its bounded safe
-validation classification, settle that attempt in the ledger while retaining
-the full second reservation, resolve any uncertain ledger acknowledgement by
-strong read, and only then fence attempt two as `corrective-in-flight`. An
-invocation never dispatches the correction while attempt-one accounting is
-uncertain.
+validation classification, settle that attempt in the ledger while retaining the
+full second reservation, resolve any uncertain ledger acknowledgement by strong
+read, and only then fence attempt two as `corrective-in-flight`. An invocation
+never dispatches the correction while attempt-one accounting is uncertain.
 
 State progression is explicit and monotonic:
 
@@ -856,15 +877,16 @@ separately fenced corrective attempt. Only the original invocation that owns the
 primary finalization token can make that transition. Unknown paid outcomes
 become `ambiguous`; they are never replayed.
 
-The job records a deadline for every nonterminal state. Only `collecting` and
-`counting` have renewable free leases. After a complete response is durably
-recorded, the original invocation must CAS-claim a bounded finalization token
-before in-memory validation and version writing. That token authorizes no
-provider call and is never renewed by another invocation. After its expiry, a
-matching immutable version advances to `version-written`; without one, the job
-fails and its durably known usage settles. An expired `primary-invalid` fails
-and releases attempt two. An expired in-flight attempt becomes `ambiguous` and
-unknown; later states resume only nonpaid publication and bookkeeping.
+The job records a deadline for every nonterminal state. `collecting` and
+`counting` have bounded free leases; reconciliation, rather than an expired
+worker, finalizes their expiry. After a complete response is durably recorded,
+the original invocation must CAS-claim a bounded finalization token before
+in-memory validation and version writing. That token authorizes no provider call
+and is never renewed by another invocation. After its expiry, a matching
+immutable version advances to `version-written`; without one, the job fails and
+its durably known usage settles. An expired `primary-invalid` fails and releases
+attempt two. An expired in-flight attempt becomes `ambiguous` and unknown; later
+states resume only nonpaid publication and bookkeeping.
 
 `attempts[]` has a fixed maximum of two and preserves a reconstructable audit of
 each paid boundary. Aggregate report usage is derived from these records, never
@@ -918,22 +940,20 @@ updatedAt
 ```
 
 `revision` is a nonnegative safe integer incremented by every successful ledger
-CAS; the Blob ETag remains transport-only for `onlyIfMatch`. Monetary
-accounting transitions also increment `accountingSequence` and advance
-`accountingDigest`. Policy/discussion mutations and accounting-complete active
-entry removal increment `revision` but remain outside the monetary digest
-chain.
+CAS; the Blob ETag remains transport-only for `onlyIfMatch`. Monetary accounting
+transitions also increment `accountingSequence` and advance `accountingDigest`.
+Policy/discussion mutations and accounting-complete active entry removal
+increment `revision` but remain outside the monetary digest chain.
 
-Set `SETUP_LEDGER_MAX_BYTES` to 262,144,
-`SETUP_LEDGER_MAX_ACTIVE_JOBS` to four, and
-`SETUP_LEDGER_MAX_POLICIES` to 16. The existing 32-decision limit applies per
-policy. At reservation, install every fixed attempt property and preflight the
-entire ledger with each active numeric field projected to its maximum safe
+Set `SETUP_LEDGER_MAX_BYTES` to 262,144, `SETUP_LEDGER_MAX_ACTIVE_JOBS` to four,
+and `SETUP_LEDGER_MAX_POLICIES` to 16. The existing 32-decision limit applies
+per policy. At reservation, install every fixed attempt property and preflight
+the entire ledger with each active numeric field projected to its maximum safe
 terminal width. Policy and discussion mutations use the same projection. A
 paid-boundary CAS requires that preallocated active entry, so later settlement,
-release, or unknown classification never adds a field, array item, or
-unreserved byte. Reject admission or policy mutation before a provider call
-when either exact entry or serialized-byte ceiling would be exceeded.
+release, or unknown classification never adds a field, array item, or unreserved
+byte. Reject admission or policy mutation before a provider call when either
+exact entry or serialized-byte ceiling would be exceeded.
 
 The initial per-attempt reservation is 5,409,600 microdollars:
 
@@ -951,8 +971,8 @@ matching repository claim before conditionally writing against that ETag. A CAS
 conflict restarts the ledger read and every job/claim proof within a bounded
 loop; it never retries only the ledger operation. Admission requires
 `settled + reserved + unknown + proposed <= 25,000,000`. Before a proposed
-dispatch would make the same exposure reach or exceed 20,000,000, set
-the versioned discussion gate, reject paid dispatch with
+dispatch would make the same exposure reach or exceed 20,000,000, set the
+versioned discussion gate, reject paid dispatch with
 `budget_discussion_required`, and present the measured ledger state to the user.
 Paid admission remains blocked until an explicit owner decision is recorded by
 an authenticated, CSRF-protected acknowledgement transition against the exact
@@ -962,23 +982,49 @@ resets the cap. A later proposal beyond its authorized ceiling triggers a new
 discussion revision.
 
 A revision-bound `required -> stopped` decision permanently rejects every later
-paid setup admission under that immutable price policy. An acknowledged
-decision admits only an operation listed in `authorizedOperations` and only
-when exposure including the proposal is at or below
-`authorizedThroughMicrousd` and the lifetime $25 cap. Validate the exact policy
-ID, trigger revision, current ledger revision, operation enum, ceiling, and
-aggregate exposure in the same conditional ledger write that reserves spend.
-An acknowledgement for one policy never authorizes a later policy; each new
-policy has its own discussion state while all policies share the lifetime cap.
-Keep `decisions[]` append-only, ordered by trigger revision, unique by bounded
-decision ID, and limited to 32 entries per policy. A proposal outside an
-acknowledged operation or ceiling advances that policy to a new `required`
-revision without dispatch. A stopped policy cannot advance or be reopened.
+paid setup admission under that immutable price policy. An acknowledged decision
+admits only an operation listed in `authorizedOperations` and only when exposure
+including the proposal is at or below `authorizedThroughMicrousd` and the
+lifetime $25 cap. Validate the exact policy ID, trigger revision, current ledger
+revision, operation enum, ceiling, and aggregate exposure in the same
+conditional ledger write that reserves spend. An acknowledgement for one policy
+never authorizes a later policy; each new policy has its own discussion state
+while all policies share the lifetime cap. Keep `decisions[]` append-only,
+ordered by trigger revision, unique by bounded decision ID, and limited to 32
+entries per policy. A proposal outside an acknowledged operation or ceiling
+advances that policy to a new `required` revision without dispatch. A stopped
+policy cannot advance or be reopened.
 
 Preserve every immutable price policy and its discussion decision. Changing
 `activePolicyId` never reinterprets, releases, or deletes earlier spend or
 unknown exposure, and it creates a separate discussion state under the same
 lifetime $25 setup cap.
+
+`REVIEWED_SETUP_PRICING_ATTESTATIONS` is the append-only authority for setup
+pricing. Its last exact entry is the only attestation allowed for new admission,
+and each deploy-bound policy ID hashes that entry together with its deploy ID.
+Project and validate an older stored policy only while its exact attestation
+remains in the reviewed registry; reject arbitrary stored rates, dates, and
+feature facts. Current admission also asserts that the last entry's rates and
+computed attempt ceiling equal the fixed setup constants.
+
+On an ordinary deploy rollover under a retained reviewed attestation,
+`ensureSetupSpendLedger` strongly reads the shared `setup/v1` lifetime ledger
+and conditionally adds and selects the new deploy policy. Activation advances
+only the logical revision and update time around that selection; it preserves
+every older policy and policy-scoped discussion, every active reservation and
+unknown exposure, `settledMicrousd`, `accountingSequence`, and
+`accountingDigest`. Nonpaid reservation reads and accounting accept prior-deploy
+entries so the current reconciler can finish them. Browser summaries, owner
+decisions, and new reservations require the exact current active policy. If an
+activation acknowledgement is lost, resolve it by strong read without
+duplicating a policy or accounting change. The 16-policy limit fails closed.
+
+A new exact pricing attestation requires an appended, explicitly reviewed
+registry entry that retains every attestation still referenced by durable
+policies, or another explicit versioned migration. Model, feature, or schema
+changes likewise require an explicit migration; otherwise admission fails
+closed. Never trust arbitrary pricing facts read from the stored ledger.
 
 At current published base rates and with every extra billed feature disabled,
 actual cost is `5 * input_tokens + 25 * output_tokens` microdollars. Bind those
@@ -993,8 +1039,8 @@ inconsistent billing facts make the attempt unknown.
 Settle each definitively completed attempt immediately, including rejected
 output, before another attempt can cross its paid boundary. Add its actual cost
 to `settledMicrousd`, mark only that attempt settled, and release only the
-difference from its ceiling. Keep the next attempt's reservation intact until
-it is used or the job is terminal. A refusal follows documented zero-billing
+difference from its ceiling. Keep the next attempt's reservation intact until it
+is used or the job is terminal. A refusal follows documented zero-billing
 behavior only when the response proves that classification. Any interrupted or
 uncertain paid result moves that attempt's full ceiling to `unknown`; partial
 usage is only a lower bound. Release reservations for attempts that provably
@@ -1037,10 +1083,10 @@ before it can be enabled.
 On every strong read, validate `settledMicrousd`, accounting sequence/digest,
 the fixed active-entry shapes, and recompute total exposure as the aggregate
 settled value plus active reserved ceilings plus active unknown exposures.
-Settled attempts are already represented by the aggregate and released
-attempts contribute zero. An unknown attempt contributes at least its full
-reviewed ceiling and any larger known lower bound. Integer overflow, duplicate
-or inconsistent accounting transitions, an actual cost above its ceiling, a
+Settled attempts are already represented by the aggregate and released attempts
+contribute zero. An unknown attempt contributes at least its full reviewed
+ceiling and any larger known lower bound. Integer overflow, duplicate or
+inconsistent accounting transitions, an actual cost above its ceiling, a
 capacity invariant failure, or a policy mismatch sets `pricingReviewRequired`
 and blocks later paid work without reducing recorded exposure. The rolling
 digest is a CAS continuity and lost-ack coordination head, not a claim that the
@@ -1067,9 +1113,9 @@ The synchronous admission route performs these steps in order:
    current report.
 2. Run the bounded lightweight `pinRepository` access check: list the current
    user's installations, list the repositories granted to matching App
-   installations, require the numeric owner and repository membership, fetch
-   the repository directly, compare its identity and eligibility to the list,
-   and fetch its named default branch tip. This proves current App installation,
+   installations, require the numeric owner and repository membership, fetch the
+   repository directly, compare its identity and eligibility to the list, and
+   fetch its named default branch tip. This proves current App installation,
    grant, owner, nonfork, nonarchived, repository identity, access, default
    branch, and tip without fetching issues, comments, pulls, trees, or files.
    Retain only the safe repository facts needed by this invocation.
@@ -1081,15 +1127,15 @@ The synchronous admission route performs these steps in order:
 5. CAS the repository state to claim `activeJob`. A competing active job wins;
    terminally fence the losing inert job before returning and avoid any
    reservation for it.
-6. CAS the applicable ledger to reserve every possible attempt, then CAS the
-   job to `reserved` with the exact policy and resulting ledger revision,
-   accounting sequence, accounting digest, and transition ID. If reservation
-   is rejected, terminally fence the job as `budget-blocked` before clearing its
-   repository claim.
+6. CAS the applicable ledger to reserve every possible attempt, then CAS the job
+   to `reserved` with the exact policy and resulting ledger revision, accounting
+   sequence, accounting digest, and transition ID. If reservation is rejected,
+   terminally fence the job as `budget-blocked` before clearing its repository
+   claim.
 7. Generate a raw cryptographic dispatch capability in memory. In one
-   `onlyIfMatch` write, move the exact reserved job to `dispatchable` and install
-   the capability hash and generation. If the write loses, discard the raw
-   value. Invoke the production background endpoint with only job ID and the
+   `onlyIfMatch` write, move the exact reserved job to `dispatchable` and
+   install the capability hash and generation. If the write loses, discard the
+   raw value. Invoke the production background endpoint with only job ID and the
    capability after the write succeeds or a strong read proves that exact hash.
    The body remains below Netlify's 256 KB background limit.
 8. Record dispatch acknowledgement and return `202` with the safe job view.
@@ -1105,10 +1151,9 @@ enforces owner, repository, installation, archive, fork, and access rules before
 token counting. A source that becomes ineligible between the lightweight
 admission check and worker collection fails without a paid call.
 
-If dispatch acknowledgement is lost, a bounded redispatch in the same
-admission may deliver the same capability again. Duplicate workers still share
-one job and one paid CAS boundary. It must never create a second job or
-reservation.
+If dispatch acknowledgement is lost, a bounded redispatch in the same admission
+may deliver the same capability again. Duplicate workers still share one job and
+one paid CAS boundary. It must never create a second job or reservation.
 
 Repeating an identical admission resumes a job that is still safely before its
 paid boundary. For `created`/`unreserved`, strongly read the ledger. When an
@@ -1126,9 +1171,9 @@ terminal. It then CAS-releases any still-reserved exact ledger attempts,
 CAS-marks the job's accounting complete with the resulting ledger revision,
 accounting sequence, accounting digest, and transition ID, and finally
 CAS-clears only its matching repository claim. For a `created` job, strongly
-read the ledger because an interruption after the reservation CAS but before
-the job CAS can leave a matching active entry. If one exists, release it, copy
-the full resulting accounting tuple into the job, mark accounting complete, and
+read the ledger because an interruption after the reservation CAS but before the
+job CAS can leave a matching active entry. If one exists, release it, copy the
+full resulting accounting tuple into the job, mark accounting complete, and
 remove the entry; nullable accounting facts remain only when the strong read
 proves no matching entry. In that no-entry branch, perform a nonmonetary
 reservation-fence ledger CAS that increments only logical `revision` against the
@@ -1159,31 +1204,45 @@ The worker performs:
    settle attempt one while retaining attempt two, prove that ledger mutation,
    and separately fence attempt two before its one provider request.
 7. Recheck authorization, write and read-back the deterministic immutable
-   version, rotate the guarded report pointer while retaining `activeJob`, mark
-   the job published, settle/release the ledger attempts, mark the job
-   succeeded, clear only its repository claim, repair catalog metadata, and run
-   safe cleanup.
+   version, durably record any non-null displaced former-previous key, rotate
+   the guarded report pointer while retaining `activeJob`, mark the job
+   published, settle/release the ledger attempts, mark the job succeeded, clear
+   only its repository claim, repair catalog metadata, and retain displaced
+   physical versions.
 
-All failure and ambiguity paths use the same cross-store order: CAS the job to a
-terminal state first so no provider transition remains; update the ledger
+Failure and ambiguity paths normally use the same cross-store order: CAS the job
+to a terminal state first so no provider transition remains; update the ledger
 second to settle, release, or retain unknown exposure; then mark job accounting
 `complete` when every attempt is known or `unknown` while conservative exposure
-remains in the active ledger; and clear this job's repository claim last. A
-terminal job with a prior reservation leaves accounting `pending` until the
+remains in the active ledger; and clear this job's repository claim last. The
+one ordering exception is fully validated fixed-rate usage whose calculated
+lower bound exceeds its reserved attempt ceiling. The worker first CAS-marks
+that attempt unknown in the ledger with the exact known cost and exposure equal
+to the greater of the ceiling and known cost. Its revalidation binds the write
+to the exact attempt token in either the matching in-flight job or the same
+terminal job with an in-flight/unknown attempt. An `unknown -> unknown` CAS may
+only raise known cost and exposure, derives its timestamp monotonically from the
+worker input, existing attempt, and ledger, and makes a ceiling-only reconciler
+treat stronger evidence as already satisfied. This permits an expiry reconciler
+to win the terminal CAS without reducing evidence and resolves a lost ledger
+acknowledgement by exact strong read. The worker does not perform its terminal
+CAS unless that stronger ledger state is durably proven.
+
+A terminal job with a prior reservation leaves accounting `pending` until the
 separate ledger CAS and job-accounting CAS finish. An unreserved `created` or
-reservation-rejected terminal job moves directly from `unreserved` to
-`complete` with nullable accounting facts only after a strong ledger read proves
-there is no matching active entry and the conditional reservation-fence ledger
-CAS succeeds. A fence conflict restarts the read and uses the active-entry
-branch when a reservation won. If an interrupted reservation entry exists,
-recovery releases it and persists the full resulting accounting tuple before
-marking `complete`. A reservation rejection may still require a nonmonetary
-policy or discussion ledger CAS that advances only the logical ledger revision.
-Successful publication orders the immutable version and job digest before the
-pointer, retains the claim through ledger settlement, and clears it only after
-the job is succeeded. No path releases a reservation while its job can still
-cross a paid boundary, and no path admits a replacement job before the prior
-accounting is durable.
+reservation-rejected terminal job moves directly from `unreserved` to `complete`
+with nullable accounting facts only after a strong ledger read proves there is
+no matching active entry and the conditional reservation-fence ledger CAS
+succeeds. A fence conflict restarts the read and uses the active-entry branch
+when a reservation won. If an interrupted reservation entry exists, recovery
+releases it and persists the full resulting accounting tuple before marking
+`complete`. A reservation rejection may still require a nonmonetary policy or
+discussion ledger CAS that advances only the logical ledger revision. Successful
+publication orders the immutable version, job digest, and any non-null
+displaced-version key before the pointer. It retains the claim through ledger
+settlement and clears it only after the job is succeeded. No path releases a
+reservation while its job can still cross a paid boundary, and no path admits a
+replacement job before the prior accounting is durable.
 
 Implement one bounded nonpaid reconciler invoked at the start of every worker,
 authenticated job poll and report read, identical admission, and any admission
@@ -1202,10 +1261,10 @@ Anthropic.
 - An unexpired response-complete state remains untouched until its state
   deadline, and an unexpired validating state remains untouched until its
   finalization-token deadline. After the applicable expiry, first check the
-  deterministic version. A matching exact version advances to
-  `version-written`; without one, fence as failed, settle durable complete
-  usage, and release never-dispatched attempts. Incomplete usage becomes
-  unknown, sets job accounting `unknown`, and retains its active ledger entry.
+  deterministic version. A matching exact version advances to `version-written`;
+  without one, fence as failed, settle durable complete usage, and release
+  never-dispatched attempts. Incomplete usage becomes unknown, sets job
+  accounting `unknown`, and retains its active ledger entry.
 - An unexpired `primary-invalid` with live finalization ownership remains
   untouched; only that owner may settle attempt one and fence the corrective
   attempt. After finalization expiry, reconciliation first CAS-fences the exact
@@ -1213,8 +1272,8 @@ Anthropic.
   the never-dispatched correction, marks accounting complete, and clears the
   matching claim.
 - `version-written` resumes guarded pointer publication; `published` resumes
-  ledger settlement, job success, claim clearing, catalog repair, and cleanup.
-  Terminal states with pending accounting resume bookkeeping only.
+  ledger settlement, job success, claim clearing, and catalog repair. Terminal
+  states with pending accounting resume bookkeeping only.
 
 The original invocation must prove its token in every post-provider CAS. If a
 deadline reconciler fences the state first, the original invocation stops. This
@@ -1246,14 +1305,14 @@ source, storage-dependent continuation, or provider work and returns no report
 data.
 
 `GET /api/reports?cursor=<cursor>` requires only the Board session. It must not
-acquire a GitHub token or reject access because source authorization expired.
-It applies the catalog's 50-entry scan, 50-state-read, and five-repair bounds,
-then returns `items` and `nextCursor`. Items contain saved repository IDs and
-last trusted display identities, current report IDs and generation times, safe
-source status, and safe active-job summaries. An examined page may have no
-items and still return a cursor. The UI performs the bounded, restartable page
-merge described above and combines it with the current eligible repository list
-so inaccessible saved reports remain discoverable.
+acquire a GitHub token or reject access because source authorization expired. It
+applies the catalog's 50-entry scan, 50-state-read, and five-repair bounds, then
+returns `items` and `nextCursor`. Items contain saved repository IDs and last
+trusted display identities, current report IDs and generation times, safe source
+status, and safe active-job summaries. An examined page may have no items and
+still return a cursor. The UI performs the bounded, restartable page merge
+described above and combines it with the current eligible repository list so
+inaccessible saved reports remain discoverable.
 
 After storage reads and immediately before returning any catalog or report
 response, recheck the authoritative Board session generation and owner. A
@@ -1263,10 +1322,10 @@ logout, expiry, revocation, or replacement session that wins the race returns
 `GET /api/repositories/:id/report` also requires only Board authentication. It
 returns the validated current report plus inventory, saved comparison,
 provenance, current/previous metadata, last source-check state, last analysis
-attempt, safe active-job view, and spend-mode availability. It never returns
-the previous full report, raw source, raw job record, dispatch/lease tokens,
-ledger internals, or provider bodies. A missing saved report returns a valid
-empty state rather than starting analysis.
+attempt, safe active-job view, and spend-mode availability. It never returns the
+previous full report, raw source, raw job record, dispatch/lease tokens, ledger
+internals, or provider bodies. A missing saved report returns a valid empty
+state rather than starting analysis.
 
 After that response renders, the browser automatically calls the existing
 CSRF-protected source-check route. Extend that route to sequence and store its
@@ -1274,8 +1333,8 @@ safe result. The browser compares a complete check fingerprint to the report's
 analysis fingerprint and shows `unchanged` or `changes detected`. Incomplete,
 unstable, rate-limited, timed-out, or failed checks cannot claim unchanged.
 Definitive ineligibility or inaccessible source produces historical/source-
-unavailable status and disables Generate/Refresh without hiding the report.
-No check route imports or calls the Anthropic client.
+unavailable status and disables Generate/Refresh without hiding the report. No
+check route imports or calls the Anthropic client.
 
 `POST /api/repositories/:id/report-jobs` accepts exactly:
 
@@ -1390,9 +1449,9 @@ Before any paid call, verify in the deployed artifact:
 
 - The production API and background function exist and use Node 24.
 - The currently published canonical deployment is the only accepted runtime.
-- Automatic PR preview and a manual fixture draft each report zero Functions
-  and zero Edge Functions, return fixture JSON `404` for `/api/*`, and cannot
-  access site-wide Blobs.
+- Automatic PR preview and a manual fixture draft each report zero Functions and
+  zero Edge Functions, return fixture JSON `404` for `/api/*`, and cannot access
+  site-wide Blobs.
 - Static assets contain no known synthetic sentinel, environment key name where
   inappropriate, credential value, private source data, provider request, or
   server package.
@@ -1408,8 +1467,8 @@ Before any paid call, verify in the deployed artifact:
 ### Domain and source tests
 
 - Add `createdAt` and canonical assignee collection, observation matching,
-  fingerprint, saved inventory, ordering, assignment-only start eligibility,
-  and boundary tests. Prove assignment never creates progress.
+  fingerprint, saved inventory, ordering, assignment-only start eligibility, and
+  boundary tests. Prove assignment never creates progress.
 - Test normalized input catalogs, ID joins, no duplicate source text, prior
   analysis projection, prompt-injection-shaped source strings, complete issue
   and issue-body retention, deterministic whole-comment/file selection,
@@ -1451,21 +1510,26 @@ Before any paid call, verify in the deployed artifact:
 - Exercise fragmented streaming frames, input/cache usage in `message_start`,
   cumulative output in multiple `message_delta` events, usage-free
   `message_stop`, multiple content block types, terminal ordering, refusal,
-  `max_tokens`, model mismatch, decreasing/missing/contradictory usage, malformed
-  events/JSON, response bounds, aborts, timeouts, rate limits, server errors,
-  redirects, and zero automatic retries.
+  `max_tokens`, model mismatch, decreasing/missing/contradictory usage,
+  malformed events/JSON, response bounds, aborts, timeouts, rate limits, server
+  errors, redirects, and zero automatic retries.
 - Prove one primary request and at most one narrowly eligible corrective
   request. Plant duplicate delivery and lost-CAS-response conditions and count
   provider mock invocations.
+- Consume almost all of the committed collecting window during authentication
+  and prior-report retrieval, then prove source collection receives only the
+  remaining time. Replace the collecting token after it expires and prove the
+  old worker makes no GitHub or provider request. Expire counting immediately
+  after its durable claim and prove the worker stops before model metadata or
+  token counting while reconciliation owns terminal expiry handling.
 - Reject an expired or mismatched pricing attestation, policy ID, model, rates,
   billed-feature hash, inference geography, service tier, or deploy ID before a
   Messages call. Prove workspace defaults cannot replace the pinned paid
-  controls. For a dispatched response with an unpriceable model, cache use,
-  tool use, premium/service tier, geography, or unknown billed field, prove the
-  job publishes no version, records unknown exposure at
-  `max(full attempt ceiling, known lower bound)`, sets
-  `pricingReviewRequired`, cannot run correction, and blocks later paid
-  admission.
+  controls. For a dispatched response with an unpriceable model, cache use, tool
+  use, premium/service tier, geography, or unknown billed field, prove the job
+  publishes no version, records unknown exposure at
+  `max(full attempt ceiling, known lower bound)`, sets `pricingReviewRequired`,
+  cannot run correction, and blocks later paid admission.
 - Assert no raw request, output, thinking, error body, or source text enters
   logs, persisted jobs, ledgers, or report envelopes.
 
@@ -1483,6 +1547,15 @@ Before any paid call, verify in the deployed artifact:
   accounting-complete entries are removed, aggregate settled cost and the hash
   chain remain stable, and post-dispatch settlement always fits its preallocated
   record.
+- Activate deploy B over a deploy A ledger containing prior-policy discussions,
+  reservations in every state, settled cost, unknown exposure, and a nonzero
+  accounting sequence. Prove activation preserves those facts, new summaries,
+  decisions, and reservations require B, and nonpaid reconciliation still
+  finishes A entries. Lose the activation acknowledgement and prove a strong
+  read resolves it without duplicate policy or accounting changes. Prove the
+  16-policy boundary fails closed. Retain exact historical reviewed-attestation
+  registry entries and reject a removed entry, arbitrary stored pricing facts,
+  and an unreviewed current attestation.
 - Commit job A's accounting transition while losing its response, advance the
   global accounting head with job B, then prove A recovers from its own active
   entry's ledger revision, transition ID, accounting sequence, and digest
@@ -1494,50 +1567,53 @@ Before any paid call, verify in the deployed artifact:
   uses the global pre-reservation sweep to settle A exactly once, mark A
   accounting-complete, remove A's active entry, clear A's claim last, and only
   then reserve for B.
-- Race identical and different idempotency keys, concurrent repositories,
-  global cross-repository UUID reuse, active-job claims, source checks, catalog
+- Race identical and different idempotency keys, concurrent repositories, global
+  cross-repository UUID reuse, active-job claims, source checks, catalog
   merges/repair, report publication, and ledger reservations.
 - Exercise exact 1,000-entry and 1,048,576-byte catalog bounds, 50/51-entry
   pagination, empty filtered pages with a next cursor, malformed and changed
   cursors, one bounded restart, a stale entry on a later page, a repair that
   would exceed the byte cap, and uncataloged versus existing-member behavior at
   each ceiling.
-- Prove aggregate setup exposure cannot exceed $25 and a proposed dispatch at
-  or above $20 enters the discussion gate without a provider call. Verify exact
-  revision-bound acknowledgement and stop decisions without changing the cap.
-  Cover stale revisions, duplicate decision IDs, permanent stopped-policy
-  rejection, wrong operations, the authorized ceiling boundary, the 32-decision
-  bound, a new policy's separate gate, and lifetime exposure preservation.
-- Cover successful settlement, output-rejected settlement, unused retry
-  release, classifier refusal handling, unknown reservation retention, exact
-  `unreserved` to `complete`, `pending` to `complete`, and `pending` to `unknown`
+- Prove aggregate setup exposure cannot exceed
+  $25 and a proposed dispatch at
+  or above $20 enters the discussion gate
+  without a provider call. Verify exact revision-bound acknowledgement and stop
+  decisions without changing the cap. Cover stale revisions, duplicate decision
+  IDs, permanent stopped-policy rejection, wrong operations, the authorized
+  ceiling boundary, the 32-decision bound, a new policy's separate gate, and
+  lifetime exposure preservation.
+- Cover successful settlement, output-rejected settlement, unused retry release,
+  classifier refusal handling, unknown reservation retention, exact `unreserved`
+  to `complete`, `pending` to `complete`, and `pending` to `unknown`
   job-accounting transitions, active-entry removal versus retention, and
   reconciliation after each interruption point.
-- Interrupt after job creation, repository claim, reservation, dispatch,
-  source collection, each paid-boundary write, each complete response, primary
-  settlement, corrective fencing, validation, immutable version write, pointer
-  rotation, and publication. Inject committed-but-lost and uncommitted write
-  responses. Verify only free states repeat, attempts settle once, successful
-  publication resumes without another model call, and ambiguous paid states
-  never replay.
+- Interrupt after job creation, repository claim, reservation, dispatch, source
+  collection, each paid-boundary write, each complete response, primary
+  settlement, corrective fencing, validation, immutable version write,
+  displaced-key recording, pointer rotation, and publication. Inject
+  committed-but-lost and uncommitted write responses. Verify only free states
+  repeat, attempts settle once, a committed rotation retains its displaced key,
+  successful publication resumes without another model call, and ambiguous paid
+  states never replay.
 - Interrupt after the reservation ledger CAS and before the job moves from
   `created` to `reserved`. Prove identical admission validates and adopts the
   matching entry's full tuple into `reserved`/`pending` without a second
   reservation, including its race with terminal recovery. When resumption is
   unavailable, prove recovery fences the job, finds and releases the matching
-  active entry exactly once, persists the full resulting accounting tuple,
-  marks accounting complete, removes the entry, and clears the claim last. Stop
-  once more after the terminal fence, then prove a different-repository
-  admission's global sweep resumes that pending bookkeeping and restores
-  capacity. Also prove the no-entry branch moves directly from `unreserved` to
-  `complete` with nullable facts only after its reservation-fence ledger CAS.
-  Delay the original reservation CAS until after the no-entry read: prove either
-  the reservation wins and is released exactly once or the fence wins and the
-  delayed reservation cannot commit. Make the losing reservation writer reread
-  and try to retry: prove the full job/deadline/claim revalidation observes the
-  terminal fence and prevents a new reservation. Delay writers around each
-  ledger read, job/claim proof, and reservation/fence CAS boundary. If a terminal
-  job is stale `complete` with a still-reserved matching entry, prove the sweep
+  active entry exactly once, persists the full resulting accounting tuple, marks
+  accounting complete, removes the entry, and clears the claim last. Stop once
+  more after the terminal fence, then prove a different-repository admission's
+  global sweep resumes that pending bookkeeping and restores capacity. Also
+  prove the no-entry branch moves directly from `unreserved` to `complete` with
+  nullable facts only after its reservation-fence ledger CAS. Delay the original
+  reservation CAS until after the no-entry read: prove either the reservation
+  wins and is released exactly once or the fence wins and the delayed
+  reservation cannot commit. Make the losing reservation writer reread and try
+  to retry: prove the full job/deadline/claim revalidation observes the terminal
+  fence and prevents a new reservation. Delay writers around each ledger read,
+  job/claim proof, and reservation/fence CAS boundary. If a terminal job is
+  stale `complete` with a still-reserved matching entry, prove the sweep
   reconciles it rather than deleting or trusting the entry.
 - Interrupt after lightweight eligibility, capability generation, capability
   installation, and committed-but-unacknowledged installation. Race the
@@ -1546,8 +1622,8 @@ Before any paid call, verify in the deployed artifact:
   prove the live owner can still fence exactly one corrective paid attempt.
 - Prove current/previous rotation is exact, failed jobs leave both pointers
   unchanged, stale jobs cannot overwrite newer success, deterministic version
-  read-back resolves lost acknowledgements, and cleanup never removes current,
-  previous, or an active job's pending version.
+  read-back resolves lost acknowledgements, and displaced immutable versions
+  remain stored but absent from the logical report history.
 - Simulate a worker hard termination with no platform retry. Trigger only an
   authenticated poll and prove expired paid work is fenced, ledger exposure is
   conservative, the repository claim clears last, and provider call count does
@@ -1585,8 +1661,8 @@ Before any paid call, verify in the deployed artifact:
   functions, then build fixture context and prove both are removed. Assert
   `report-job.mjs` exports `config.background:true`; assert
   missing/unknown/preview/branch contexts never install or stage server code.
-- Verify buffered API responses remain under 6 MB and dispatch bodies under
-  256 KB. Bound provider streams and stored JSON independently.
+- Verify buffered API responses remain under 6 MB and dispatch bodies under 256
+  KB. Bound provider streams and stored JSON independently.
 - Run repository formatting, frontend/backend lint, all unit and integration
   tests, browser suites in Chromium/Firefox/WebKit, fixture and production
   builds, artifact checks, dependency audit, and secret scanners.
@@ -1612,8 +1688,9 @@ Run live acceptance in this order:
 1. Verify exact model metadata and token counting without a paid Messages call.
 2. Generate one representative eligible public-repository report through the
    explicit owner action. Verify full issue coverage, report semantics,
-   uncertainty, provenance, usage settlement, current-only storage, retrieval
-   after sign-out/sign-in, and retrieval in another browser/device.
+   uncertainty, provenance, usage settlement, current-envelope retrieval with
+   current/previous pointer state, retrieval after sign-out/sign-in, and
+   retrieval in another browser/device.
 3. Generate one representative eligible private-repository report through the
    explicit owner action. Verify the same behavior without recording repository
    identity, issue text, or screenshots in public artifacts.
@@ -1635,10 +1712,10 @@ names, titles, bodies, comments, paths that disclose private content, raw
 provider output, or credentials.
 
 Assess report quality against the original skill: complete inventory, canonical
-titles/milestones/progress, legal lanes and branch units, hard/soft dependencies,
-uncertainty, contention, start picks, concrete reasons, previous-report
-comparison, and source provenance. A structurally valid but materially poor
-report does not establish acceptance.
+titles/milestones/progress, legal lanes and branch units, hard/soft
+dependencies, uncertainty, contention, start picks, concrete reasons,
+previous-report comparison, and source provenance. A structurally valid but
+materially poor report does not establish acceptance.
 
 After those measured calls, prepare a production-policy decision for the user
 with:
@@ -1653,10 +1730,11 @@ with:
 - A recommended policy tied to the measured owner-only usage, with no claim that
   observed cost is a guaranteed maximum.
 
-Do not enable ordinary paid production use until the user explicitly selects
-the monthly cap and per-report maximum, including retries. If the $20 discussion
-gate or $25 setup cap blocks remaining paid acceptance, stop paid dispatch,
-report settled/reserved/unknown exposure, and continue every fixture,
+Do not enable ordinary paid production use until the user explicitly selects the
+monthly cap and per-report maximum, including retries. If the
+$20 discussion
+gate or $25 setup cap blocks remaining paid acceptance, stop paid
+dispatch, report settled/reserved/unknown exposure, and continue every fixture,
 documentation, review, and nonpaid task that remains possible.
 
 Record the selected limits in the roadmap and phase plan, implement the
@@ -1679,6 +1757,31 @@ and recovery commands that do not expose secrets or raw inputs. Record actual
 verification and deployment identifiers. Distinguish mocked, local, deployed
 free, and deployed paid evidence.
 
+Complete this documentation checklist against the exact proposed PR head:
+
+- [ ] README behavior matches the implemented Generate, Refresh, freshness, and
+      source-unavailable flows without describing Phase 3 as deployed.
+- [ ] The report contract distinguishes the validated report payload, immutable
+      successful envelope, durable current/previous pointers, and current
+      envelope API projection.
+- [ ] Retention text records `cleanupCandidateKey` as inert metadata, confirms
+      displaced immutable versions remain physically stored, and claims no
+      history or deletion API.
+- [ ] The production setup guide and project agent guidance name exactly the
+      `api` and `report-job` production Functions and all four Blob stores.
+- [ ] Every required environment variable is named without its value;
+      `ANTHROPIC_API_KEY` is production-only and absent from fixture, preview,
+      and branch deployments.
+- [ ] Setup spending controls are distinct from the future user-approved
+      ordinary production monthly and per-report policy.
+- [ ] The phase plan and production guide document deploy-bound setup-policy
+      activation, the exact reviewed-attestation registry, prior-deploy nonpaid
+      reconciliation, and the committed collection/counting lease windows.
+- [ ] Verification evidence is labeled mocked, local, deployed free, or deployed
+      paid; no unobserved deployment or calibration is presented as complete.
+- [ ] Scoped formatting, Markdown checks, repository verification, and artifact
+      checks pass before the PR is opened.
+
 Update related GitHub issues only with sanitized evidence. Close an issue only
 when its acceptance criteria are actually complete; do not let the Phase 3 PR
 claim final whole-product acceptance that belongs to Phase 4.
@@ -1691,8 +1794,8 @@ GPG-signed Conventional Commits at these logical boundaries:
 
 1. Source prerequisite, normalized wire, schema, assembler, comparison, and
    domain tests.
-2. Report/job/spend stores, CAS state machines, rotation, cleanup, and
-   concurrency tests.
+2. Report/job/spend stores, CAS state machines, rotation, retained candidate
+   metadata, and concurrency tests.
 3. Native provider/count/stream client and production background worker.
 4. Authenticated report/job APIs and source-check persistence.
 5. Generate/Refresh/freshness/historical frontend flows and browser coverage.
@@ -1719,9 +1822,9 @@ and current-head Copilot assessment. Each push invalidates earlier current-head
 review evidence.
 
 Use a merge commit only after the PR is clean. Verify the merge signature and
-automatic production deployment from that merge, rerun protected live routes
-and nonpaid freshness checks, and confirm the selected paid-policy state. Remove
-the worktree and local/remote feature branches through the established workmux
+automatic production deployment from that merge, rerun protected live routes and
+nonpaid freshness checks, and confirm the selected paid-policy state. Remove the
+worktree and local/remote feature branches through the established workmux
 workflow, then continue to Phase 4.
 
 ## Exact out-of-scope items
@@ -1740,8 +1843,10 @@ workflow, then continue to Phase 4.
   storing provider thinking.
 - Fetching arbitrary external URLs or treating unverified cross-repository
   references as confirmed blockers.
-- More than current and previous successful reports, a historical-report
-  browser, export, report deletion controls, or raw source snapshot retention.
+- API or browser access to more than current and previous successful reports, a
+  historical-report browser, export, report deletion controls, or raw source
+  snapshot retention. Displaced immutable versions remain physically stored
+  pending an approved retention and deletion policy.
 - Netlify Database, Async Workloads, preview functions, preview production-data
   copies, a GitHub App private-key runtime, or new GitHub write permissions.
 - Changing Anthropic account purchases, credits, organization/workspace limits,
