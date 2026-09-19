@@ -40,6 +40,7 @@ test('adapter requests strong JSON reads and preserves exact opaque ETags for at
 });
 test('coordination listing stops at its limit and account records cannot be deleted', async () => {
   let pages = 0;
+  const deleted = [];
   const adapter = createStorage({
     store: {
       async *list(options) {
@@ -49,7 +50,7 @@ test('coordination listing stops at its limit and account records cannot be dele
         pages++;
         throw new Error('Must not fetch next page');
       },
-      delete: async () => {},
+      delete: async (deletedKey) => deleted.push(deletedKey),
     },
   });
   assert.deepEqual(await adapter.listKeys({ prefix: 'session/', limit: 1 }), [
@@ -59,6 +60,8 @@ test('coordination listing stops at its limit and account records cannot be dele
   await assert.rejects(adapter.delete('account/99961'), {
     code: 'service_unavailable',
   });
+  await adapter.delete(key);
+  assert.deepEqual(deleted, [key]);
 });
 test('fixed report, job and spend stores reject cross-namespace keys and unsafe deletion', async () => {
   const calls = [];
@@ -79,8 +82,9 @@ test('fixed report, job and spend stores reject cross-namespace keys and unsafe 
   await spend.read('setup/v1');
   await spend.read(`setup/preflight/v1/${'d'.repeat(64)}`);
   await spend.read('production/policy.v1/2026-09');
-  await reports.delete(
-    `owners/99961/repositories/17/versions/${'c'.repeat(64)}`,
+  await assert.rejects(
+    reports.delete(`owners/99961/repositories/17/versions/${'c'.repeat(64)}`),
+    { code: 'service_unavailable' },
   );
   for (const [adapter, unsafeKey] of [
     [reports, 'account/99961'],
@@ -99,7 +103,7 @@ test('fixed report, job and spend stores reject cross-namespace keys and unsafe 
   await assert.rejects(spend.listKeys({ prefix: 'production/', limit: 1 }), {
     code: 'service_unavailable',
   });
-  assert.equal(calls.filter(([operation]) => operation === 'delete').length, 1);
+  assert.equal(calls.filter(([operation]) => operation === 'delete').length, 0);
 });
 test('production SDK import and store open happen only when explicitly requested', async () => {
   let loaded = 0;

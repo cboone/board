@@ -366,6 +366,81 @@ function referenceMatches(entry, target) {
   );
 }
 
+function safeReportUrl(value) {
+  if (
+    typeof value !== 'string' ||
+    !/^https:\/\//iu.test(value) ||
+    /[\s"<>\\]/u.test(value)
+  )
+    return false;
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === 'https:' &&
+      !url.username &&
+      !url.password &&
+      (!url.port || Number(url.port) > 0) &&
+      /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/iu.test(
+        url.hostname,
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
+function classifiedReportReference(target, analysisInput) {
+  if (safeReportUrl(target)) return { kind: 'url', target };
+  const match =
+    typeof target === 'string'
+      ? /^(?!\.{1,2}\/)([a-z0-9_.-]+)\/(?!\.{1,2}#)([a-z0-9_.-]+)#([1-9]\d*)$/iu.exec(
+          target,
+        )
+      : null;
+  const number = match === null ? null : Number(match[3]);
+  if (!positiveInteger(number)) return null;
+  const repository = `${match[1]}/${match[2]}`;
+  return {
+    kind: 'ref',
+    target,
+    localNumber:
+      repository.toLowerCase() ===
+      analysisInput.repository.fullName.toLowerCase()
+        ? number
+        : null,
+  };
+}
+
+function renderedSourceReference(entry, analysisInput) {
+  if (typeof entry?.normalizedTarget === 'string')
+    return classifiedReportReference(entry.normalizedTarget, analysisInput);
+  if (typeof entry?.requested === 'string')
+    return classifiedReportReference(entry.requested, analysisInput);
+  if (
+    entry?.requested !== null &&
+    typeof entry?.requested === 'object' &&
+    !Array.isArray(entry.requested) &&
+    Reflect.ownKeys(entry.requested).length === 1 &&
+    typeof entry.requested.reference === 'string'
+  )
+    return classifiedReportReference(entry.requested.reference, analysisInput);
+  if (
+    entry?.requested !== null &&
+    typeof entry?.requested === 'object' &&
+    !Array.isArray(entry.requested) &&
+    Reflect.ownKeys(entry.requested).length === 3 &&
+    entry.requested.repoId === analysisInput.repository.id &&
+    positiveInteger(entry.requested.number) &&
+    ['item', 'issue', 'pull'].includes(entry.requested.kind)
+  )
+    return {
+      kind: 'ref',
+      target: `${analysisInput.repository.fullName}#${entry.requested.number}`,
+      localNumber: entry.requested.number,
+    };
+  return null;
+}
+
 function hardReferenceAvailable(reference, analysisInput) {
   if (reference.kind === 'issue' || reference.kind === 'pr') return true;
   if (reference.kind === 'branch') {
@@ -588,11 +663,27 @@ function validateAnalysisDelta(delta, analysisInput) {
         const sourceReference = analysisInput.references?.find((entry) =>
           referenceMatches(entry, reference.target),
         );
+        const renderedReference = sourceReference
+          ? renderedSourceReference(sourceReference, analysisInput)
+          : null;
         check(
-          Boolean(sourceReference),
+          Boolean(renderedReference),
           `${path}.target`,
           'source_binding',
-          'External references must match a supplied reference target.',
+          'External references must match a renderable supplied target.',
+        );
+        check(
+          renderedReference?.kind === reference.kind,
+          `${path}.kind`,
+          'source_binding',
+          'The reference kind must match its supplied target.',
+        );
+        check(
+          renderedReference?.localNumber == null ||
+            renderedReference.localNumber !== issueById.get(ownerId)?.number,
+          `${path}.target`,
+          'self_reference',
+          'An issue cannot reference itself.',
         );
         check(
           reference.title !== '' &&
@@ -996,11 +1087,14 @@ function sourceReference(reference, analysisInput, issueById, pullById) {
   const matched = analysisInput.references.find((entry) =>
     referenceMatches(entry, reference.target),
   );
-  const requested =
-    matched.normalizedTarget ?? matched.requested ?? matched.key;
-  return reference.kind === 'url'
-    ? { url: requested, label: reference.label, title: reference.title }
-    : { ref: requested, title: reference.title };
+  const rendered = renderedSourceReference(matched, analysisInput);
+  return rendered.kind === 'url'
+    ? {
+        url: rendered.target,
+        label: reference.label,
+        title: reference.title,
+      }
+    : { ref: rendered.target, title: reference.title };
 }
 
 /**

@@ -10,7 +10,7 @@ const STORAGE_RULES = Object.freeze({
   'board-reports': Object.freeze({
     key: /^owners\/99961\/(?:catalog|repositories\/[1-9]\d*\/(?:state|versions\/[a-f0-9]{64}))$/,
     listPrefixes: Object.freeze([]),
-    canDelete: (key) => key.includes('/versions/'),
+    canDelete: () => false,
   }),
   'board-jobs': Object.freeze({
     key: /^jobs\/[a-f0-9]{64}$/,

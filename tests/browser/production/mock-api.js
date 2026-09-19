@@ -263,7 +263,7 @@ export function safeJob(state, overrides = {}) {
 export function safePreflight(overrides = {}) {
   return {
     status: 'ready',
-    deployId: 'deploy-1',
+    deployId: 'Deploy-ABC_1.2',
     policyId: 'setup-policy-v1',
     requestContractHash: 'd'.repeat(64),
     model: 'claude-opus-5',

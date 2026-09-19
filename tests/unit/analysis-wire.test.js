@@ -56,7 +56,19 @@ function sourcePair() {
     references: [
       {
         key: 'external-approval',
-        requested: 'https://outside.test/approval',
+        requested: { reference: 'https://outside.test/approval' },
+        verification: 'unverified',
+        reason: 'not-readable',
+      },
+      {
+        key: '50:item:90',
+        requested: { repoId: 50, number: 90, kind: 'item' },
+        verification: 'unverified',
+        reason: 'not-readable',
+      },
+      {
+        key: 'external-reference',
+        requested: { reference: 'other/package#17' },
         verification: 'unverified',
         reason: 'not-readable',
       },
@@ -259,6 +271,95 @@ describe('analysis wire contract', () => {
       blockedBecause: 'The approval is required.',
     });
     expect(codes(value, analysisInput)).toContain('unverified_reference');
+  });
+
+  it('renders object-shaped repository reference provenance as a report reference', () => {
+    const { analysisInput, inventory } = sourcePair();
+    const value = delta();
+    value.issueAnalysis.push(
+      issueAnalysis(9_002, {
+        uncertaintyReason: 'The related item could not be verified.',
+        uncertaintyReference: {
+          kind: 'ref',
+          target: '50:item:90',
+          label: '',
+          title: 'Review the related item',
+        },
+      }),
+    );
+    value.startNow.splice(1, 1);
+    const assembled = assembleAnalysisReport(value, analysisInput, inventory);
+    expect(assembled.valid).toBe(true);
+    expect(assembled.report.issues[1].uncertainty.reference).toEqual({
+      ref: 'example/widgets#90',
+      title: 'Review the related item',
+    });
+  });
+
+  it('rejects model reference kinds that do not match gathered targets', () => {
+    for (const [kind, target] of [
+      ['ref', 'external-approval'],
+      ['url', 'external-reference'],
+      ['url', '50:item:90'],
+    ]) {
+      const { analysisInput } = sourcePair();
+      const value = delta();
+      value.issueAnalysis.push(
+        issueAnalysis(9_002, {
+          uncertaintyReason: 'The related target could not be verified.',
+          uncertaintyReference: {
+            kind,
+            target,
+            label: kind === 'url' ? 'Related target' : '',
+            title: 'Review the related target',
+          },
+        }),
+      );
+      expect(codes(value, analysisInput)).toContain('source_binding');
+    }
+  });
+
+  it('rejects malformed and self-referential gathered repository targets', () => {
+    for (const requested of [
+      { repoId: 51, number: 90, kind: 'item' },
+      { repoId: 50, number: 90, kind: 'task' },
+      { repoId: 50, number: 0, kind: 'item' },
+    ]) {
+      const { analysisInput } = sourcePair();
+      analysisInput.references.find(
+        ({ key }) => key === '50:item:90',
+      ).requested = requested;
+      const value = delta();
+      value.issueAnalysis.push(
+        issueAnalysis(9_002, {
+          uncertaintyReason: 'The related target could not be verified.',
+          uncertaintyReference: {
+            kind: 'ref',
+            target: '50:item:90',
+            label: '',
+            title: 'Review the related target',
+          },
+        }),
+      );
+      expect(codes(value, analysisInput)).toContain('source_binding');
+    }
+
+    const { analysisInput } = sourcePair();
+    analysisInput.references.find(({ key }) => key === '50:item:90').requested =
+      { repoId: 50, number: 2, kind: 'issue' };
+    const value = delta();
+    value.issueAnalysis.push(
+      issueAnalysis(9_002, {
+        uncertaintyReason: 'The related target could not be verified.',
+        uncertaintyReference: {
+          kind: 'ref',
+          target: '50:item:90',
+          label: '',
+          title: 'Review the related target',
+        },
+      }),
+    );
+    expect(codes(value, analysisInput)).toContain('self_reference');
   });
 
   it('enforces sentinel relationships and complete lane coverage', () => {

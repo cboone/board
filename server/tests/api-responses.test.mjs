@@ -265,3 +265,19 @@ test('rejects inconsistent or oversized analysis preflight facts', () => {
       code: 'internal_error',
     });
 });
+
+test('keeps deploy and policy identifier grammars distinct', () => {
+  assert.equal(
+    projectAnalysisPreflightResponse({
+      marker: { ...preflightMarker, deployId: 'Deploy-ABC_1.2' },
+    }).preflight.deployId,
+    'Deploy-ABC_1.2',
+  );
+  assert.throws(
+    () =>
+      projectAnalysisPreflightResponse({
+        marker: { ...preflightMarker, policyId: 'Setup-policy-v1' },
+      }),
+    { code: 'internal_error' },
+  );
+});
