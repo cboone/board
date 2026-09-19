@@ -16,6 +16,10 @@ export const SETUP_SPEND_LIMITS = Object.freeze({
   maximumAttempts: 2,
 });
 
+export const SETUP_POLICY_ID = 'setup-opus-5-global-standard-v1';
+export const SETUP_PRICING_SOURCE =
+  'https://platform.claude.com/docs/en/about-claude/pricing';
+
 const HEX_64 = /^[a-f0-9]{64}$/u;
 const POLICY_ID = /^[a-z0-9][a-z0-9._-]{0,127}$/u;
 const OPERATIONS = new Set(['generate', 'refresh']);
@@ -78,6 +82,68 @@ const digest = (domain, value) =>
 const clone = (value) => structuredClone(value);
 const byteLength = (value) => Buffer.byteLength(JSON.stringify(value), 'utf8');
 
+const SETUP_FEATURE_POLICY = Object.freeze({
+  caching: false,
+  tools: false,
+  premium: false,
+  inferenceGeo: 'global',
+  serviceTier: 'standard_only',
+});
+export const SETUP_FEATURE_POLICY_HASH = digest(
+  'board-feature-policy-v1',
+  SETUP_FEATURE_POLICY,
+);
+
+export function projectSetupPricingAttestation(value) {
+  exact(value, [
+    'schemaVersion',
+    'policyId',
+    'model',
+    'inputRateMicrousd',
+    'outputRateMicrousd',
+    'featurePolicyHash',
+    'pricingSource',
+    'pricingVerifiedAt',
+    'pricingValidThrough',
+  ]);
+  if (
+    value.schemaVersion !== 1 ||
+    value.policyId !== SETUP_POLICY_ID ||
+    value.model !== 'claude-opus-5' ||
+    value.inputRateMicrousd !== SETUP_SPEND_LIMITS.inputRateMicrousd ||
+    value.outputRateMicrousd !== SETUP_SPEND_LIMITS.outputRateMicrousd ||
+    value.featurePolicyHash !== SETUP_FEATURE_POLICY_HASH ||
+    value.pricingSource !== SETUP_PRICING_SOURCE
+  )
+    fail();
+  const verified = iso(value.pricingVerifiedAt);
+  const validThrough = iso(value.pricingValidThrough);
+  if (Date.parse(validThrough) <= Date.parse(verified)) fail();
+  return Object.freeze(clone(value));
+}
+
+export function createSetupPricingAttestation(value) {
+  exact(value, ['pricingVerifiedAt', 'pricingValidThrough']);
+  return projectSetupPricingAttestation({
+    schemaVersion: 1,
+    policyId: SETUP_POLICY_ID,
+    model: 'claude-opus-5',
+    inputRateMicrousd: SETUP_SPEND_LIMITS.inputRateMicrousd,
+    outputRateMicrousd: SETUP_SPEND_LIMITS.outputRateMicrousd,
+    featurePolicyHash: SETUP_FEATURE_POLICY_HASH,
+    pricingSource: SETUP_PRICING_SOURCE,
+    pricingVerifiedAt: value.pricingVerifiedAt,
+    pricingValidThrough: value.pricingValidThrough,
+  });
+}
+
+export const REVIEWED_SETUP_PRICING_ATTESTATION = createSetupPricingAttestation(
+  {
+    pricingVerifiedAt: '2026-09-19T03:18:41.000Z',
+    pricingValidThrough: '2026-09-26T03:18:41.000Z',
+  },
+);
+
 function projectPolicy(value, expectedId) {
   exact(value, [
     'model',
@@ -113,8 +179,12 @@ function projectPolicy(value, expectedId) {
       SETUP_SPEND_LIMITS.attemptCostMicrousd ||
     value.capMicrousd !== SETUP_SPEND_LIMITS.capMicrousd ||
     value.discussionMicrousd !== SETUP_SPEND_LIMITS.discussionMicrousd ||
-    !HEX_64.test(value.featurePolicyHash) ||
-    !text(value.pricingSource, 1024) ||
+    value.featurePolicyHash !== SETUP_FEATURE_POLICY_HASH ||
+    value.pricingSource !== SETUP_PRICING_SOURCE ||
+    value.pricingVerifiedAt !==
+      REVIEWED_SETUP_PRICING_ATTESTATION.pricingVerifiedAt ||
+    value.pricingValidThrough !==
+      REVIEWED_SETUP_PRICING_ATTESTATION.pricingValidThrough ||
     !text(value.deployId, 128)
   )
     fail();
@@ -332,42 +402,82 @@ export function projectSpendLedger(value) {
   };
   if (byteLength(projected) > SETUP_SPEND_LIMITS.maxBytes) fail();
   exposureMicrousd(projected);
+  const requiresPricingReview = Object.values(active).some((entry) =>
+    entry.attempts.some(
+      (attempt) =>
+        attempt.state === 'unknown' &&
+        attempt.actualCostMicrousd > attempt.ceilingMicrousd,
+    ),
+  );
+  if (requiresPricingReview && !projected.pricingReviewRequired) fail();
   return projected;
 }
 
-export function createSetupPolicy({
-  deployId,
-  pricingSource,
-  pricingVerifiedAt,
-  pricingValidThrough,
-  policyId = 'setup-opus-5-global-standard-v1',
-}) {
-  const policy = {
-    model: 'claude-opus-5',
-    effort: 'high',
-    inferenceGeo: 'global',
-    serviceTier: 'standard_only',
-    maximumAttempts: SETUP_SPEND_LIMITS.maximumAttempts,
-    inputRateMicrousd: SETUP_SPEND_LIMITS.inputRateMicrousd,
-    outputRateMicrousd: SETUP_SPEND_LIMITS.outputRateMicrousd,
-    attemptInputCeiling: SETUP_SPEND_LIMITS.attemptInputTokens,
-    attemptOutputCeiling: SETUP_SPEND_LIMITS.attemptOutputTokens,
-    attemptCostCeilingMicrousd: SETUP_SPEND_LIMITS.attemptCostMicrousd,
-    capMicrousd: SETUP_SPEND_LIMITS.capMicrousd,
-    discussionMicrousd: SETUP_SPEND_LIMITS.discussionMicrousd,
-    featurePolicyHash: digest('board-feature-policy-v1', {
-      caching: false,
-      tools: false,
-      premium: false,
+function setupPolicyValue(pricingAttestation, deployId) {
+  const attestation = projectSetupPricingAttestation(pricingAttestation);
+  if (
+    JSON.stringify(canonical(attestation)) !==
+      JSON.stringify(canonical(REVIEWED_SETUP_PRICING_ATTESTATION)) ||
+    !text(deployId, 128)
+  )
+    fail();
+  return {
+    policyId: attestation.policyId,
+    policy: {
+      model: 'claude-opus-5',
+      effort: 'high',
       inferenceGeo: 'global',
       serviceTier: 'standard_only',
-    }),
-    pricingSource,
-    pricingVerifiedAt,
-    pricingValidThrough,
-    deployId,
+      maximumAttempts: SETUP_SPEND_LIMITS.maximumAttempts,
+      inputRateMicrousd: SETUP_SPEND_LIMITS.inputRateMicrousd,
+      outputRateMicrousd: SETUP_SPEND_LIMITS.outputRateMicrousd,
+      attemptInputCeiling: SETUP_SPEND_LIMITS.attemptInputTokens,
+      attemptOutputCeiling: SETUP_SPEND_LIMITS.attemptOutputTokens,
+      attemptCostCeilingMicrousd: SETUP_SPEND_LIMITS.attemptCostMicrousd,
+      capMicrousd: SETUP_SPEND_LIMITS.capMicrousd,
+      discussionMicrousd: SETUP_SPEND_LIMITS.discussionMicrousd,
+      featurePolicyHash: attestation.featurePolicyHash,
+      pricingSource: attestation.pricingSource,
+      pricingVerifiedAt: attestation.pricingVerifiedAt,
+      pricingValidThrough: attestation.pricingValidThrough,
+      deployId,
+    },
   };
+}
+
+export function createSetupPolicy({ deployId, pricingAttestation }) {
+  const { policyId, policy } = setupPolicyValue(pricingAttestation, deployId);
   return { policyId, policy: projectPolicy(policy, policyId) };
+}
+
+function setupPolicyMatches(value, pricingAttestation, deployId) {
+  const expected = setupPolicyValue(pricingAttestation, deployId);
+  return (
+    expected.policyId === value.policyId &&
+    JSON.stringify(canonical(expected.policy)) ===
+      JSON.stringify(canonical(value.policy))
+  );
+}
+
+/*
+ * A reviewed pricing attestation is immutable deploy input. The deployment ID
+ * remains runtime-specific, while every price and billed-feature fact comes
+ * from the attestation contract above.
+ */
+export function assertSetupPolicyBinding({
+  policyId,
+  policy,
+  pricingAttestation,
+  deployId,
+}) {
+  if (
+    !setupPolicyMatches(
+      { policyId, policy: projectPolicy(policy, policyId) },
+      pricingAttestation,
+      deployId,
+    )
+  )
+    fail();
 }
 
 export function createSetupLedger({ policyId, policy, at }) {
@@ -461,11 +571,18 @@ export function reserveSetupJob(
     expectedRevision,
     expectedPolicyId,
     expectedDeployId,
+    expectedPricingAttestation,
   },
 ) {
   const ledger = projectSpendLedger(input);
   const reservationAt = iso(at);
   const policy = ledger.policies[ledger.activePolicyId];
+  assertSetupPolicyBinding({
+    policyId: ledger.activePolicyId,
+    policy,
+    pricingAttestation: expectedPricingAttestation,
+    deployId: expectedDeployId,
+  });
   if (
     !HEX_64.test(jobId) ||
     !OPERATIONS.has(operation) ||
@@ -612,6 +729,7 @@ export function updateSetupAttempt(
           next.settledMicrousd,
           actualCostMicrousd,
         );
+      if (actualCostMicrousd > ceiling) next.pricingReviewRequired = true;
       next.active[jobId].accountingState = next.active[jobId].attempts.some(
         (item) => item.state === 'unknown',
       )

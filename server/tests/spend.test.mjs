@@ -1,11 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  REVIEWED_SETUP_PRICING_ATTESTATION,
+  SETUP_FEATURE_POLICY_HASH,
+  SETUP_PRICING_SOURCE,
   SETUP_SPEND_LIMITS,
   createSetupLedger,
   createSetupPolicy,
+  createSetupPricingAttestation,
   decideSetupDiscussion,
   exposureMicrousd,
+  projectSetupPricingAttestation,
   projectSpendLedger,
   removeCompletedSetupJob,
   reserveSetupJob as reserveSetupJobRaw,
@@ -13,20 +18,20 @@ import {
 } from '../lib/spend.mjs';
 
 const at = (hour = 0) =>
-  `2026-09-18T${String(hour).padStart(2, '0')}:00:00.000Z`;
+  `2026-09-19T${String(hour + 4).padStart(2, '0')}:30:00.000Z`;
 const id = (character) => character.repeat(64);
+const pricingAttestation = REVIEWED_SETUP_PRICING_ATTESTATION;
 const reserveSetupJob = (ledger, options) =>
   reserveSetupJobRaw(ledger, {
     expectedPolicyId: ledger.activePolicyId,
     expectedDeployId: 'deploy-1',
+    expectedPricingAttestation: pricingAttestation,
     ...options,
   });
 function setup() {
   const { policyId, policy } = createSetupPolicy({
     deployId: 'deploy-1',
-    pricingSource: 'https://platform.claude.com/docs/en/about-claude/pricing',
-    pricingVerifiedAt: at(0),
-    pricingValidThrough: '2026-09-25T00:00:00.000Z',
+    pricingAttestation,
   });
   return createSetupLedger({ policyId, policy, at: at(0) });
 }
@@ -40,7 +45,67 @@ test('setup policy fixes Opus 5 high-effort global standard pricing and cap', ()
   assert.equal(policy.serviceTier, 'standard_only');
   assert.equal(policy.attemptCostCeilingMicrousd, 5_409_600);
   assert.equal(policy.capMicrousd, 25_000_000);
+  assert.equal(policy.featurePolicyHash, SETUP_FEATURE_POLICY_HASH);
+  assert.equal(policy.pricingSource, SETUP_PRICING_SOURCE);
+  assert.equal(Object.isFrozen(pricingAttestation), true);
   assert.equal(exposureMicrousd(ledger), 0);
+});
+
+test('reviewed pricing attestation and deploy bind every active policy fact', () => {
+  const ledger = setup();
+  const policyId = ledger.activePolicyId;
+  const policy = ledger.policies[policyId];
+  for (const [field, replacement] of [
+    ['featurePolicyHash', id('f')],
+    ['pricingSource', 'https://example.invalid/pricing'],
+  ]) {
+    const substituted = structuredClone(ledger);
+    substituted.policies[policyId][field] = replacement;
+    assert.throws(() => projectSpendLedger(substituted), {
+      code: 'service_unavailable',
+    });
+  }
+
+  assert.throws(
+    () =>
+      projectSetupPricingAttestation({
+        ...pricingAttestation,
+        inputRateMicrousd: pricingAttestation.inputRateMicrousd + 1,
+      }),
+    { code: 'service_unavailable' },
+  );
+
+  const substitutedValidity = structuredClone(ledger);
+  substitutedValidity.policies[policyId].pricingValidThrough =
+    '2026-09-27T03:18:41.000Z';
+  assert.throws(() => projectSpendLedger(substitutedValidity), {
+    code: 'service_unavailable',
+  });
+  const substitutedAttestation = createSetupPricingAttestation({
+    pricingVerifiedAt: pricingAttestation.pricingVerifiedAt,
+    pricingValidThrough: '2026-09-27T03:18:41.000Z',
+  });
+  assert.throws(
+    () =>
+      createSetupPolicy({
+        deployId: policy.deployId,
+        pricingAttestation: substitutedAttestation,
+      }),
+    { code: 'service_unavailable' },
+  );
+  assert.throws(
+    () =>
+      reserveSetupJobRaw(ledger, {
+        jobId: id('a'),
+        operation: 'generate',
+        at: at(1),
+        expectedRevision: 0,
+        expectedPolicyId: policyId,
+        expectedDeployId: 'substituted-deploy',
+        expectedPricingAttestation: pricingAttestation,
+      }),
+    { code: 'service_unavailable' },
+  );
 });
 
 test('reservation accounts for both attempts once and stores per-entry recovery facts', () => {
@@ -130,6 +195,7 @@ test('unknown exposure is conservative, retained, and cannot be removed', () => 
     expectedRevision: 1,
   }).ledger;
   assert.equal(unknown.active[id('a')].accountingState, 'unknown');
+  assert.equal(unknown.pricingReviewRequired, true);
   assert.equal(
     exposureMicrousd(unknown),
     7_000_000 + SETUP_SPEND_LIMITS.attemptCostMicrousd,
@@ -140,6 +206,20 @@ test('unknown exposure is conservative, retained, and cannot be removed', () => 
         jobId: id('a'),
         expectedRevision: 2,
         at: at(3),
+      }),
+    { code: 'service_unavailable' },
+  );
+  assert.throws(
+    () => projectSpendLedger({ ...unknown, pricingReviewRequired: false }),
+    { code: 'service_unavailable' },
+  );
+  assert.throws(
+    () =>
+      reserveSetupJob(unknown, {
+        jobId: id('b'),
+        operation: 'generate',
+        at: at(3),
+        expectedRevision: unknown.revision,
       }),
     { code: 'service_unavailable' },
   );
