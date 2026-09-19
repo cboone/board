@@ -40,14 +40,34 @@ Alpine.data('boardShell', () => ({
 }));
 
 const route = window.location.pathname.replace(/\/$/, '') || '/';
+const production =
+  import.meta.env.VITE_BOARD_MODE === 'production' && route !== '/demo';
 const home = document.getElementById('welcome');
 const demo = document.getElementById('demo');
 const unavailable = document.getElementById('unavailable');
-home.hidden = route !== '/';
+home.hidden = production || route !== '/';
 demo.hidden = route !== '/demo';
-unavailable.hidden = route === '/' || route === '/demo';
+unavailable.hidden = production || route === '/' || route === '/demo';
 
 let disposeReport = () => {};
+
+if (import.meta.env.VITE_BOARD_MODE === 'production' && route === '/demo')
+  document.getElementById('board-footer').textContent =
+    'This sample report uses synthetic data.';
+
+if (production) {
+  const mount = document.getElementById('production');
+  mount.hidden = false;
+  mount.textContent = 'Loading Board…';
+  document.getElementById('board-footer').textContent =
+    'Repository reports for your GitHub backlog.';
+  import('./app/production.js')
+    .then(({ mountProduction }) => mountProduction(mount))
+    .catch(() => {
+      mount.textContent = 'Board could not load. Reload the page to try again.';
+      mount.setAttribute('role', 'alert');
+    });
+}
 
 if (route === '/demo') {
   const selector = document.getElementById('sample-scenario');

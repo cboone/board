@@ -9,14 +9,22 @@
   },
   "packageManager": "npm@11.6.2",
   "scripts": {
-    "build": "vite build",
+    "build": "node scripts/build-board.mjs",
+    "build:production": "node scripts/build-board.mjs --production",
     "dev": "vite",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "test": "vitest run",
     "test:artifact": "node scripts/verify-fixture-build.js",
+    "test:artifact:production": "node scripts/verify-fixture-build.js --production",
+    "install:server": "npm ci --prefix server",
+    "lint:server": "eslint 'server/**/*.mjs'",
+    "test:server": "npm --prefix server test",
+    "audit:server": "npm --prefix server audit --omit=dev --audit-level=high",
+    "test:composition": "node --test tests/composition/*.test.mjs",
     "test:browser": "playwright test",
+    "test:browser:production": "playwright test --config playwright.production.config.js",
     "verify": "npm run format:check && npm run lint && npm test && npm run test:browser && npm run build && npm run test:artifact"
   },
   "dependencies": {

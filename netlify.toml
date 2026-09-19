@@ -5,8 +5,8 @@
 [build.environment]
   NODE_VERSION = "24.13.0"
 
-[context.deploy-preview.environment]
-  VITE_BOARD_MODE = "fixture"
+[functions]
+  directory = "server/.generated/server/functions"
 
-[context.branch-deploy.environment]
-  VITE_BOARD_MODE = "fixture"
+[context.production]
+  command = "npm run build:production"

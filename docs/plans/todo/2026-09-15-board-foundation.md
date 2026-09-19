@@ -47,7 +47,7 @@ separate outcome requiring deployed evidence.
 
 - The foundation did not include a report renderer or sample board. Those are
   implemented and locally verified in the subsequent
-  [report fixture phase](2026-09-18-board-report-fixtures.md), pending its PR merge.
+  [report fixture phase](2026-09-18-board-report-fixtures.md), merged in PR #21.
   Repository selection, authentication, persistence, and an application API
   remain later product phases.
 - Foundation browser checks covered the welcome screen and theme control.
@@ -59,10 +59,10 @@ separate outcome requiring deployed evidence.
   application does not read it. The current static artifact contains no service
   clients or credentials; later server features require enforced isolation and
   environment-context checks, rather than relying on this variable alone.
-- Open issues [#12](https://github.com/cboone/board/issues/12) through
-  [#17](https://github.com/cboone/board/issues/17) describe a broader foundation
-  than this PR delivered. Reconcile them with the agreed roadmap before marking
-  their remaining work complete.
+- Issues [#12](https://github.com/cboone/board/issues/12) through
+  [#17](https://github.com/cboone/board/issues/17) are reconciled with the agreed
+  roadmap. Scaffold #13 and fixture quality #14 are completed; the remaining
+  issues retain hosted, protected-route, and isolation acceptance.
 - The report fixture phase replaces the simplified helper. Its `ready` header
   count follows the original skill: open issues minus hard-blocked issues.
   Uncertainty affects start recommendations separately.
