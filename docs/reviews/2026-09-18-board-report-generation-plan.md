@@ -289,8 +289,21 @@ the global head. Treat accounting-complete entry removal as idempotent
 housekeeping outside the monetary digest, and do not claim the compacted ledger
 can reproduce every historical intermediate digest.
 
-Disposition: the expired pre-provider case was resolved in the third corrected
-plan. Terminal accounting recovery is tracked in R19; exact-commit re-review
+Disposition: resolved in the third corrected plan; exact-commit re-review
+pending.
+
+### R18 Cross-repository active-ledger recovery
+
+Finding: the bounded capacity sweep handled terminal active entries but not an
+expired pre-provider job belonging to another repository. Such entries could
+retain reservations and fill the four-entry ledger indefinitely.
+
+Required resolution: before every reservation, inspect all at-most-four active
+jobs and run state-specific nonpaid reconciliation for every expired
+nonterminal entry. Leave live nonterminal and unknown entries untouched, and
+reject new paid work while an expired entry remains unresolved.
+
+Disposition: resolved in the third corrected plan; exact-commit re-review
 pending.
 
 ### R19 Terminal accounting sweep and cross-repository proof
@@ -310,24 +323,7 @@ ledger/accounting/claim order through the global pre-reservation sweep. It must
 settle A exactly once, mark A accounting-complete, clear A's claim last, remove
 A's active entry, and only then reserve for B.
 
-Disposition: resolved in the fourth corrected plan; exact-commit re-review
-pending.
-
-### R18 Cross-repository active-ledger recovery
-
-Finding: the bounded capacity sweep handled terminal active entries but not an
-expired pre-provider job belonging to another repository. Such entries could
-retain reservations and fill the four-entry ledger indefinitely.
-
-Required resolution: before every reservation, inspect all at-most-four active
-jobs and run state-specific nonpaid reconciliation for every terminal entry
-with pending accounting and every expired nonterminal entry. Leave live
-nonterminal and unknown entries untouched, and reject new paid work while a
-terminal-pending or expired entry remains unresolved. Prove the terminal case
-cross-repository so it exercises the global pre-reservation sweep rather than
-the same-repository active-job reconciler.
-
-Disposition: resolved in the third corrected plan; exact-commit re-review
+Disposition: resolved in the fifth corrected plan; exact-commit re-review
 pending.
 
 ## Confirmed design decisions
