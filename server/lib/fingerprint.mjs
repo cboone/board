@@ -37,6 +37,7 @@ export function sourceManifest(snapshot) {
     issues: ordered(snapshot.issues, (item) => item.id).map((item) => ({
       ...item,
       labels: ordered(item.labels, (label) => label.id),
+      assignees: [...item.assignees].sort((left, right) => left.id - right.id),
     })),
     pullRequests: ordered(snapshot.pullRequests, (item) => item.id).map(
       (item) => ({

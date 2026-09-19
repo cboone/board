@@ -28,6 +28,7 @@ export function createOperationBudget({
   now = Date.now,
   signal,
   limits = SOURCE_LIMITS,
+  startedAt,
 } = {}) {
   const effective = Object.freeze({ ...SOURCE_LIMITS, ...limits });
   for (const [key, value] of Object.entries(effective)) {
@@ -39,7 +40,18 @@ export function createOperationBudget({
   }
   if (effective.issues > REPORT_LIMITS.issues || effective.pageSize > 100)
     throw new BoardError('invalid_request');
-  const deadline = now() + effective.operationMs;
+  const current = now();
+  const start = startedAt ?? current;
+  if (
+    !Number.isSafeInteger(current) ||
+    current < 0 ||
+    !Number.isSafeInteger(start) ||
+    start < 0 ||
+    start > current ||
+    !Number.isSafeInteger(start + effective.operationMs)
+  )
+    throw new BoardError('invalid_request');
+  const deadline = start + effective.operationMs;
   let requests = 0;
   let bytes = 0;
   const remainingMs = () => Math.max(0, deadline - now());

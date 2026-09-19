@@ -1,151 +1,21 @@
 import { expect, test } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
-
-const syntheticRepositories = [
-  {
-    id: 101,
-    name: 'sample-board-public',
-    fullName: 'cboone/sample-board-public',
-    private: false,
-    url: 'https://github.com/cboone/sample-board-public',
-  },
-  {
-    id: 202,
-    name: 'sample-board-private',
-    fullName: 'cboone/sample-board-private',
-    private: true,
-    url: 'https://github.com/cboone/sample-board-private',
-  },
-];
-
-function syntheticSummary(repository = syntheticRepositories[1]) {
-  return {
-    status: 'complete',
-    repo: repository,
-    sync: {
-      at: '2026-09-18T12:00:00.000Z',
-      timeZone: 'UTC',
-      branch: 'main',
-      commit: 'a'.repeat(40),
-      openPullRequests: 1,
-    },
-    fingerprint: {
-      algorithm: 'sha256',
-      value: 'b'.repeat(64),
-      scope: 'core-and-collected-context',
-    },
-    provenance: {
-      observedFrom: '2026-09-18T11:59:50.000Z',
-      observedTo: '2026-09-18T12:00:00.000Z',
-      consistency: 'two-pass-matched',
-      inputs: [{ name: 'issues', status: 'complete' }],
-      files: [{ path: 'README.md', blobId: 'c'.repeat(40) }],
-      references: { verified: 1, unverified: 1 },
-      limitations: ['External references remain unverified.'],
-    },
-    counts: {
-      openIssues: 3,
-      openPullRequests: 1,
-      milestones: 1,
-      labels: 4,
-      branches: 2,
-      unmergedBranches: 1,
-      issueComments: 5,
-      treeEntries: 20,
-      selectedFiles: 1,
-    },
-  };
-}
-
-function deferred() {
-  let resolve;
-  const promise = new Promise((complete) => {
-    resolve = complete;
-  });
-  return { promise, resolve };
-}
-
-async function ignoreAbortForRace(page) {
-  await page.addInitScript(() => {
-    const fetchRequest = window.fetch.bind(window);
-    // Completion may already be in flight when a caller requests cancellation.
-    window.fetch = (input, options = {}) =>
-      fetchRequest(input, { ...options, signal: undefined });
-  });
-}
-
-async function mockApi(page) {
-  const flow = {
-    authenticated: true,
-    csrfToken: 's'.repeat(43),
-    sourceAuthorization: 'ready',
-    repositories: syntheticRepositories,
-    calls: [],
-    session: null,
-    list: null,
-    check: null,
-    logout: null,
-  };
-  await page.route('**/api/**', async (route) => {
-    const request = route.request();
-    const path = new URL(request.url()).pathname;
-    flow.calls.push({
-      method: request.method(),
-      path,
-      csrfToken: request.headers()['x-csrf-token'],
-    });
-    let response;
-    if (path === '/api/session') {
-      response = flow.session
-        ? await flow.session()
-        : {
-            status: 200,
-            data: flow.authenticated
-              ? {
-                  auth: true,
-                  user: { id: 99961, login: 'cboone' },
-                  csrfToken: flow.csrfToken,
-                  sourceAuthorization: flow.sourceAuthorization,
-                }
-              : { auth: false },
-          };
-    } else if (path === '/api/repositories') {
-      response = flow.list
-        ? await flow.list()
-        : { status: 200, data: { repositories: flow.repositories } };
-    } else if (/^\/api\/repositories\/[1-9]\d*\/check$/u.test(path)) {
-      response = flow.check
-        ? await flow.check(path)
-        : {
-            status: 200,
-            data: syntheticSummary(
-              syntheticRepositories.find((repo) =>
-                path.includes(`/${repo.id}/`),
-              ),
-            ),
-          };
-    } else if (path === '/api/auth/logout') {
-      response = flow.logout
-        ? await flow.logout()
-        : { status: 200, data: { ok: true } };
-      if (response.status === 200) flow.authenticated = false;
-    } else {
-      response = {
-        status: 404,
-        data: { error: { code: 'invalid_request', retryable: false } },
-      };
-    }
-    await route.fulfill({
-      status: response.status,
-      contentType: 'application/json',
-      headers: { 'Cache-Control': 'no-store' },
-      body: JSON.stringify(response.data),
-    });
-  });
-  return flow;
-}
+import {
+  analysisAvailability,
+  deferred,
+  ignoreAbortForRace,
+  jobId,
+  mockApi,
+  repositories,
+  reportId,
+  safeJob,
+  savedBoard,
+  sourceFingerprint,
+  sourceSummary,
+} from './mock-api.js';
 
 const traffic = new WeakMap();
+
 test.beforeEach(async ({ page }) => {
   const requests = [];
   traffic.set(page, requests);
@@ -160,7 +30,7 @@ test.afterEach(async ({ page }) => {
   ).toEqual([]);
 });
 
-test('offers sign-in without repository access or paid calls', async ({
+test('offers sign-in without reading repositories or reports', async ({
   page,
 }) => {
   const flow = await mockApi(page);
@@ -169,130 +39,344 @@ test('offers sign-in without repository access or paid calls', async ({
   await expect(
     page.getByRole('link', { name: 'Sign in with GitHub' }),
   ).toHaveAttribute('href', '/api/auth/start');
-  await expect(page.getByLabel('Repository', { exact: true })).toHaveCount(0);
-  expect(flow.calls).toEqual([
-    { method: 'GET', path: '/api/session', csrfToken: undefined },
-  ]);
+  expect(flow.calls.map(({ path }) => path)).toEqual(['/api/session']);
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
 });
 
-test('selects repositories freely and explicitly checks approved inputs', async ({
+test('lists eligible repositories separately from saved unavailable boards', async ({
   page,
 }) => {
   const flow = await mockApi(page);
+  const historical = {
+    id: 303,
+    name: 'historical-board',
+    fullName: 'cboone/historical-board',
+    private: true,
+    url: 'https://github.com/cboone/historical-board',
+  };
+  flow.catalog = {
+    items: [
+      {
+        repository: repositories[0],
+        current: {
+          reportId,
+          generatedAt: '2026-09-18T20:10:00.000Z',
+          sourceFingerprint,
+        },
+        sourceStatus: 'ready',
+        activeJob: null,
+      },
+      {
+        repository: historical,
+        current: {
+          reportId: '4'.repeat(64),
+          generatedAt: '2026-09-17T20:10:00.000Z',
+          sourceFingerprint: '5'.repeat(64),
+        },
+        sourceStatus: 'source-unavailable',
+        activeJob: null,
+      },
+    ],
+    nextCursor: null,
+  };
   await page.goto('/');
-  await page.getByLabel('Repository', { exact: true }).selectOption('202');
-  await expect(page).toHaveURL('/repositories/202');
-  expect(flow.calls.filter(({ method }) => method === 'POST')).toEqual([]);
-  await page.getByRole('button', { name: 'Check GitHub', exact: true }).click();
   await expect(
-    page.getByRole('heading', { name: 'GitHub check complete' }),
+    page.getByRole('heading', { name: 'Currently eligible' }),
   ).toBeVisible();
-  expect(flow.calls.at(-1)).toEqual({
-    method: 'POST',
-    path: '/api/repositories/202/check',
-    csrfToken: flow.csrfToken,
+  await expect(
+    page.getByRole('heading', {
+      name: 'Saved boards currently unavailable',
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('link', { name: 'cboone/historical-board' }),
+  ).toBeVisible();
+  await expect(page.getByLabel('Repository')).toHaveValue('');
+});
+
+test('authorizes the owner by numeric ID when the display login changes', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  flow.boards.set(202, savedBoard());
+  flow.session = async () => ({
+    status: 200,
+    data: {
+      auth: true,
+      user: { id: 99961, login: 'cboone-renamed' },
+      csrfToken: flow.csrfToken,
+      sourceAuthorization: 'ready',
+    },
   });
-  await page.getByText('Input provenance', { exact: true }).click();
-  await expect(page.getByText('README.md', { exact: true })).toBeVisible();
-  await expect(
-    page.getByText('External references remain unverified.', { exact: true }),
-  ).toBeVisible();
-  expect(
-    await page.evaluate(() => ({
-      local: Object.keys(localStorage),
-      session: Object.keys(sessionStorage),
-    })),
-  ).toEqual({ local: [], session: [] });
-  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
-});
 
-test('reloads a protected repository address after verifying the session', async ({
-  page,
-}) => {
-  const flow = await mockApi(page);
-  await page.goto('/repositories/101');
-  await expect(
-    page.getByRole('heading', { name: 'cboone/sample-board-public' }),
-  ).toBeVisible();
-  expect(flow.calls.map(({ path }) => path)).toEqual([
-    '/api/session',
-    '/api/repositories',
-  ]);
-  await page.reload();
-  await expect(page.getByLabel('Repository', { exact: true })).toHaveValue(
-    '101',
+  await page.goto('/repositories/202');
+  await expect(page.getByText('Signed in as @cboone-renamed')).toBeVisible();
+  await expect(page.locator('#saved-report')).toContainText(
+    'Define the report boundary',
   );
-  expect(flow.calls.filter(({ method }) => method === 'POST')).toEqual([]);
 });
 
-test('clears protected content immediately and withholds late successful checks after logout', async ({
+test('loads a saved report before its automatic free source check completes', async ({
   page,
 }) => {
-  await ignoreAbortForRace(page);
   const flow = await mockApi(page);
+  flow.boards.set(202, savedBoard());
   const pending = deferred();
   const started = deferred();
   flow.check = async () => {
     started.resolve();
     await pending.promise;
-    return { status: 200, data: syntheticSummary() };
+    return {
+      status: 503,
+      data: { error: { code: 'provider_unavailable', retryable: true } },
+    };
   };
   await page.goto('/repositories/202');
-  await page.getByRole('button', { name: 'Check GitHub', exact: true }).click();
   await started.promise;
-  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  await expect(page.locator('#selected-repository-title')).toBeVisible();
+  await expect(page.locator('#saved-report')).toContainText(
+    'Define the report boundary',
+  );
   await expect(
-    page.getByText('Signed out of Board.', { exact: true }),
+    page.getByText('Checking GitHub for source changes…'),
   ).toBeVisible();
-  await expect(
-    page.getByText('cboone/sample-board-private', { exact: true }),
-  ).toHaveCount(0);
-  await expect(page).toHaveTitle('Board');
-  const response = page.waitForResponse('**/api/repositories/202/check');
+  expect(
+    flow.calls.filter(({ path }) => path.endsWith('/report-jobs')),
+  ).toEqual([]);
   pending.resolve();
-  await response;
+  await expect(page.getByRole('alert')).toContainText('GitHub is unavailable');
+  await expect(page.locator('#saved-report')).toContainText(
+    'Define the report boundary',
+  );
+});
+
+test('preserves the last successful source check when a later check fails', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  flow.boards.set(202, savedBoard());
+  const successfulFingerprint = 'e'.repeat(64);
+  let checks = 0;
+  flow.check = async () => {
+    checks += 1;
+    return checks === 1
+      ? {
+          status: 200,
+          data: sourceSummary(repositories[1], successfulFingerprint),
+        }
+      : {
+          status: 429,
+          data: {
+            error: {
+              code: 'provider_rate_limited',
+              message: 'provider-secret-fixture',
+              retryable: true,
+            },
+          },
+        };
+  };
+  await page.goto('/repositories/202');
+  await expect(page.getByText('GitHub changes were detected')).toBeVisible();
+  await page.getByRole('button', { name: 'Check GitHub' }).click();
+  await expect(page.getByRole('alert')).toContainText(
+    'GitHub limited the requests',
+  );
+  await page.getByText('GitHub check details').click();
   await expect(
-    page.getByRole('heading', { name: 'GitHub check complete' }),
-  ).toHaveCount(0);
-  await expect(page.getByLabel('Repository', { exact: true })).toHaveCount(0);
+    page.getByText(`Source fingerprint: ${successfulFingerprint}`),
+  ).toBeVisible();
+  await expect(page.getByText('provider-secret-fixture')).toHaveCount(0);
+});
+
+test('clears protected report data and withholds a late check after sign-out', async ({
+  page,
+}) => {
+  await ignoreAbortForRace(page);
+  const flow = await mockApi(page);
+  flow.boards.set(202, savedBoard());
+  const pending = deferred();
+  const started = deferred();
+  flow.check = async () => {
+    started.resolve();
+    await pending.promise;
+    return { status: 200, data: sourceSummary() };
+  };
+  await page.goto('/repositories/202');
+  await started.promise;
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.getByText('Signed out of Board.')).toBeVisible();
+  await expect(page.locator('#saved-report')).toHaveCount(0);
+  pending.resolve();
+  await expect(page.getByLabel('Repository')).toHaveCount(0);
   expect(
     flow.calls.find(({ path }) => path === '/api/auth/logout').csrfToken,
   ).toBe('s'.repeat(43));
 });
 
-test('does not restore a late repository list after logout', async ({
+test('clears the dashboard setup spending projection on sign-out', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  await page.goto('/');
+  await expect(
+    page.getByRole('heading', { name: 'Setup analysis spending' }),
+  ).toBeVisible();
+  expect(
+    flow.calls.some(
+      ({ method, path }) =>
+        method === 'GET' && path === '/api/analysis-availability',
+    ),
+  ).toBe(true);
+
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.getByText('Signed out of Board.')).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Setup analysis spending' }),
+  ).toHaveCount(0);
+});
+
+test('withholds late repository and report catalog responses after sign-out', async ({
+  page,
+}) => {
+  await ignoreAbortForRace(page);
+  const flow = await mockApi(page);
+  const pending = deferred();
+  const repositoriesStarted = deferred();
+  const reportsStarted = deferred();
+  flow.list = async () => {
+    repositoriesStarted.resolve();
+    await pending.promise;
+    return { status: 200, data: { repositories } };
+  };
+  flow.reports = async () => {
+    reportsStarted.resolve();
+    await pending.promise;
+    return {
+      status: 200,
+      data: {
+        items: [
+          {
+            repository: repositories[1],
+            current: {
+              reportId,
+              generatedAt: '2026-09-18T20:10:00.000Z',
+              sourceFingerprint,
+            },
+            sourceStatus: 'ready',
+            activeJob: null,
+          },
+        ],
+        nextCursor: null,
+      },
+    };
+  };
+  await page.goto('/');
+  await Promise.all([repositoriesStarted.promise, reportsStarted.promise]);
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.getByText('Signed out of Board.')).toBeVisible();
+  const repositoriesResponse = page.waitForResponse('**/api/repositories');
+  const reportsResponse = page.waitForResponse('**/api/reports');
+  pending.resolve();
+  await Promise.all([repositoriesResponse, reportsResponse]);
+  await expect(page.getByLabel('Repository')).toHaveCount(0);
+  await expect(page.getByText('sample-board-private')).toHaveCount(0);
+});
+
+test('withholds a late direct report response after sign-out', async ({
   page,
 }) => {
   await ignoreAbortForRace(page);
   const flow = await mockApi(page);
   const pending = deferred();
   const started = deferred();
-  flow.list = async () => {
+  flow.report = async () => {
     started.resolve();
     await pending.promise;
-    return { status: 200, data: { repositories: syntheticRepositories } };
+    return { status: 200, data: savedBoard() };
   };
-  await page.goto('/');
+  await page.goto('/repositories/202');
   await started.promise;
-  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
-  await expect(
-    page.getByText('Signed out of Board.', { exact: true }),
-  ).toBeVisible();
-  const response = page.waitForResponse('**/api/repositories');
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.getByText('Signed out of Board.')).toBeVisible();
+  const response = page.waitForResponse('**/api/repositories/202/report');
   pending.resolve();
   await response;
-  await expect(page.getByLabel('Repository', { exact: true })).toHaveCount(0);
-  await expect(
-    page.getByText('sample-board-private', { exact: false }),
-  ).toHaveCount(0);
+  await expect(page.locator('#saved-report')).toHaveCount(0);
+  await expect(page.getByLabel('Repository')).toHaveCount(0);
+  expect(
+    flow.calls.filter(({ path }) => path === '/api/repositories/202/check'),
+  ).toEqual([]);
 });
 
-test('ignores an old session 401 after a new session is established', async ({
+test('withholds a late analysis availability response after sign-out', async ({
   page,
 }) => {
   await ignoreAbortForRace(page);
   const flow = await mockApi(page);
+  const pending = deferred();
+  const started = deferred();
+  flow.availability = async () => {
+    started.resolve();
+    await pending.promise;
+    return {
+      status: 200,
+      data: analysisAvailability(),
+    };
+  };
+  await page.goto('/repositories/202');
+  await started.promise;
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.getByText('Signed out of Board.')).toBeVisible();
+  const response = page.waitForResponse('**/api/analysis-availability');
+  pending.resolve();
+  await response;
+  await expect(
+    page.getByRole('button', { name: 'Generate report' }),
+  ).toHaveCount(0);
+  await expect(page.getByLabel('Repository')).toHaveCount(0);
+});
+
+test('withholds a late active-job poll response after sign-out', async ({
+  page,
+}) => {
+  await ignoreAbortForRace(page);
+  const flow = await mockApi(page);
+  flow.boards.set(
+    202,
+    savedBoard(repositories[1], {
+      activeJob: safeJob('analyzing', { operation: 'refresh' }),
+    }),
+  );
+  const pending = deferred();
+  const started = deferred();
+  flow.job = async () => {
+    started.resolve();
+    await pending.promise;
+    return {
+      status: 200,
+      data: {
+        job: safeJob('succeeded', { operation: 'refresh' }),
+      },
+    };
+  };
+  await page.goto('/repositories/202');
+  await started.promise;
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.getByText('Signed out of Board.')).toBeVisible();
+  const response = page.waitForResponse(`**/api/report-jobs/${jobId}`);
+  pending.resolve();
+  await response;
+  await expect(page.locator('#saved-report')).toHaveCount(0);
+  await expect(page.getByText('Report analysis complete')).toHaveCount(0);
+  await expect(page.getByLabel('Repository')).toHaveCount(0);
+});
+
+test('ignores an old-session 401 after a new session is established', async ({
+  page,
+}) => {
+  await ignoreAbortForRace(page);
+  const flow = await mockApi(page);
+  flow.boards.set(202, savedBoard());
   const pending = deferred();
   const started = deferred();
   flow.check = async () => {
@@ -304,55 +388,22 @@ test('ignores an old session 401 after a new session is established', async ({
     };
   };
   await page.goto('/repositories/202');
-  await page.getByRole('button', { name: 'Check GitHub', exact: true }).click();
   await started.promise;
-  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
-  await expect(
-    page.getByText('Signed out of Board.', { exact: true }),
-  ).toBeVisible();
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.getByText('Signed out of Board.')).toBeVisible();
   flow.authenticated = true;
   flow.csrfToken = 'n'.repeat(43);
-  await page
-    .getByRole('button', { name: 'Check session', exact: true })
-    .click();
-  await expect(page.getByLabel('Repository', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Check session' }).click();
+  await expect(page.getByText('Signed in as @cboone')).toBeVisible();
   const response = page.waitForResponse('**/api/repositories/202/check');
   pending.resolve();
   await response;
-  await expect(
-    page.getByText('Signed in as @cboone', { exact: true }),
-  ).toBeVisible();
-  await expect(page.getByLabel('Repository', { exact: true })).toBeVisible();
-  await expect(
-    page.getByText('Your Board session has ended.', { exact: false }),
-  ).toHaveCount(0);
+  await expect(page.getByText('Signed in as @cboone')).toBeVisible();
+  await expect(page.getByLabel('Repository')).toBeVisible();
+  await expect(page.getByText('Your Board session has ended.')).toHaveCount(0);
 });
 
-test('clears protected content when the authoritative session expires', async ({
-  page,
-}) => {
-  const flow = await mockApi(page);
-  await page.goto('/repositories/202');
-  await page.getByRole('button', { name: 'Check GitHub', exact: true }).click();
-  await expect(
-    page.getByRole('heading', { name: 'GitHub check complete' }),
-  ).toBeVisible();
-  flow.check = async () => ({
-    status: 401,
-    data: { error: { code: 'session_required', retryable: false } },
-  });
-  await page.getByRole('button', { name: 'Check GitHub', exact: true }).click();
-  await expect(
-    page.getByRole('link', { name: 'Sign in with GitHub' }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole('heading', { name: 'GitHub check complete' }),
-  ).toHaveCount(0);
-  await expect(page.getByLabel('Repository', { exact: true })).toHaveCount(0);
-  await expect(page).toHaveTitle('Board');
-});
-
-test('withholds a pending check when periodic session verification observes expiry', async ({
+test('withholds a pending protected response when periodic session verification observes expiry', async ({
   page,
 }) => {
   await page.clock.install();
@@ -360,251 +411,24 @@ test('withholds a pending check when periodic session verification observes expi
   const flow = await mockApi(page);
   const pending = deferred();
   const started = deferred();
-  flow.check = async () => {
+  flow.report = async () => {
     started.resolve();
     await pending.promise;
-    return { status: 200, data: syntheticSummary() };
+    return { status: 200, data: savedBoard() };
   };
   await page.goto('/repositories/202');
-  await page.getByRole('button', { name: 'Check GitHub', exact: true }).click();
   await started.promise;
   flow.authenticated = false;
   await page.clock.fastForward(60000);
   await expect(
     page.getByRole('link', { name: 'Sign in with GitHub' }),
   ).toBeVisible();
-  await expect(page.getByLabel('Repository', { exact: true })).toHaveCount(0);
-  const response = page.waitForResponse('**/api/repositories/202/check');
+  await expect(page.getByLabel('Repository')).toHaveCount(0);
+  const response = page.waitForResponse('**/api/repositories/202/report');
   pending.resolve();
   await response;
-  await expect(
-    page.getByRole('heading', { name: 'GitHub check complete' }),
-  ).toHaveCount(0);
+  await expect(page.locator('#saved-report')).toHaveCount(0);
   expect(flow.calls.at(-1).path).toBe('/api/session');
-});
-
-test('preserves Board authentication when GitHub needs reauthorization', async ({
-  page,
-}) => {
-  const flow = await mockApi(page);
-  flow.check = async () => ({
-    status: 403,
-    data: {
-      error: {
-        code: 'source_authorization_required',
-        message: 'provider-secret-fixture',
-        retryable: false,
-      },
-    },
-  });
-  await page.goto('/repositories/202');
-  await page.getByRole('button', { name: 'Check GitHub', exact: true }).click();
-  await expect(
-    page.getByRole('link', { name: 'Reconnect GitHub' }),
-  ).toBeVisible();
-  await expect(
-    page.getByText('Signed in as @cboone', { exact: true }),
-  ).toBeVisible();
-  await expect(page.getByLabel('Repository', { exact: true })).toBeVisible();
-  await expect(
-    page.getByRole('button', { name: 'Check GitHub', exact: true }),
-  ).toBeDisabled();
-  await expect(
-    page.getByText('provider-secret-fixture', { exact: true }),
-  ).toHaveCount(0);
-});
-
-test('reports a failed logout honestly while clearing all protected data', async ({
-  page,
-}) => {
-  const flow = await mockApi(page);
-  flow.logout = async () => ({
-    status: 503,
-    data: {
-      error: {
-        code: 'service_unavailable',
-        message: 'provider-secret-fixture',
-        retryable: true,
-      },
-    },
-  });
-  await page.goto('/repositories/202');
-  await page.getByRole('button', { name: 'Check GitHub', exact: true }).click();
-  await expect(
-    page.getByRole('heading', { name: 'GitHub check complete' }),
-  ).toBeVisible();
-  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
-  await expect(
-    page.getByText('server sign-out could not be confirmed', { exact: false }),
-  ).toBeVisible();
-  await expect(
-    page.getByText('Signed out of Board.', { exact: true }),
-  ).toHaveCount(0);
-  await expect(page.getByLabel('Repository', { exact: true })).toHaveCount(0);
-  await expect(
-    page.getByRole('heading', { name: 'GitHub check complete' }),
-  ).toHaveCount(0);
-  await expect(
-    page.getByText('provider-secret-fixture', { exact: true }),
-  ).toHaveCount(0);
-});
-
-test('validates authorization before returning through browser history after logout', async ({
-  page,
-}) => {
-  const flow = await mockApi(page);
-  await page.goto('/');
-  await page.getByLabel('Repository', { exact: true }).selectOption('202');
-  await page.getByRole('button', { name: 'Check GitHub', exact: true }).click();
-  await expect(
-    page.getByRole('heading', { name: 'GitHub check complete' }),
-  ).toBeVisible();
-  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
-  await expect(
-    page.getByText('Signed out of Board.', { exact: true }),
-  ).toBeVisible();
-  const pending = deferred();
-  flow.session = async () => {
-    await pending.promise;
-    return { status: 200, data: { auth: false } };
-  };
-  await page.goBack();
-  await expect(
-    page.getByText('Checking your session…', { exact: true }),
-  ).toBeVisible();
-  await expect(page.getByLabel('Repository', { exact: true })).toHaveCount(0);
-  await expect(
-    page.getByRole('heading', { name: 'GitHub check complete' }),
-  ).toHaveCount(0);
-  pending.resolve();
-  await expect(
-    page.getByRole('link', { name: 'Sign in with GitHub' }),
-  ).toBeVisible();
-});
-
-test('checks the session again when a protected page returns after navigation', async ({
-  page,
-}) => {
-  const flow = await mockApi(page);
-  await page.goto('/repositories/202');
-  await expect(page.getByLabel('Repository', { exact: true })).toBeVisible();
-  await page.goto('/demo');
-  await expect(
-    page.getByRole('heading', { name: 'Sample backlog report' }),
-  ).toBeVisible();
-  const pending = deferred();
-  flow.session = async () => {
-    await pending.promise;
-    return { status: 200, data: { auth: false } };
-  };
-  await page.goBack({ waitUntil: 'commit' });
-  await expect(
-    page.getByText('Checking your session…', { exact: true }),
-  ).toBeVisible();
-  await expect(page.getByLabel('Repository', { exact: true })).toHaveCount(0);
-  await expect(
-    page.getByText('sample-board-private', { exact: false }),
-  ).toHaveCount(0);
-  pending.resolve();
-  await expect(
-    page.getByRole('link', { name: 'Sign in with GitHub' }),
-  ).toBeVisible();
-});
-
-test('preserves the last successful check separately from a failed check', async ({
-  page,
-}) => {
-  const flow = await mockApi(page);
-  await page.goto('/repositories/202');
-  await page.getByRole('button', { name: 'Check GitHub', exact: true }).click();
-  await expect(
-    page.getByRole('heading', { name: 'GitHub check complete' }),
-  ).toBeVisible();
-  flow.check = async () => ({
-    status: 429,
-    data: {
-      error: {
-        code: 'provider_rate_limited',
-        message: 'provider-secret-fixture',
-        retryable: true,
-      },
-    },
-  });
-  await page.getByRole('button', { name: 'Check GitHub', exact: true }).click();
-  await expect(page.getByRole('alert')).toContainText(
-    'GitHub limited the requests.',
-  );
-  await expect(
-    page.getByRole('heading', { name: 'GitHub check complete' }),
-  ).toBeVisible();
-  await expect(
-    page.getByText('provider-secret-fixture', { exact: true }),
-  ).toHaveCount(0);
-});
-
-test('rejects repository metadata for another owner before rendering it', async ({
-  page,
-}) => {
-  const flow = await mockApi(page);
-  flow.repositories = [
-    {
-      ...syntheticRepositories[1],
-      fullName: 'another-owner/sample-board-private',
-      url: 'https://github.com/another-owner/sample-board-private',
-    },
-  ];
-  await page.goto('/');
-  await expect(page.getByRole('alert')).toContainText('incomplete response');
-  await expect(page.getByLabel('Repository', { exact: true })).toHaveCount(0);
-  await expect(page.getByText('another-owner', { exact: false })).toHaveCount(
-    0,
-  );
-});
-
-test('rejects malformed source summaries without displaying a partial success', async ({
-  page,
-}) => {
-  const flow = await mockApi(page);
-  const summary = syntheticSummary();
-  summary.counts.openIssues = -1;
-  flow.check = async () => ({ status: 200, data: summary });
-  await page.goto('/repositories/202');
-  await page.getByRole('button', { name: 'Check GitHub', exact: true }).click();
-  await expect(page.getByRole('alert')).toContainText('incomplete response');
-  await expect(
-    page.getByRole('heading', { name: 'GitHub check complete' }),
-  ).toHaveCount(0);
-});
-
-test('renders provenance text literally and supports narrow screens and themes', async ({
-  page,
-}) => {
-  const flow = await mockApi(page);
-  const summary = syntheticSummary();
-  summary.provenance.limitations = ['<img src=x onerror=alert(1)>'];
-  flow.check = async () => ({ status: 200, data: summary });
-  await page.setViewportSize({ width: 375, height: 812 });
-  await page.goto('/repositories/202');
-  await page.getByRole('button', { name: 'Check GitHub', exact: true }).click();
-  await page.getByText('Input provenance', { exact: true }).click();
-  await expect(
-    page.getByText('<img src=x onerror=alert(1)>', { exact: true }),
-  ).toBeVisible();
-  await expect(page.locator('#production img')).toHaveCount(0);
-  expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= window.innerWidth,
-    ),
-  ).toBe(true);
-  await page.getByRole('button', { name: 'Use dark theme' }).click();
-  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
-  expect(await page.evaluate(() => Object.keys(localStorage))).toEqual([
-    'board.theme',
-  ]);
-  await page.screenshot({
-    path: test.info().outputPath('synthetic-source-check.png'),
-    fullPage: true,
-  });
 });
 
 test('keeps the production sample independent of authentication and providers', async ({
@@ -616,21 +440,193 @@ test('keeps the production sample independent of authentication and providers', 
     page.getByRole('heading', { name: 'Sample backlog report' }),
   ).toBeVisible();
   expect(flow.calls).toEqual([]);
+});
+
+test('clears protected content when an authoritative request observes session expiry', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  flow.boards.set(202, savedBoard());
+  let checks = 0;
+  flow.check = async () => {
+    checks += 1;
+    return checks === 1
+      ? { status: 200, data: sourceSummary() }
+      : {
+          status: 401,
+          data: { error: { code: 'session_required', retryable: false } },
+        };
+  };
+  await page.goto('/repositories/202');
+  await expect(page.getByText('saved report matches')).toBeVisible();
+  await page.getByRole('button', { name: 'Check GitHub' }).click();
   await expect(
-    page.getByText('This sample report uses synthetic data.', { exact: true }),
+    page.getByRole('link', { name: 'Sign in with GitHub' }),
+  ).toBeVisible();
+  await expect(page.locator('#saved-report')).toHaveCount(0);
+  await expect(page.getByLabel('Repository')).toHaveCount(0);
+});
+
+test('preserves Board authentication and the saved report when GitHub needs reauthorization', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  flow.boards.set(202, savedBoard());
+  flow.check = async () => ({
+    status: 403,
+    data: {
+      error: {
+        code: 'source_authorization_required',
+        message: 'provider-secret-fixture',
+        retryable: false,
+      },
+    },
+  });
+  await page.goto('/repositories/202');
+  await expect(
+    page.getByRole('link', { name: 'Reconnect GitHub' }),
+  ).toBeVisible();
+  await expect(page.locator('#saved-report')).toContainText(
+    'Define the report boundary',
+  );
+  await expect(
+    page.getByRole('button', { name: 'Refresh report' }),
+  ).toBeDisabled();
+  await expect(page.getByText('provider-secret-fixture')).toHaveCount(0);
+});
+
+test('reports failed server sign-out while keeping protected data cleared', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  flow.boards.set(202, savedBoard());
+  flow.logout = async () => ({
+    status: 503,
+    data: {
+      error: {
+        code: 'service_unavailable',
+        message: 'provider-secret-fixture',
+        retryable: true,
+      },
+    },
+  });
+  await page.goto('/repositories/202');
+  await expect(page.locator('#saved-report')).toBeVisible();
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(
+    page.getByText('server sign-out could not be confirmed', { exact: false }),
+  ).toBeVisible();
+  await expect(page.locator('#saved-report')).toHaveCount(0);
+  await expect(page.getByText('provider-secret-fixture')).toHaveCount(0);
+});
+
+test('revalidates the session before restoring a protected page from the sample', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  flow.boards.set(202, savedBoard());
+  await page.goto('/repositories/202');
+  await expect(page.locator('#saved-report')).toBeVisible();
+  await page.goto('/demo');
+  await expect(
+    page.getByRole('heading', { name: 'Sample backlog report' }),
+  ).toBeVisible();
+  const pending = deferred();
+  flow.session = async () => {
+    await pending.promise;
+    return { status: 200, data: { auth: false } };
+  };
+  await page.goBack({ waitUntil: 'commit' });
+  await expect(page.getByText('Checking your session…')).toBeVisible();
+  await expect(page.getByLabel('Repository')).toHaveCount(0);
+  await expect(page.locator('#saved-report')).toHaveCount(0);
+  pending.resolve();
+  await expect(
+    page.getByRole('link', { name: 'Sign in with GitHub' }),
   ).toBeVisible();
 });
 
-test('shows a generic callback failure and removes its query without exposing provider text', async ({
+test('shows a generic callback failure and removes its query', async ({
   page,
 }) => {
   const flow = await mockApi(page);
   flow.authenticated = false;
   await page.goto('/?auth_error=forbidden');
   await expect(
-    page.getByText('GitHub sign-in could not be completed. Please try again.', {
-      exact: true,
-    }),
+    page.getByText('GitHub sign-in could not be completed. Please try again.'),
   ).toBeVisible();
   await expect(page).toHaveURL('/');
+  await expect(page.getByText('forbidden')).toHaveCount(0);
+});
+
+test('rejects wrong-owner repository and report catalog responses', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  const wrongRepository = {
+    ...repositories[1],
+    fullName: 'another-owner/sample-board-private',
+    url: 'https://github.com/another-owner/sample-board-private',
+  };
+  const wrongSavedRepository = {
+    id: 303,
+    name: 'historical-board',
+    fullName: 'another-owner/historical-board',
+    private: true,
+    url: 'https://github.com/another-owner/historical-board',
+  };
+  flow.repositories = [wrongRepository];
+  flow.catalog = {
+    items: [
+      {
+        repository: wrongSavedRepository,
+        current: {
+          reportId,
+          generatedAt: '2026-09-18T20:10:00.000Z',
+          sourceFingerprint,
+        },
+        sourceStatus: 'source-unavailable',
+        activeJob: null,
+      },
+    ],
+    nextCursor: null,
+  };
+  await page.goto('/');
+  await expect(page.getByRole('alert')).toContainText('incomplete response');
+  await expect(page.getByLabel('Repository')).toHaveCount(0);
+  await expect(page.getByText('another-owner')).toHaveCount(0);
+});
+
+test('rejects a malformed source response without rendering partial details', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  const malformed = sourceSummary();
+  malformed.counts.openIssues = -1;
+  flow.check = async () => ({ status: 200, data: malformed });
+  await page.goto('/repositories/202');
+  await expect(page.getByRole('alert')).toContainText('incomplete response');
+  await expect(page.getByText('GitHub check details')).toHaveCount(0);
+});
+
+test('renders source provenance literally and remains accessible at a narrow viewport', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  const summary = sourceSummary();
+  summary.provenance.limitations = ['<img src=x onerror=alert(1)>'];
+  flow.check = async () => ({ status: 200, data: summary });
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto('/repositories/202');
+  await page.getByText('GitHub check details').click();
+  await expect(
+    page.getByText('<img src=x onerror=alert(1)>', { exact: true }),
+  ).toBeVisible();
+  await expect(page.locator('#production img')).toHaveCount(0);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
 });

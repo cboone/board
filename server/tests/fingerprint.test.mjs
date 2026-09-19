@@ -1,13 +1,31 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { canonicalStringify, fingerprintSource } from '../lib/fingerprint.mjs';
+import {
+  canonicalStringify,
+  fingerprintSource,
+  sourceManifest,
+} from '../lib/fingerprint.mjs';
 
 function source() {
   return {
     repository: { id: 7, defaultTip: 'a'.repeat(40) },
     issues: [
-      { id: 2, body: 'Original body', labels: [{ id: 4 }, { id: 3 }] },
-      { id: 1, labels: [] },
+      {
+        id: 2,
+        body: 'Original body',
+        labels: [{ id: 4 }, { id: 3 }],
+        createdAt: '2026-09-02T00:00:00Z',
+        assignees: [
+          { id: 10, login: 'second' },
+          { id: 2, login: 'first' },
+        ],
+      },
+      {
+        id: 1,
+        labels: [],
+        createdAt: '2026-09-01T00:00:00Z',
+        assignees: [],
+      },
     ],
     pullRequests: [
       {
@@ -61,9 +79,37 @@ test('canonical hashing is independent of property and pagination order', () => 
   ])
     reordered[key].reverse();
   reordered.issues.find((issue) => issue.id === 2).labels.reverse();
+  reordered.issues.find((issue) => issue.id === 2).assignees.reverse();
   reordered.pullRequests[0].closingIssues.reverse();
   assert.deepEqual(fingerprintSource(original), fingerprintSource(reordered));
+  assert.deepEqual(
+    sourceManifest(original)
+      .issues.find((issue) => issue.id === 2)
+      .assignees.map((assignee) => assignee.id),
+    [2, 10],
+  );
   assert.match(fingerprintSource(original).value, /^[a-f\d]{64}$/u);
+});
+test('issue creation and assignment facts are part of freshness coverage', () => {
+  for (const change of [
+    (snapshot) => {
+      snapshot.issues[0].createdAt = '2026-08-31T00:00:00Z';
+    },
+    (snapshot) => {
+      snapshot.issues[0].assignees[0].login = 'renamed';
+    },
+    (snapshot) => {
+      snapshot.issues[0].assignees = [];
+    },
+  ]) {
+    const original = source();
+    const edited = structuredClone(original);
+    change(edited);
+    assert.notEqual(
+      fingerprintSource(original).value,
+      fingerprintSource(edited).value,
+    );
+  }
 });
 test('actual issue/comment text changes hash even with unchanged timestamps and default SHA', () => {
   for (const change of [
@@ -130,6 +176,16 @@ test('pinned file identities hash without observation times or raw file allocati
   assert.notEqual(
     fingerprintSource(original).value,
     fingerprintSource(sameBlob).value,
+  );
+});
+test('tree blob identities retain freshness coverage for omitted file content', () => {
+  const original = source();
+  original.files = [];
+  const changedBlob = structuredClone(original);
+  changedBlob.tree[0].sha = 'changed';
+  assert.notEqual(
+    fingerprintSource(original).value,
+    fingerprintSource(changedBlob).value,
   );
 });
 test('distinct canonically equivalent Unicode names use a deterministic total order', () => {

@@ -1,4 +1,15 @@
 import { BoardError, errorResponse } from './errors.mjs';
+import {
+  projectAnalysisAvailabilityResponse,
+  projectAnalysisPreflightResponse,
+  projectCatalogPageResponse,
+  projectDirectReportResponse,
+  projectJobResponse,
+  projectRepositoryListResponse,
+  projectSessionResponse,
+  projectSetupDecisionResponse,
+  serializeApiResponse,
+} from './api-responses.mjs';
 import { REPORT_LIMITS } from '../../src/domain/report-contract.js';
 
 const number = (value) => Number.isSafeInteger(value) && value >= 0;
@@ -147,10 +158,14 @@ export function projectSummary(value, repositoryId) {
   };
 }
 
-function json(value, cookies = []) {
-  const headers = new Headers({ 'Cache-Control': 'no-store' });
+function json(value, cookies = [], status = 200) {
+  const serialized = serializeApiResponse(value);
+  const headers = new Headers({
+    'Cache-Control': 'no-store',
+    'Content-Type': 'application/json',
+  });
   for (const cookie of cookies) headers.append('Set-Cookie', cookie);
-  return Response.json(value, { headers });
+  return new Response(serialized, { status, headers });
 }
 function redirect(result) {
   const headers = new Headers({
@@ -161,33 +176,288 @@ function redirect(result) {
   return new Response(null, { status: 302, headers });
 }
 
-export function createApi({ auth, sourceOperations, createOperationBudget }) {
+const UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const HEX_64 = /^[a-f0-9]{64}$/u;
+
+function exact(value, keys) {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype &&
+    Reflect.ownKeys(value).length === keys.length &&
+    keys.every((key) => Object.hasOwn(value, key))
+  );
+}
+
+async function requestJson(request, maximum = 16_384) {
+  if (request.headers.get('content-type') !== 'application/json')
+    throw new BoardError('invalid_request');
+  const stated = request.headers.get('content-length');
+  if (
+    stated !== null &&
+    (!/^(?:0|[1-9]\d*)$/u.test(stated) || Number(stated) > maximum)
+  )
+    throw new BoardError('invalid_request');
+  const reader = request.body?.getReader();
+  if (!reader) throw new BoardError('invalid_request');
+  const chunks = [];
+  let bytes = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      bytes += next.value.byteLength;
+      if (bytes > maximum) throw new BoardError('invalid_request');
+      chunks.push(Buffer.from(next.value));
+    }
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  } catch (error) {
+    void reader.cancel().catch(() => {});
+    throw error instanceof BoardError
+      ? error
+      : new BoardError('invalid_request');
+  }
+}
+
+function admissionRequest(value) {
+  if (
+    !exact(value, ['idempotencyKey', 'operation', 'expectedCurrentReportId']) ||
+    typeof value.idempotencyKey !== 'string' ||
+    !UUID.test(value.idempotencyKey) ||
+    !['generate', 'refresh'].includes(value.operation) ||
+    !(
+      value.expectedCurrentReportId === null ||
+      (typeof value.expectedCurrentReportId === 'string' &&
+        HEX_64.test(value.expectedCurrentReportId))
+    ) ||
+    (value.operation === 'generate' &&
+      value.expectedCurrentReportId !== null) ||
+    (value.operation === 'refresh' && value.expectedCurrentReportId === null)
+  )
+    throw new BoardError('invalid_request');
+  return {
+    idempotencyKey: value.idempotencyKey.toLowerCase(),
+    operation: value.operation,
+    expectedCurrentReportId: value.expectedCurrentReportId,
+  };
+}
+
+function preflightRequest(value) {
+  if (
+    !exact(value, ['operation', 'expectedCurrentReportId']) ||
+    !['generate', 'refresh'].includes(value.operation) ||
+    !(
+      value.expectedCurrentReportId === null ||
+      (typeof value.expectedCurrentReportId === 'string' &&
+        HEX_64.test(value.expectedCurrentReportId))
+    ) ||
+    (value.operation === 'generate' &&
+      value.expectedCurrentReportId !== null) ||
+    (value.operation === 'refresh' && value.expectedCurrentReportId === null)
+  )
+    throw new BoardError('invalid_request');
+  return {
+    operation: value.operation,
+    expectedCurrentReportId: value.expectedCurrentReportId,
+  };
+}
+
+function decisionRequest(value) {
+  if (
+    !exact(value, [
+      'policyId',
+      'discussionRevision',
+      'decisionId',
+      'decision',
+      'authorizedThroughMicrousd',
+      'authorizedOperations',
+      'observed',
+    ]) ||
+    typeof value.policyId !== 'string' ||
+    !/^[a-z0-9][a-z0-9._-]{0,127}$/u.test(value.policyId) ||
+    !Number.isSafeInteger(value.discussionRevision) ||
+    value.discussionRevision < 1 ||
+    typeof value.decisionId !== 'string' ||
+    !HEX_64.test(value.decisionId) ||
+    !['acknowledge', 'stop'].includes(value.decision) ||
+    !Number.isSafeInteger(value.authorizedThroughMicrousd) ||
+    value.authorizedThroughMicrousd < 0 ||
+    value.authorizedThroughMicrousd > 25_000_000 ||
+    !Array.isArray(value.authorizedOperations) ||
+    value.authorizedOperations.length > 2 ||
+    new Set(value.authorizedOperations).size !==
+      value.authorizedOperations.length ||
+    value.authorizedOperations.some(
+      (operation) => !['generate', 'refresh'].includes(operation),
+    ) ||
+    (value.decision === 'stop' &&
+      (value.authorizedThroughMicrousd !== 0 ||
+        value.authorizedOperations.length !== 0)) ||
+    !exact(value.observed, [
+      'settledMicrousd',
+      'reservedMicrousd',
+      'unknownMicrousd',
+    ]) ||
+    ![
+      value.observed.settledMicrousd,
+      value.observed.reservedMicrousd,
+      value.observed.unknownMicrousd,
+    ].every((amount) => Number.isSafeInteger(amount) && amount >= 0) ||
+    !Number.isSafeInteger(
+      value.observed.settledMicrousd +
+        value.observed.reservedMicrousd +
+        value.observed.unknownMicrousd,
+    )
+  )
+    throw new BoardError('invalid_request');
+  return {
+    policyId: value.policyId,
+    discussionRevision: value.discussionRevision,
+    decisionId: value.decisionId,
+    decision: value.decision,
+    authorizedThroughMicrousd: value.authorizedThroughMicrousd,
+    authorizedOperations: [...value.authorizedOperations],
+    observed: {
+      settledMicrousd: value.observed.settledMicrousd,
+      reservedMicrousd: value.observed.reservedMicrousd,
+      unknownMicrousd: value.observed.unknownMicrousd,
+    },
+  };
+}
+
+export function createApi({
+  auth,
+  sourceOperations,
+  reportOperations = null,
+  analysisPreflight = null,
+  createOperationBudget,
+}) {
   return async function api(request) {
     try {
       const url = new URL(request.url);
       const path = url.pathname;
       const budget = createOperationBudget({ signal: request.signal });
       if (request.method === 'GET' && path === '/api/session')
-        return json(await auth.bootstrap(request, { budget }));
+        return json(
+          projectSessionResponse(await auth.bootstrap(request, { budget })),
+        );
       if (request.method === 'GET' && path === '/api/auth/start')
         return redirect(await auth.startOAuth(request, { budget }));
       if (request.method === 'GET' && path === '/api/auth/callback')
         return redirect(await auth.completeOAuth(request, { budget }));
       const isList = request.method === 'GET' && path === '/api/repositories';
       const isLogout = request.method === 'POST' && path === '/api/auth/logout';
-      const match =
+      const sourceMatch =
         request.method === 'POST' &&
         /^\/api\/repositories\/([1-9]\d*)\/check$/.exec(path);
-      if ((!isList && !isLogout && !match) || url.search)
+      const reportMatch =
+        request.method === 'GET' &&
+        /^\/api\/repositories\/([1-9]\d*)\/report$/.exec(path);
+      const admissionMatch =
+        request.method === 'POST' &&
+        /^\/api\/repositories\/([1-9]\d*)\/report-jobs$/.exec(path);
+      const preflightMatch =
+        request.method === 'POST' &&
+        /^\/api\/repositories\/([1-9]\d*)\/analysis-preflight$/.exec(path);
+      const jobMatch =
+        request.method === 'GET' &&
+        /^\/api\/report-jobs\/([a-f0-9]{64})$/.exec(path);
+      const isReports = request.method === 'GET' && path === '/api/reports';
+      const isAnalysisAvailability =
+        request.method === 'GET' && path === '/api/analysis-availability';
+      const isDecision =
+        request.method === 'POST' && path === '/api/setup-budget-decision';
+      const reportRoute =
+        isReports ||
+        isAnalysisAvailability ||
+        reportMatch ||
+        admissionMatch ||
+        preflightMatch ||
+        jobMatch ||
+        isDecision;
+      if (
+        (!isList && !isLogout && !sourceMatch && !reportRoute) ||
+        (!isReports && url.search) ||
+        (isReports &&
+          [...url.searchParams.keys()].some((key) => key !== 'cursor')) ||
+        (isReports && url.searchParams.getAll('cursor').length > 1) ||
+        (reportRoute && reportOperations === null) ||
+        (preflightMatch && analysisPreflight === null)
+      )
         throw new BoardError('invalid_request');
-      const repositoryId = match ? Number(match[1]) : undefined;
-      if (match && !Number.isSafeInteger(repositoryId))
+      const repositoryMatch =
+        sourceMatch || reportMatch || admissionMatch || preflightMatch;
+      const repositoryId = repositoryMatch
+        ? Number(repositoryMatch[1])
+        : undefined;
+      if (repositoryMatch && !Number.isSafeInteger(repositoryId))
         throw new BoardError('invalid_request');
       const session = await auth.requireAuthorizedOwner(request, { budget });
-      if (isLogout || match) auth.requireCsrf(request, session);
+      if (
+        isLogout ||
+        sourceMatch ||
+        admissionMatch ||
+        preflightMatch ||
+        isDecision
+      )
+        auth.requireCsrf(request, session);
+      const parsedAdmission = admissionMatch
+        ? admissionRequest(await requestJson(request))
+        : null;
+      const parsedPreflight = preflightMatch
+        ? preflightRequest(await requestJson(request))
+        : null;
       if (isLogout) {
         const result = await auth.logout({ session, budget });
         return json({ ok: true }, result.cookies);
+      }
+      if (
+        isReports ||
+        isAnalysisAvailability ||
+        reportMatch ||
+        jobMatch ||
+        isDecision
+      ) {
+        let output;
+        if (isReports)
+          output = await reportOperations.listReports({
+            ownerId: session.ownerId,
+            cursor: url.searchParams.get('cursor'),
+            budget,
+          });
+        else if (isAnalysisAvailability)
+          output = await reportOperations.getAnalysisAvailability({
+            ownerId: session.ownerId,
+            budget,
+          });
+        else if (reportMatch)
+          output = await reportOperations.getReport({
+            ownerId: session.ownerId,
+            repositoryId,
+            budget,
+          });
+        else if (jobMatch)
+          output = await reportOperations.pollJob({
+            ownerId: session.ownerId,
+            jobId: jobMatch[1],
+            budget,
+          });
+        else
+          output = await reportOperations.decideSetupBudget({
+            ownerId: session.ownerId,
+            decision: decisionRequest(await requestJson(request)),
+            budget,
+          });
+        await auth.recheckOwner({ session, budget });
+        if (isReports) output = projectCatalogPageResponse(output);
+        else if (isAnalysisAvailability)
+          output = projectAnalysisAvailabilityResponse(output);
+        else if (reportMatch) output = projectDirectReportResponse(output);
+        else if (jobMatch) output = projectJobResponse(output);
+        else output = projectSetupDecisionResponse(output);
+        return json(output);
       }
       const lease = await auth.acquireToken({ session, budget });
       let result;
@@ -198,9 +468,44 @@ export function createApi({ auth, sourceOperations, createOperationBudget }) {
           signal: budget.signal,
           budget,
         };
-        result = isList
-          ? await sourceOperations.listRepositories(shared)
-          : await sourceOperations.checkRepository({ ...shared, repositoryId });
+        if (isList) result = await sourceOperations.listRepositories(shared);
+        else if (admissionMatch) {
+          const pinned = await sourceOperations.checkRepositoryAccess({
+            ...shared,
+            repositoryId,
+          });
+          result = await reportOperations.admitJob({
+            ownerId: session.ownerId,
+            authorizationEpoch: session.authorizationEpoch,
+            repository: pinned,
+            request: parsedAdmission,
+            budget,
+          });
+        } else if (preflightMatch) {
+          const pinned = await sourceOperations.checkRepositoryAccess({
+            ...shared,
+            repositoryId,
+          });
+          result = await analysisPreflight.verify({
+            ...shared,
+            repositoryId,
+            repository: pinned,
+            request: parsedPreflight,
+            authorize: () => auth.recheckOwner({ session, lease, budget }),
+          });
+        } else if (reportOperations)
+          result = await reportOperations.checkSource({
+            ownerId: session.ownerId,
+            repositoryId,
+            accessToken: lease.accessToken,
+            signal: budget.signal,
+            budget,
+          });
+        else
+          result = await sourceOperations.checkRepository({
+            ...shared,
+            repositoryId,
+          });
       } catch (error) {
         if (
           error instanceof BoardError &&
@@ -232,6 +537,13 @@ export function createApi({ auth, sourceOperations, createOperationBudget }) {
           budget,
         });
         output = { repositories };
+      } else if (admissionMatch || preflightMatch) {
+        output = result;
+        leaseIsCurrent = await auth.recordSourceAuthorization({
+          lease,
+          sourceAuthorization: 'ready',
+          budget,
+        });
       } else {
         output = projectSummary(result?.summary, repositoryId);
         leaseIsCurrent = await auth.recordSourceAuthorization({
@@ -242,7 +554,11 @@ export function createApi({ auth, sourceOperations, createOperationBudget }) {
       }
       await auth.recheckOwner({ session, lease, budget });
       if (!leaseIsCurrent) throw new BoardError('provider_unavailable');
-      return json(output);
+      if (isList) output = projectRepositoryListResponse(output);
+      else if (admissionMatch) output = projectJobResponse(output);
+      else if (preflightMatch)
+        output = projectAnalysisPreflightResponse(output);
+      return json(output, [], admissionMatch ? 202 : 200);
     } catch (error) {
       return errorResponse(error);
     }

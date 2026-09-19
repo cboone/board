@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createSourceOperations, selectSourceFiles } from '../lib/gather.mjs';
+import {
+  createSourceOperations,
+  isKnownCredentialPath,
+  selectSourceFiles,
+} from '../lib/gather.mjs';
+import { BoardError } from '../lib/errors.mjs';
 import { createOperationBudget, SOURCE_LIMITS } from '../lib/source-limits.mjs';
 import { validateReport } from '../../src/domain/report-contract.js';
 import {
@@ -182,6 +187,84 @@ test('owner and numeric repository selection are server-enforced before provider
     { code: 'source_unavailable' },
   );
 });
+test('lightweight repository access pins only current eligibility and the default tip', async () => {
+  const provider = fixtureProvider();
+  assert.deepEqual(await operations(provider).checkRepositoryAccess(params()), {
+    id: repo.id,
+    fullName: repo.full_name,
+    name: repo.name,
+    private: repo.private,
+    url: repo.html_url,
+    defaultBranch: repo.default_branch,
+    defaultTip: TIP,
+  });
+  assert.deepEqual(
+    provider.calls.map((call) => call.url.pathname),
+    [
+      '/user/installations',
+      '/user/installations/1/repositories',
+      '/repos/cboone/widgets',
+      '/repos/cboone/widgets/branches/main',
+    ],
+  );
+});
+test('a source check calls its optional pinned hook once before inventory collection', async () => {
+  const provider = fixtureProvider();
+  const observations = [];
+  const result = await operations(provider).checkRepository(
+    params({
+      async onRepositoryPinned(repository) {
+        observations.push({
+          repository,
+          paths: provider.calls.map((call) => call.url.pathname),
+        });
+      },
+    }),
+  );
+  assert.equal(result.summary.status, 'complete');
+  assert.deepEqual(observations, [
+    {
+      repository: {
+        id: repo.id,
+        fullName: repo.full_name,
+        name: repo.name,
+        private: repo.private,
+        url: repo.html_url,
+      },
+      paths: [
+        '/user/installations',
+        '/user/installations/1/repositories',
+        '/repos/cboone/widgets',
+        '/repos/cboone/widgets/branches/main',
+      ],
+    },
+  ]);
+});
+test('a pinned-hook source error is not retried as source instability', async () => {
+  const provider = fixtureProvider();
+  let calls = 0;
+  await assert.rejects(
+    operations(provider).checkRepository(
+      params({
+        onRepositoryPinned() {
+          calls += 1;
+          throw new BoardError('source_unstable');
+        },
+      }),
+    ),
+    { code: 'source_unstable' },
+  );
+  assert.equal(calls, 1);
+  assert.deepEqual(
+    provider.calls.map((call) => call.url.pathname),
+    [
+      '/user/installations',
+      '/user/installations/1/repositories',
+      '/repos/cboone/widgets',
+      '/repos/cboone/widgets/branches/main',
+    ],
+  );
+});
 test('empty eligible repository yields a complete safe summary and explicit empty inventory', async () => {
   const provider = fixtureProvider();
   const { summary, sourceSnapshot } =
@@ -302,10 +385,13 @@ test('duplicate nested closing identities fail even when facts match', async () 
 });
 test('canonical progress prioritizes PR, then an unmerged branch, then explicit label; assignment alone is insufficient', async () => {
   const issues = [
-    issue(1, { labels: [label()], assignees: [{ login: 'cboone' }] }),
+    issue(1, {
+      labels: [label()],
+      assignees: [{ id: OWNER_ID, login: 'cboone' }],
+    }),
     issue(3, { labels: [label()] }),
     issue(4, { labels: [label()] }),
-    issue(5, { assignees: [{ login: 'cboone' }] }),
+    issue(5, { assignees: [{ id: OWNER_ID, login: 'cboone' }] }),
     issue(6),
     issue(61),
   ];
@@ -356,6 +442,107 @@ test('canonical progress prioritizes PR, then an unmerged branch, then explicit 
       'feature/61-work',
     ],
   );
+  assert.deepEqual(inventory.issues[3].assignees, [
+    { id: OWNER_ID, login: 'cboone' },
+  ]);
+  assert.equal(inventory.issues[3].createdAt, AT);
+});
+test('issue creation and bounded assignee identities remain canonical source metadata', async () => {
+  const provider = fixtureProvider({
+    values: {
+      issues: [
+        issue(1, {
+          created_at: '2026-08-01T09:30:00Z',
+          assignees: [
+            { id: 30, login: 'third', avatar_url: 'not retained' },
+            { id: 10, login: 'first', name: 'not retained' },
+          ],
+        }),
+      ],
+    },
+  });
+  const result = await operations(provider).checkRepository(params());
+  const expectedAssignees = [
+    { id: 10, login: 'first' },
+    { id: 30, login: 'third' },
+  ];
+  assert.equal(
+    result.sourceSnapshot.issues[0].createdAt,
+    '2026-08-01T09:30:00Z',
+  );
+  assert.deepEqual(
+    result.sourceSnapshot.issues[0].assignees,
+    expectedAssignees,
+  );
+  assert.equal(
+    result.sourceSnapshot.inventory.issues[0].createdAt,
+    '2026-08-01T09:30:00Z',
+  );
+  assert.equal(result.sourceSnapshot.inventory.issues[0].id, 1001);
+  assert.equal(result.sourceSnapshot.inventory.issues[0].updatedAt, AT);
+  assert.deepEqual(
+    result.sourceSnapshot.inventory.issues[0].assignees,
+    expectedAssignees,
+  );
+  assert.equal(result.sourceSnapshot.inventory.issues[0].inProgress, null);
+});
+test('duplicate or conflicting assignee identities never become canonical facts', async () => {
+  for (const issues of [
+    [
+      issue(1, {
+        assignees: [
+          { id: 10, login: 'same' },
+          { id: 10, login: 'same' },
+        ],
+      }),
+    ],
+    [
+      issue(1, { assignees: [{ id: 10, login: 'first' }] }),
+      issue(2, { assignees: [{ id: 10, login: 'second' }] }),
+    ],
+    [
+      issue(1, { assignees: [{ id: 10, login: 'same' }] }),
+      issue(2, { assignees: [{ id: 20, login: 'SAME' }] }),
+    ],
+    [issue(1, { assignees: [{ id: OWNER_ID, login: 'not-cboone' }] })],
+    [issue(1, { assignees: [{ id: 10, login: 'cboone' }] })],
+  ]) {
+    const provider = fixtureProvider({ values: { issues } });
+    await assert.rejects(() => operations(provider).checkRepository(params()), {
+      code: 'source_unstable',
+    });
+  }
+});
+test('assignee collection has an explicit per-issue bound', async () => {
+  const assignees = Array.from({ length: 101 }, (_, index) => ({
+    id: index + 1,
+    login: 'user-' + index,
+  }));
+  const provider = fixtureProvider({
+    values: { issues: [issue(1, { assignees })] },
+  });
+  await assert.rejects(() => operations(provider).checkRepository(params()), {
+    code: 'source_limit_exceeded',
+  });
+});
+test('issue creation or assignment changes between observations keep source unstable', async () => {
+  for (const changedIssue of [
+    (pass) =>
+      issue(1, {
+        created_at: pass % 2 ? '2026-08-01T00:00:00Z' : AT,
+      }),
+    (pass) =>
+      issue(1, {
+        assignees: pass % 2 ? [{ id: 10, login: 'first' }] : [],
+      }),
+  ]) {
+    const provider = fixtureProvider({
+      values: (pass) => ({ issues: [changedIssue(pass)] }),
+    });
+    await assert.rejects(() => operations(provider).checkRepository(params()), {
+      code: 'source_unstable',
+    });
+  }
 });
 for (const [status, ahead, behind, unmerged] of [
   ['ahead', 300, 0, true],
@@ -678,6 +865,7 @@ test('file policy is deterministic and excludes credential, binary, dependency, 
   const paths = [
     'README.md',
     'AGENTS.md',
+    'CLAUDE.md',
     'package.json',
     'src/main.js',
     '.env.production',
@@ -695,7 +883,18 @@ test('file policy is deterministic and excludes credential, binary, dependency, 
     mode: '100644',
     size: 20,
   }));
-  const prose = paths.map((path) => '\u0060' + path + '\u0060').join(' ');
+  const prose = [
+    'src/main.js',
+    '.env.production',
+    'credentials/service.json',
+    'private.key',
+    'vendor/README.md',
+    'dist/README.md',
+    'node_modules/package.json',
+    'image.png',
+  ]
+    .map((path) => '\u0060' + path + '\u0060')
+    .join(' ');
   const selected = selectSourceFiles(
     tree.reverse(),
     [issue(1, { body: prose })],
@@ -703,9 +902,37 @@ test('file policy is deterministic and excludes credential, binary, dependency, 
   );
   assert.deepEqual(
     selected.selected.map((entry) => entry.path),
-    ['AGENTS.md', 'README.md', 'package.json', 'src/main.js'],
+    ['src/main.js', 'README.md', 'AGENTS.md', 'CLAUDE.md', 'package.json'],
+  );
+  assert.deepEqual(
+    selected.selected.map((entry) => entry.relevanceClass),
+    ['referenced', 'guidance', 'guidance', 'guidance', 'configuration'],
   );
   assert.equal(selected.excluded, 7);
+});
+test('explicit references win overlapping file classes before count limits', () => {
+  const tree = ['README.md', 'AGENTS.md', 'package.json'].map((path) => ({
+    path,
+    type: 'blob',
+    sha: BLOB_ID,
+    mode: '100644',
+    size: 20,
+  }));
+  const policy = selectSourceFiles(
+    tree,
+    [issue(1, { body: 'Inspect `package.json`.' })],
+    { ...SOURCE_LIMITS, files: 1 },
+  );
+  assert.deepEqual(policy.selected, [
+    {
+      path: 'package.json',
+      type: 'blob',
+      sha: BLOB_ID,
+      mode: '100644',
+      size: 20,
+      relevanceClass: 'referenced',
+    },
+  ]);
 });
 test('selected blobs are pinned and reused only by immutable identity, with no raw summary text', async () => {
   const content = 'Private README text';
@@ -739,6 +966,82 @@ test('selected blobs are pinned and reused only by immutable identity, with no r
       .length,
     1,
   );
+});
+test('invalid UTF-8, binary, and oversized selected files are omitted with tree identities retained', async () => {
+  const invalidBlob = 'd'.repeat(40);
+  const binaryBlob = 'e'.repeat(40);
+  const validBlob = 'f'.repeat(40);
+  const oversizedBlob = '1'.repeat(40);
+  const contents = {
+    [invalidBlob]: Buffer.from([0xc3, 0x28]),
+    [binaryBlob]: Buffer.from([0x61, 0, 0x62]),
+    [validBlob]: Buffer.from('{}\n'),
+    [oversizedBlob]: Buffer.alloc(SOURCE_LIMITS.fileBytes + 1, 0x61),
+  };
+  const provider = fixtureProvider({
+    values: {
+      tree: [
+        ...[
+          ['README.md', invalidBlob],
+          ['AGENTS.md', binaryBlob],
+          ['package.json', validBlob],
+        ].map(([path, sha]) => ({
+          path,
+          type: 'blob',
+          sha,
+          mode: '100644',
+          size: contents[sha].byteLength,
+        })),
+        {
+          path: 'tsconfig.json',
+          type: 'blob',
+          sha: oversizedBlob,
+          mode: '100644',
+        },
+      ],
+      fileContents: contents,
+    },
+  });
+  const result = await operations(provider).checkRepository(params());
+  assert.deepEqual(result.sourceSnapshot.files, [
+    {
+      path: 'package.json',
+      blobId: validBlob,
+      content: '{}\n',
+      relevanceClass: 'configuration',
+    },
+  ]);
+  assert.deepEqual(result.sourceSnapshot.filePolicy.omitted, [
+    {
+      path: 'README.md',
+      blobId: invalidBlob,
+      relevanceClass: 'guidance',
+      reason: 'invalid-utf8',
+    },
+    {
+      path: 'AGENTS.md',
+      blobId: binaryBlob,
+      relevanceClass: 'guidance',
+      reason: 'binary-content',
+    },
+    {
+      path: 'tsconfig.json',
+      blobId: oversizedBlob,
+      relevanceClass: 'configuration',
+      reason: 'oversized',
+    },
+  ]);
+  assert.ok(
+    result.sourceSnapshot.tree.some(
+      (entry) => entry.path === 'README.md' && entry.sha === invalidBlob,
+    ),
+  );
+  assert.ok(
+    result.sourceSnapshot.tree.some(
+      (entry) => entry.path === 'AGENTS.md' && entry.sha === binaryBlob,
+    ),
+  );
+  assert.equal(result.summary.counts.selectedFiles, 1);
 });
 test('failure of an admitted selected file is incomplete, never bounded success', async () => {
   const provider = fixtureProvider({
@@ -884,6 +1187,7 @@ test('selected source paths can come from issue comments and remain pinned to th
   const result = await operations(provider).checkRepository(params());
   assert.equal(result.summary.counts.selectedFiles, 1);
   assert.equal(result.sourceSnapshot.files[0].path, 'src/main.js');
+  assert.equal(result.sourceSnapshot.files[0].relevanceClass, 'referenced');
 });
 test('credential locations are excluded even when explicitly referenced in issue prose', () => {
   const paths = [
@@ -1409,9 +1713,12 @@ test('known agent and hosted CLI credential paths are excluded while agent guida
   const policy = selectSourceFiles(tree, [issue(1, { body })], SOURCE_LIMITS);
   assert.deepEqual(
     policy.selected.map((entry) => entry.path),
-    ['.claude/CLAUDE.md', '.codex/AGENTS.md'],
+    ['.codex/AGENTS.md', '.claude/CLAUDE.md'],
   );
   assert.equal(policy.excluded, secrets.length);
+  assert.equal(isKnownCredentialPath('.codex/auth.json/cache'), true);
+  assert.equal(isKnownCredentialPath('nested/.env.production/child'), true);
+  assert.equal(isKnownCredentialPath('.codex/AGENTS.md'), false);
 });
 test('eligible repository inventory admits10000 and explicitly rejects10001 without truncation', async () => {
   const repositories = Array.from({ length: 10001 }, (_, index) => ({

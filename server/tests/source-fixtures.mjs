@@ -58,7 +58,9 @@ export function issue(number = 1, overrides = {}) {
     state_reason: null,
     labels: [],
     milestone: null,
+    assignees: [],
     comments: 0,
+    created_at: AT,
     updated_at: AT,
     html_url: repo.html_url + '/issues/' + number,
     ...overrides,
@@ -282,12 +284,18 @@ export function fixtureProvider(options = {}) {
     if (url.pathname.startsWith('/repos/cboone/widgets/git/trees/'))
       return json({ tree: values.tree ?? [], truncated: false });
     if (url.pathname.startsWith('/repos/cboone/widgets/git/blobs/')) {
-      const content = values.fileContent ?? 'Sample repository guidance';
+      const blobId = url.pathname.split('/').at(-1);
+      const source =
+        values.fileContents?.[blobId] ??
+        values.fileBytes ??
+        values.fileContent ??
+        'Sample repository guidance';
+      const content = Buffer.from(source);
       return json({
-        sha: url.pathname.split('/').at(-1),
-        size: Buffer.byteLength(content),
+        sha: blobId,
+        size: content.byteLength,
         encoding: 'base64',
-        content: Buffer.from(content).toString('base64'),
+        content: content.toString('base64'),
       });
     }
     throw new Error('Unexpected fixture request: ' + url.pathname);

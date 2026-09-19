@@ -8,6 +8,19 @@ test('source authorization is a source-only 403 and session failures are 401', (
   assert.equal(new BoardError('provider_unavailable').retryable, true);
 });
 
+test('analysis admission exposes the reviewed stable browser codes', () => {
+  for (const code of [
+    'report_state_changed',
+    'analysis_in_progress',
+    'analysis_preflight_required',
+    'analysis_unavailable',
+  ]) {
+    const error = new BoardError(code);
+    assert.equal(error.code, code);
+    assert.equal(error.status, code === 'analysis_unavailable' ? 503 : 409);
+  }
+});
+
 test('unknown exceptions and provider text never become browser messages', async () => {
   const raw = new Error('private-repository-name provider-secret');
   const response = errorResponse(raw);

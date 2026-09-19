@@ -1,18 +1,43 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { BoardError } from './errors.mjs';
 
+const STORAGE_RULES = Object.freeze({
+  'board-auth': Object.freeze({
+    key: /^(?:account\/99961|(?:oauth|session)\/[a-f0-9]{64})$/,
+    listPrefixes: Object.freeze(['oauth/', 'session/']),
+    canDelete: (key) => !key.startsWith('account/'),
+  }),
+  'board-reports': Object.freeze({
+    key: /^owners\/99961\/(?:catalog|repositories\/[1-9]\d*\/(?:state|versions\/[a-f0-9]{64}))$/,
+    listPrefixes: Object.freeze([]),
+    canDelete: () => false,
+  }),
+  'board-jobs': Object.freeze({
+    key: /^jobs\/[a-f0-9]{64}$/,
+    listPrefixes: Object.freeze([]),
+    canDelete: () => false,
+  }),
+  'board-spend': Object.freeze({
+    key: /^(?:setup\/v1|setup\/preflight\/v1\/[a-f0-9]{64}|production\/[a-z0-9][a-z0-9._-]{0,127}\/\d{4}-(?:0[1-9]|1[0-2]))$/,
+    listPrefixes: Object.freeze([]),
+    canDelete: () => false,
+  }),
+});
+
 const validEtag = (etag) =>
   typeof etag === 'string' && etag.length > 0 && etag.length <= 1024;
-const keyCheck = (key) => {
-  if (
-    typeof key !== 'string' ||
-    !/^(?:account\/99961|(?:oauth|session)\/[a-f0-9]{64})$/.test(key)
-  )
+const storageRule = (storeName) => {
+  if (!Object.hasOwn(STORAGE_RULES, storeName))
     throw new BoardError('service_unavailable');
+  return STORAGE_RULES[storeName];
 };
 const unavailable = () => new BoardError('service_unavailable');
 
-export function createStorage({ store }) {
+export function createStorage({ store, storeName = 'board-auth' }) {
+  const rule = storageRule(storeName);
+  const keyCheck = (key) => {
+    if (typeof key !== 'string' || !rule.key.test(key)) throw unavailable();
+  };
   return Object.freeze({
     async read(key) {
       keyCheck(key);
@@ -58,7 +83,7 @@ export function createStorage({ store }) {
     },
     async listKeys({ prefix, limit = 20 }) {
       if (
-        !['oauth/', 'session/'].includes(prefix) ||
+        !rule.listPrefixes.includes(prefix) ||
         !Number.isSafeInteger(limit) ||
         limit < 1 ||
         limit > 100
@@ -82,7 +107,7 @@ export function createStorage({ store }) {
     },
     async delete(key) {
       keyCheck(key);
-      if (key.startsWith('account/')) throw unavailable();
+      if (!rule.canDelete(key)) throw unavailable();
       try {
         await store.delete(key);
       } catch {
@@ -93,10 +118,12 @@ export function createStorage({ store }) {
 }
 
 export async function createProductionStorage({
+  storeName = 'board-auth',
   loadBlobs = () => import('@netlify/blobs'),
   fetchImpl = fetch,
 } = {}) {
   try {
+    storageRule(storeName);
     const operations = new AsyncLocalStorage();
     const runOperation = (budget, action) => {
       if (!budget) throw unavailable();
@@ -175,10 +202,11 @@ export async function createProductionStorage({
     const { getStore } = await loadBlobs();
     const adapter = createStorage({
       store: getStore({
-        name: 'board-auth',
+        name: storeName,
         consistency: 'strong',
         fetch: boundedFetch,
       }),
+      storeName,
     });
     return Object.freeze({
       read: (key, { budget } = {}) =>

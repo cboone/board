@@ -1,0 +1,860 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {
+  REVIEWED_SETUP_PRICING_ATTESTATION,
+  REVIEWED_SETUP_PRICING_ATTESTATIONS,
+  SETUP_FEATURE_POLICY_HASH,
+  SETUP_PRICING_SOURCE,
+  SETUP_SPEND_LIMITS,
+  activateSetupPolicy,
+  createSetupLedger,
+  createSetupPolicy,
+  createSetupPricingAttestation,
+  decideSetupDiscussion,
+  exposureMicrousd,
+  projectSetupPricingAttestation,
+  projectSpendLedger,
+  removeCompletedSetupJob,
+  reserveSetupJob as reserveSetupJobRaw,
+  setupSpendLedgerPreflightBytes,
+  updateSetupAttempt,
+} from '../lib/spend.mjs';
+
+const at = (hour = 0) =>
+  `2026-09-19T${String(hour + 6).padStart(2, '0')}:30:00.000Z`;
+const id = (character) => character.repeat(64);
+const pricingAttestation = REVIEWED_SETUP_PRICING_ATTESTATION;
+const reserveSetupJob = (ledger, options) =>
+  reserveSetupJobRaw(ledger, {
+    expectedPolicyId: ledger.activePolicyId,
+    expectedDeployId: 'deploy-1',
+    expectedPricingAttestation: pricingAttestation,
+    ...options,
+  });
+function setup() {
+  const { policyId, policy } = createSetupPolicy({
+    deployId: 'deploy-1',
+    pricingAttestation,
+  });
+  return createSetupLedger({ policyId, policy, at: at(0) });
+}
+
+const indexedId = (index) => index.toString(16).padStart(64, '0');
+
+function maximumCardinalityLedger() {
+  const deployId = (index) => {
+    const suffix = String(index).padStart(2, '0');
+    // JSON escapes each admitted lone surrogate to six ASCII bytes.
+    return `${'\ud800'.repeat(128 - suffix.length)}${suffix}`;
+  };
+  const initial = createSetupPolicy({
+    deployId: deployId(1),
+    pricingAttestation,
+  });
+  let ledger = createSetupLedger({
+    policyId: initial.policyId,
+    policy: initial.policy,
+    at: at(0),
+  });
+  for (let index = 2; index <= SETUP_SPEND_LIMITS.maxPolicies; index += 1) {
+    const nextPolicy = createSetupPolicy({
+      deployId: deployId(index),
+      pricingAttestation,
+    });
+    ledger = activateSetupPolicy(ledger, {
+      ...nextPolicy,
+      at: `2026-09-19T06:30:${String(index).padStart(2, '0')}.000Z`,
+      expectedRevision: ledger.revision,
+    });
+  }
+
+  const candidate = structuredClone(ledger);
+  let decisionIndex = 1;
+  for (const policyId of Object.keys(candidate.policies)) {
+    candidate.discussions[policyId] = {
+      status: 'acknowledged',
+      currentRevision: SETUP_SPEND_LIMITS.maxDecisionsPerPolicy,
+      triggeredAt: '2026-09-19T06:31:00.000Z',
+      triggerExposureMicrousd: SETUP_SPEND_LIMITS.capMicrousd,
+      decisions: Array.from(
+        { length: SETUP_SPEND_LIMITS.maxDecisionsPerPolicy },
+        (_, index) => ({
+          triggerRevision: index + 1,
+          decidedAt: '2026-09-19T06:31:00.000Z',
+          observed: {
+            settledMicrousd: SETUP_SPEND_LIMITS.capMicrousd,
+            reservedMicrousd: 0,
+            unknownMicrousd: 0,
+          },
+          decisionId: indexedId(decisionIndex++),
+          decision: 'acknowledged',
+          authorizedThroughMicrousd: SETUP_SPEND_LIMITS.capMicrousd,
+          authorizedOperations: ['generate', 'refresh'],
+        }),
+      ),
+    };
+  }
+  for (let index = 0; index < SETUP_SPEND_LIMITS.maxActiveJobs; index += 1) {
+    candidate.active[indexedId(10_000 + index)] = {
+      policyId: candidate.activePolicyId,
+      createdAt: '2026-09-19T06:31:00.000Z',
+      accountingState: 'pending',
+      lastLedgerRevision: 1,
+      lastAccountingSequence: 1,
+      lastAccountingDigest: indexedId(20_000 + index),
+      lastTransitionId: indexedId(30_000 + index),
+      attempts: Array.from(
+        { length: SETUP_SPEND_LIMITS.maximumAttempts },
+        (_, attemptIndex) => ({
+          number: attemptIndex + 1,
+          ceilingMicrousd: SETUP_SPEND_LIMITS.attemptCostMicrousd,
+          state: 'reserved',
+          actualCostMicrousd: 0,
+          unknownExposureMicrousd: 0,
+          recordedAt: null,
+        }),
+      ),
+    };
+  }
+  return projectSpendLedger(candidate);
+}
+
+test('setup policy fixes Opus 5 high-effort global standard pricing and cap', () => {
+  const ledger = setup();
+  const policy = ledger.policies[ledger.activePolicyId];
+  assert.equal(policy.model, 'claude-opus-5');
+  assert.equal(policy.effort, 'high');
+  assert.equal(policy.inferenceGeo, 'global');
+  assert.equal(policy.serviceTier, 'standard_only');
+  assert.equal(policy.attemptCostCeilingMicrousd, 5_409_600);
+  assert.equal(policy.capMicrousd, 25_000_000);
+  assert.equal(policy.featurePolicyHash, SETUP_FEATURE_POLICY_HASH);
+  assert.equal(policy.pricingSource, SETUP_PRICING_SOURCE);
+  assert.equal(Object.isFrozen(pricingAttestation), true);
+  assert.equal(Object.isFrozen(REVIEWED_SETUP_PRICING_ATTESTATIONS), true);
+  assert.equal(REVIEWED_SETUP_PRICING_ATTESTATIONS.at(-1), pricingAttestation);
+  assert.equal(exposureMicrousd(ledger), 0);
+  assert.equal(
+    createSetupPolicy({ deployId: 'deploy-1', pricingAttestation }).policyId,
+    ledger.activePolicyId,
+  );
+  assert.notEqual(
+    createSetupPolicy({ deployId: 'deploy-2', pricingAttestation }).policyId,
+    ledger.activePolicyId,
+  );
+});
+
+test('deploy policy activation preserves lifetime accounting and old immutable policy state', () => {
+  const first = reserveSetupJob(setup(), {
+    jobId: id('a'),
+    operation: 'generate',
+    at: at(1),
+    expectedRevision: 0,
+  }).ledger;
+  const before = updateSetupAttempt(first, {
+    jobId: id('a'),
+    attemptNumber: 1,
+    state: 'settled',
+    actualCostMicrousd: 123_456,
+    at: at(2),
+    expectedRevision: first.revision,
+  }).ledger;
+  const priorPolicyId = before.activePolicyId;
+  const priorPolicy = before.policies[priorPolicyId];
+  const nextPolicy = createSetupPolicy({
+    deployId: 'deploy-2',
+    pricingAttestation,
+  });
+  const activated = activateSetupPolicy(before, {
+    ...nextPolicy,
+    at: at(3),
+    expectedRevision: before.revision,
+  });
+
+  assert.equal(activated.activePolicyId, nextPolicy.policyId);
+  assert.deepEqual(activated.policies[priorPolicyId], priorPolicy);
+  assert.deepEqual(activated.active, before.active);
+  assert.deepEqual(activated.discussions, before.discussions);
+  assert.equal(activated.settledMicrousd, before.settledMicrousd);
+  assert.equal(activated.accountingSequence, before.accountingSequence);
+  assert.equal(activated.accountingDigest, before.accountingDigest);
+  assert.equal(activated.revision, before.revision + 1);
+  assert.deepEqual(
+    activateSetupPolicy(activated, {
+      ...nextPolicy,
+      at: at(4),
+      expectedRevision: activated.revision,
+    }),
+    activated,
+  );
+});
+
+test('deploy policy activation fails closed at the immutable policy bound', () => {
+  let ledger = setup();
+  for (let index = 2; index <= SETUP_SPEND_LIMITS.maxPolicies; index += 1) {
+    const policy = createSetupPolicy({
+      deployId: `deploy-${index}`,
+      pricingAttestation,
+    });
+    ledger = activateSetupPolicy(ledger, {
+      ...policy,
+      at: `2026-09-19T06:30:${String(index).padStart(2, '0')}.000Z`,
+      expectedRevision: ledger.revision,
+    });
+  }
+  const overflow = createSetupPolicy({
+    deployId: 'deploy-overflow',
+    pricingAttestation,
+  });
+  assert.throws(
+    () =>
+      activateSetupPolicy(ledger, {
+        ...overflow,
+        at: '2026-09-19T06:31:00.000Z',
+        expectedRevision: ledger.revision,
+      }),
+    { code: 'service_unavailable' },
+  );
+});
+
+test('maximum-width preflight covers every cardinality before terminal accounting', () => {
+  const ledger = maximumCardinalityLedger();
+  assert.equal(
+    Object.keys(ledger.active).length,
+    SETUP_SPEND_LIMITS.maxActiveJobs,
+  );
+  assert.equal(
+    Object.keys(ledger.policies).length,
+    SETUP_SPEND_LIMITS.maxPolicies,
+  );
+  assert.ok(
+    Object.values(ledger.discussions).every(
+      ({ decisions }) =>
+        decisions.length === SETUP_SPEND_LIMITS.maxDecisionsPerPolicy,
+    ),
+  );
+  assert.equal(setupSpendLedgerPreflightBytes(ledger), 231_812);
+  assert.ok(231_812 < SETUP_SPEND_LIMITS.maxBytes);
+});
+
+test('terminal attempt accounting stays within its reserved maximum-width shape', () => {
+  const reserved = reserveSetupJob(setup(), {
+    jobId: id('a'),
+    operation: 'generate',
+    at: at(1),
+    expectedRevision: 0,
+  }).ledger;
+  const reservedBytes = setupSpendLedgerPreflightBytes(reserved);
+  const settled = updateSetupAttempt(reserved, {
+    jobId: id('a'),
+    attemptNumber: 1,
+    state: 'settled',
+    actualCostMicrousd: 1,
+    at: at(2),
+    expectedRevision: reserved.revision,
+  }).ledger;
+  assert.ok(setupSpendLedgerPreflightBytes(settled) <= reservedBytes);
+  const released = updateSetupAttempt(settled, {
+    jobId: id('a'),
+    attemptNumber: 2,
+    state: 'released',
+    at: at(3),
+    expectedRevision: settled.revision,
+  }).ledger;
+  assert.ok(setupSpendLedgerPreflightBytes(released) <= reservedBytes);
+
+  const unknown = updateSetupAttempt(reserved, {
+    jobId: id('a'),
+    attemptNumber: 1,
+    state: 'unknown',
+    actualCostMicrousd: SETUP_SPEND_LIMITS.attemptCostMicrousd + 1,
+    unknownExposureMicrousd: SETUP_SPEND_LIMITS.attemptCostMicrousd + 1,
+    pricingReviewRequired: true,
+    at: at(2),
+    expectedRevision: reserved.revision,
+  }).ledger;
+  assert.ok(setupSpendLedgerPreflightBytes(unknown) <= reservedBytes);
+});
+
+test('reviewed pricing attestation and deploy bind every active policy fact', () => {
+  const ledger = setup();
+  const policyId = ledger.activePolicyId;
+  for (const [field, replacement] of [
+    ['featurePolicyHash', id('f')],
+    ['pricingSource', 'https://example.invalid/pricing'],
+  ]) {
+    const substituted = structuredClone(ledger);
+    substituted.policies[policyId][field] = replacement;
+    assert.throws(() => projectSpendLedger(substituted), {
+      code: 'service_unavailable',
+    });
+  }
+
+  assert.throws(
+    () =>
+      projectSetupPricingAttestation({
+        ...pricingAttestation,
+        inputRateMicrousd: pricingAttestation.inputRateMicrousd + 1,
+      }),
+    { code: 'service_unavailable' },
+  );
+
+  const substitutedValidity = structuredClone(ledger);
+  substitutedValidity.policies[policyId].pricingValidThrough =
+    '2026-09-27T05:35:41.000Z';
+  assert.throws(() => projectSpendLedger(substitutedValidity), {
+    code: 'service_unavailable',
+  });
+  assert.throws(
+    () =>
+      createSetupPricingAttestation({
+        pricingVerifiedAt: pricingAttestation.pricingVerifiedAt,
+        pricingValidThrough: '2026-09-27T05:35:41.000Z',
+      }),
+    { code: 'service_unavailable' },
+  );
+  assert.throws(
+    () =>
+      reserveSetupJobRaw(ledger, {
+        jobId: id('a'),
+        operation: 'generate',
+        at: at(1),
+        expectedRevision: 0,
+        expectedPolicyId: policyId,
+        expectedDeployId: 'substituted-deploy',
+        expectedPricingAttestation: pricingAttestation,
+      }),
+    { code: 'service_unavailable' },
+  );
+});
+
+test('reservation accounts for both attempts once and stores per-entry recovery facts', () => {
+  const result = reserveSetupJob(setup(), {
+    jobId: id('a'),
+    operation: 'generate',
+    at: at(1),
+    expectedRevision: 0,
+  });
+  assert.equal(result.status, 'reserved');
+  assert.equal(result.ledger.revision, 1);
+  assert.equal(result.ledger.accountingSequence, 1);
+  assert.equal(
+    exposureMicrousd(result.ledger),
+    2 * SETUP_SPEND_LIMITS.attemptCostMicrousd,
+  );
+  const entry = result.ledger.active[id('a')];
+  assert.equal(entry.lastLedgerRevision, result.accounting.ledgerRevision);
+  assert.equal(
+    entry.lastAccountingSequence,
+    result.accounting.accountingSequence,
+  );
+  assert.equal(entry.lastAccountingDigest, result.accounting.accountingDigest);
+  assert.equal(entry.lastTransitionId, result.accounting.transitionId);
+  assert.equal(
+    reserveSetupJob(result.ledger, {
+      jobId: id('a'),
+      operation: 'generate',
+      at: at(1),
+      expectedRevision: 1,
+    }).status,
+    'existing',
+  );
+});
+
+test('known attempt costs settle once, unused reservations release, and complete entries remove outside the digest', () => {
+  const reserved = reserveSetupJob(setup(), {
+    jobId: id('a'),
+    operation: 'refresh',
+    at: at(1),
+    expectedRevision: 0,
+  }).ledger;
+  const settled = updateSetupAttempt(reserved, {
+    jobId: id('a'),
+    attemptNumber: 1,
+    state: 'settled',
+    actualCostMicrousd: 123_456,
+    at: at(2),
+    expectedRevision: 1,
+  }).ledger;
+  const released = updateSetupAttempt(settled, {
+    jobId: id('a'),
+    attemptNumber: 2,
+    state: 'released',
+    at: at(3),
+    expectedRevision: 2,
+  }).ledger;
+  assert.equal(exposureMicrousd(released), 123_456);
+  const digest = released.accountingDigest;
+  const sequence = released.accountingSequence;
+  const removed = removeCompletedSetupJob(released, {
+    jobId: id('a'),
+    expectedRevision: 3,
+    at: at(4),
+  });
+  assert.equal(removed.revision, 4);
+  assert.equal(removed.accountingSequence, sequence);
+  assert.equal(removed.accountingDigest, digest);
+  assert.equal(removed.settledMicrousd, 123_456);
+  assert.deepEqual(removed.active, {});
+});
+
+test('unknown exposure is conservative, retained, and cannot be removed', () => {
+  const reserved = reserveSetupJob(setup(), {
+    jobId: id('a'),
+    operation: 'generate',
+    at: at(1),
+    expectedRevision: 0,
+  }).ledger;
+  const unknown = updateSetupAttempt(reserved, {
+    jobId: id('a'),
+    attemptNumber: 1,
+    state: 'unknown',
+    actualCostMicrousd: 7_000_000,
+    unknownExposureMicrousd: 7_000_000,
+    at: at(2),
+    expectedRevision: 1,
+  }).ledger;
+  assert.equal(unknown.active[id('a')].accountingState, 'unknown');
+  assert.equal(unknown.pricingReviewRequired, true);
+  assert.equal(
+    exposureMicrousd(unknown),
+    7_000_000 + SETUP_SPEND_LIMITS.attemptCostMicrousd,
+  );
+  assert.throws(
+    () =>
+      removeCompletedSetupJob(unknown, {
+        jobId: id('a'),
+        expectedRevision: 2,
+        at: at(3),
+      }),
+    { code: 'service_unavailable' },
+  );
+  assert.throws(
+    () => projectSpendLedger({ ...unknown, pricingReviewRequired: false }),
+    { code: 'service_unavailable' },
+  );
+  assert.throws(
+    () =>
+      reserveSetupJob(unknown, {
+        jobId: id('b'),
+        operation: 'generate',
+        at: at(3),
+        expectedRevision: unknown.revision,
+      }),
+    { code: 'service_unavailable' },
+  );
+});
+
+test('unknown attempt evidence can only raise its known cost and retained exposure', () => {
+  const reserved = reserveSetupJob(setup(), {
+    jobId: id('a'),
+    operation: 'generate',
+    at: at(1),
+    expectedRevision: 0,
+  }).ledger;
+  const unknown = updateSetupAttempt(reserved, {
+    jobId: id('a'),
+    attemptNumber: 1,
+    state: 'unknown',
+    actualCostMicrousd: 0,
+    unknownExposureMicrousd: SETUP_SPEND_LIMITS.attemptCostMicrousd,
+    at: at(2),
+    expectedRevision: 1,
+  }).ledger;
+  const upgraded = updateSetupAttempt(unknown, {
+    jobId: id('a'),
+    attemptNumber: 1,
+    state: 'unknown',
+    actualCostMicrousd: 7_000_000,
+    unknownExposureMicrousd: 7_000_000,
+    pricingReviewRequired: true,
+    at: at(3),
+    expectedRevision: 2,
+  }).ledger;
+  assert.equal(
+    upgraded.active[id('a')].attempts[0].actualCostMicrousd,
+    7_000_000,
+  );
+  assert.equal(
+    upgraded.active[id('a')].attempts[0].unknownExposureMicrousd,
+    7_000_000,
+  );
+  assert.equal(upgraded.pricingReviewRequired, true);
+  assert.throws(
+    () =>
+      updateSetupAttempt(upgraded, {
+        jobId: id('a'),
+        attemptNumber: 1,
+        state: 'unknown',
+        actualCostMicrousd: SETUP_SPEND_LIMITS.attemptCostMicrousd,
+        unknownExposureMicrousd: SETUP_SPEND_LIMITS.attemptCostMicrousd,
+        at: at(4),
+        expectedRevision: 3,
+      }),
+    { code: 'service_unavailable' },
+  );
+});
+
+test('explicit pricing review is atomic and changes the accounting digest', () => {
+  const reserved = reserveSetupJob(setup(), {
+    jobId: id('a'),
+    operation: 'generate',
+    at: at(1),
+    expectedRevision: 0,
+  }).ledger;
+  const ordinary = updateSetupAttempt(reserved, {
+    jobId: id('a'),
+    attemptNumber: 1,
+    state: 'unknown',
+    actualCostMicrousd: SETUP_SPEND_LIMITS.attemptCostMicrousd,
+    unknownExposureMicrousd: SETUP_SPEND_LIMITS.attemptCostMicrousd,
+    at: at(2),
+    expectedRevision: 1,
+  }).ledger;
+  const reviewed = updateSetupAttempt(reserved, {
+    jobId: id('a'),
+    attemptNumber: 1,
+    state: 'unknown',
+    actualCostMicrousd: SETUP_SPEND_LIMITS.attemptCostMicrousd,
+    unknownExposureMicrousd: SETUP_SPEND_LIMITS.attemptCostMicrousd,
+    pricingReviewRequired: true,
+    at: at(2),
+    expectedRevision: 1,
+  }).ledger;
+  assert.equal(ordinary.pricingReviewRequired, false);
+  assert.equal(reviewed.pricingReviewRequired, true);
+  assert.notEqual(reviewed.accountingDigest, ordinary.accountingDigest);
+  assert.notEqual(
+    reviewed.active[id('a')].lastTransitionId,
+    ordinary.active[id('a')].lastTransitionId,
+  );
+});
+
+test('second full reservation raises a revision-bound discussion gate before exposure reaches twenty dollars', () => {
+  const first = reserveSetupJob(setup(), {
+    jobId: id('a'),
+    operation: 'generate',
+    at: at(1),
+    expectedRevision: 0,
+  }).ledger;
+  const gated = reserveSetupJob(first, {
+    jobId: id('b'),
+    operation: 'refresh',
+    at: at(2),
+    expectedRevision: 1,
+  });
+  assert.equal(gated.status, 'discussion-required');
+  assert.equal(Object.hasOwn(gated.ledger.active, id('b')), false);
+  assert.equal(gated.ledger.accountingSequence, 1);
+  const discussion = gated.ledger.discussions[gated.ledger.activePolicyId];
+  assert.equal(discussion.status, 'required');
+  assert.ok(discussion.triggerExposureMicrousd >= 20_000_000);
+  const repeated = reserveSetupJob(gated.ledger, {
+    jobId: id('c'),
+    operation: 'generate',
+    at: at(3),
+    expectedRevision: gated.ledger.revision,
+  });
+  assert.equal(repeated.status, 'discussion-required');
+  assert.deepEqual(repeated.ledger, gated.ledger);
+  const firstReleased = updateSetupAttempt(gated.ledger, {
+    jobId: id('a'),
+    attemptNumber: 1,
+    state: 'released',
+    at: at(3),
+    expectedRevision: gated.ledger.revision,
+  }).ledger;
+  const allReleased = updateSetupAttempt(firstReleased, {
+    jobId: id('a'),
+    attemptNumber: 2,
+    state: 'released',
+    at: at(4),
+    expectedRevision: firstReleased.revision,
+  }).ledger;
+  const reducedRequired = removeCompletedSetupJob(allReleased, {
+    jobId: id('a'),
+    expectedRevision: allReleased.revision,
+    at: at(5),
+  });
+  assert.equal(exposureMicrousd(reducedRequired), 0);
+  const stillRequired = reserveSetupJob(reducedRequired, {
+    jobId: id('c'),
+    operation: 'generate',
+    at: at(6),
+    expectedRevision: reducedRequired.revision,
+  });
+  assert.equal(stillRequired.status, 'discussion-required');
+  assert.deepEqual(stillRequired.ledger, reducedRequired);
+
+  const narrowDecision = decideSetupDiscussion(gated.ledger, {
+    policyId: gated.ledger.activePolicyId,
+    triggerRevision: discussion.currentRevision,
+    decisionId: id('e'),
+    decision: 'acknowledged',
+    authorizedThroughMicrousd: exposureMicrousd(gated.ledger),
+    authorizedOperations: ['refresh'],
+    observedExposureMicrousd: exposureMicrousd(gated.ledger),
+    at: at(4),
+    expectedRevision: gated.ledger.revision,
+  });
+  const narrowlySettled = updateSetupAttempt(narrowDecision, {
+    jobId: id('a'),
+    attemptNumber: 1,
+    state: 'settled',
+    actualCostMicrousd: 1,
+    at: at(5),
+    expectedRevision: narrowDecision.revision,
+  }).ledger;
+  const narrowlyReleased = updateSetupAttempt(narrowlySettled, {
+    jobId: id('a'),
+    attemptNumber: 2,
+    state: 'released',
+    at: at(6),
+    expectedRevision: narrowlySettled.revision,
+  }).ledger;
+  const reducedAcknowledged = removeCompletedSetupJob(narrowlyReleased, {
+    jobId: id('a'),
+    expectedRevision: narrowlyReleased.revision,
+    at: at(7),
+  });
+  assert.equal(exposureMicrousd(reducedAcknowledged), 1);
+  for (const operation of ['generate', 'refresh']) {
+    const belowThreshold = reserveSetupJob(reducedAcknowledged, {
+      jobId: id(operation === 'generate' ? 'f' : '0'),
+      operation,
+      at: at(8),
+      expectedRevision: reducedAcknowledged.revision,
+    });
+    assert.equal(belowThreshold.status, 'discussion-required');
+    assert.equal(
+      belowThreshold.ledger.discussions[belowThreshold.ledger.activePolicyId]
+        .currentRevision,
+      discussion.currentRevision + 1,
+    );
+  }
+  const decided = decideSetupDiscussion(gated.ledger, {
+    policyId: gated.ledger.activePolicyId,
+    triggerRevision: discussion.currentRevision,
+    decisionId: id('d'),
+    decision: 'acknowledged',
+    authorizedThroughMicrousd: 25_000_000,
+    authorizedOperations: ['refresh'],
+    observedExposureMicrousd: exposureMicrousd(gated.ledger),
+    at: at(4),
+    expectedRevision: gated.ledger.revision,
+  });
+  const outOfScope = reserveSetupJob(decided, {
+    jobId: id('c'),
+    operation: 'generate',
+    at: at(5),
+    expectedRevision: decided.revision,
+  });
+  assert.equal(outOfScope.status, 'discussion-required');
+  assert.equal(
+    outOfScope.ledger.discussions[outOfScope.ledger.activePolicyId]
+      .currentRevision,
+    discussion.currentRevision + 1,
+  );
+  const second = reserveSetupJob(decided, {
+    jobId: id('b'),
+    operation: 'refresh',
+    at: at(6),
+    expectedRevision: decided.revision,
+  });
+  assert.equal(second.status, 'reserved');
+  assert.ok(exposureMicrousd(second.ledger) <= 25_000_000);
+});
+
+test('discussion history has one ordered decision per completed revision', () => {
+  const first = reserveSetupJob(setup(), {
+    jobId: id('a'),
+    operation: 'generate',
+    at: at(1),
+    expectedRevision: 0,
+  }).ledger;
+  const firstGate = reserveSetupJob(first, {
+    jobId: id('b'),
+    operation: 'refresh',
+    at: at(2),
+    expectedRevision: first.revision,
+  }).ledger;
+  const policyId = firstGate.activePolicyId;
+  const firstDecision = decideSetupDiscussion(firstGate, {
+    policyId,
+    triggerRevision: 1,
+    decisionId: id('c'),
+    decision: 'acknowledged',
+    authorizedThroughMicrousd: SETUP_SPEND_LIMITS.capMicrousd,
+    authorizedOperations: ['refresh'],
+    observedExposureMicrousd: exposureMicrousd(firstGate),
+    at: at(3),
+    expectedRevision: firstGate.revision,
+  });
+  const secondGate = reserveSetupJob(firstDecision, {
+    jobId: id('d'),
+    operation: 'generate',
+    at: at(4),
+    expectedRevision: firstDecision.revision,
+  }).ledger;
+  const secondDecision = decideSetupDiscussion(secondGate, {
+    policyId,
+    triggerRevision: 2,
+    decisionId: id('e'),
+    decision: 'acknowledged',
+    authorizedThroughMicrousd: SETUP_SPEND_LIMITS.capMicrousd,
+    authorizedOperations: ['generate', 'refresh'],
+    observedExposureMicrousd: exposureMicrousd(secondGate),
+    at: at(5),
+    expectedRevision: secondGate.revision,
+  });
+
+  const outOfOrder = structuredClone(secondDecision);
+  outOfOrder.discussions[policyId].decisions.reverse();
+  const missingRequiredDecision = structuredClone(secondGate);
+  missingRequiredDecision.discussions[policyId].decisions = [];
+  const missingCompletedDecision = structuredClone(secondDecision);
+  missingCompletedDecision.discussions[policyId].decisions.shift();
+  const stoppedThenAcknowledged = structuredClone(secondDecision);
+  stoppedThenAcknowledged.discussions[policyId].decisions[0] = {
+    ...stoppedThenAcknowledged.discussions[policyId].decisions[0],
+    triggerRevision: 2,
+    decision: 'stopped',
+    authorizedThroughMicrousd: 0,
+    authorizedOperations: [],
+  };
+  const reopenedAfterStop = structuredClone(secondDecision);
+  reopenedAfterStop.discussions[policyId].decisions[0] = {
+    ...reopenedAfterStop.discussions[policyId].decisions[0],
+    decision: 'stopped',
+    authorizedThroughMicrousd: 0,
+    authorizedOperations: [],
+  };
+  const triggerOverCap = structuredClone(secondGate);
+  triggerOverCap.discussions[policyId].triggerExposureMicrousd =
+    SETUP_SPEND_LIMITS.capMicrousd + 1;
+  for (const malformed of [
+    outOfOrder,
+    missingRequiredDecision,
+    missingCompletedDecision,
+    stoppedThenAcknowledged,
+    reopenedAfterStop,
+    triggerOverCap,
+  ])
+    assert.throws(() => projectSpendLedger(malformed), {
+      code: 'service_unavailable',
+    });
+});
+
+test('discussion decision identifiers are unique across retained policies', () => {
+  const first = reserveSetupJob(setup(), {
+    jobId: id('a'),
+    operation: 'generate',
+    at: at(1),
+    expectedRevision: 0,
+  }).ledger;
+  const firstGate = reserveSetupJob(first, {
+    jobId: id('b'),
+    operation: 'refresh',
+    at: at(2),
+    expectedRevision: first.revision,
+  }).ledger;
+  const firstPolicyId = firstGate.activePolicyId;
+  const firstDecision = decideSetupDiscussion(firstGate, {
+    policyId: firstPolicyId,
+    triggerRevision: 1,
+    decisionId: id('c'),
+    decision: 'acknowledged',
+    authorizedThroughMicrousd: SETUP_SPEND_LIMITS.capMicrousd,
+    authorizedOperations: ['generate', 'refresh'],
+    observedExposureMicrousd: exposureMicrousd(firstGate),
+    at: at(3),
+    expectedRevision: firstGate.revision,
+  });
+  const nextPolicy = createSetupPolicy({
+    deployId: 'deploy-2',
+    pricingAttestation,
+  });
+  const activated = activateSetupPolicy(firstDecision, {
+    ...nextPolicy,
+    at: at(4),
+    expectedRevision: firstDecision.revision,
+  });
+  const secondGate = reserveSetupJobRaw(activated, {
+    jobId: id('d'),
+    operation: 'generate',
+    at: at(5),
+    expectedRevision: activated.revision,
+    expectedPolicyId: nextPolicy.policyId,
+    expectedDeployId: 'deploy-2',
+    expectedPricingAttestation: pricingAttestation,
+  }).ledger;
+  const secondDecision = decideSetupDiscussion(secondGate, {
+    policyId: nextPolicy.policyId,
+    triggerRevision: 1,
+    decisionId: id('e'),
+    decision: 'acknowledged',
+    authorizedThroughMicrousd: SETUP_SPEND_LIMITS.capMicrousd,
+    authorizedOperations: ['generate', 'refresh'],
+    observedExposureMicrousd: exposureMicrousd(secondGate),
+    at: at(6),
+    expectedRevision: secondGate.revision,
+  });
+  const duplicate = structuredClone(secondDecision);
+  duplicate.discussions[nextPolicy.policyId].decisions[0].decisionId =
+    duplicate.discussions[firstPolicyId].decisions[0].decisionId;
+  assert.throws(() => projectSpendLedger(duplicate), {
+    code: 'service_unavailable',
+  });
+});
+
+test('stopped discussion is permanent and malformed or oversized ledgers fail closed', () => {
+  const first = reserveSetupJob(setup(), {
+    jobId: id('a'),
+    operation: 'generate',
+    at: at(1),
+    expectedRevision: 0,
+  }).ledger;
+  const gated = reserveSetupJob(first, {
+    jobId: id('b'),
+    operation: 'refresh',
+    at: at(2),
+    expectedRevision: 1,
+  }).ledger;
+  const discussion = gated.discussions[gated.activePolicyId];
+  const stopped = decideSetupDiscussion(gated, {
+    policyId: gated.activePolicyId,
+    triggerRevision: discussion.currentRevision,
+    decisionId: id('e'),
+    decision: 'stopped',
+    authorizedThroughMicrousd: 0,
+    authorizedOperations: [],
+    observedExposureMicrousd: exposureMicrousd(gated),
+    at: at(3),
+    expectedRevision: gated.revision,
+  });
+  assert.equal(
+    reserveSetupJob(stopped, {
+      jobId: id('b'),
+      operation: 'refresh',
+      at: at(4),
+      expectedRevision: stopped.revision,
+    }).status,
+    'stopped',
+  );
+  assert.throws(() => projectSpendLedger({ ...stopped, unexpected: true }), {
+    code: 'service_unavailable',
+  });
+  assert.throws(
+    () =>
+      projectSpendLedger({
+        ...stopped,
+        policies: Object.fromEntries(
+          Array.from({ length: 17 }, (_, index) => [
+            `policy-${index}`,
+            stopped.policies[stopped.activePolicyId],
+          ]),
+        ),
+      }),
+    { code: 'service_unavailable' },
+  );
+});

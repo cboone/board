@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  readAnalysisEnvironment,
   readEnvironment,
   readPublicOrigin,
+  requirePublishedDeploy,
   requireProductionContext,
   requireCanonicalOrigin,
 } from '../lib/environment.mjs';
@@ -42,6 +44,18 @@ test('configuration enforces the fixed numeric owner and complete bounded keyrin
     'https://tracker-boards.example/api/auth/callback',
   );
 });
+
+test('analysis credentials are read separately only from the server environment', () => {
+  assert.equal(
+    readAnalysisEnvironment({ ANTHROPIC_API_KEY: 'synthetic-key' }).apiKey,
+    'synthetic-key',
+  );
+  for (const value of [undefined, '', 'line\nbreak', 'x'.repeat(4097)])
+    assert.throws(() => readAnalysisEnvironment({ ANTHROPIC_API_KEY: value }), {
+      code: 'service_unavailable',
+    });
+  assert.equal(Object.hasOwn(readEnvironment(env()), 'apiKey'), false);
+});
 test('public guards reject unknown deployment contexts and noncanonical HTTPS origins', () => {
   for (const context of [
     undefined,
@@ -53,6 +67,20 @@ test('public guards reject unknown deployment contexts and noncanonical HTTPS or
       code: 'forbidden',
     });
   requireProductionContext({ deploy: { context: 'production' } });
+  for (const context of [
+    { deploy: { context: 'production' } },
+    { deploy: { context: 'production', published: false, id: 'deploy-1' } },
+    { deploy: { context: 'production', published: true, id: '../deploy' } },
+  ])
+    assert.throws(() => requirePublishedDeploy(context), {
+      code: 'forbidden',
+    });
+  assert.equal(
+    requirePublishedDeploy({
+      deploy: { context: 'production', published: true, id: 'deploy-1' },
+    }),
+    'deploy-1',
+  );
   for (const origin of [
     'http://example.com',
     'https://user@example.com',

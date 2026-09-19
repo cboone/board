@@ -667,17 +667,66 @@ export function createAuth({
     throw new BoardError('service_unavailable');
   }
 
-  async function acquireToken({ session, budget }) {
-    await recheckOwner({ session, budget });
+  async function checkJobAuthorization({
+    ownerId,
+    authorizationEpoch,
+    generation,
+    budget,
+    allowRefreshWait = false,
+  }) {
+    if (
+      ownerId !== config.ownerId ||
+      !integer(authorizationEpoch) ||
+      authorizationEpoch < 1
+    )
+      throw new BoardError('source_authorization_required');
+    const account = await accountRead(budget);
+    const acquisitionMayWaitForRefresh =
+      allowRefreshWait &&
+      generation === undefined &&
+      account?.value.state === 'refreshing' &&
+      account.value.authorizationEpoch === authorizationEpoch;
+    if (
+      !account ||
+      account.value.authorizationEpoch !== authorizationEpoch ||
+      (account.value.state !== 'active' && !acquisitionMayWaitForRefresh) ||
+      (account.value.publicationClaim &&
+        account.value.publicationAcknowledgedAt === undefined)
+    )
+      throw new BoardError('source_authorization_required');
+    if (
+      generation !== undefined &&
+      (!integer(generation) || account.value.generation !== generation)
+    )
+      throw new BoardError('provider_unavailable');
+    return { id: account.value.user.id, login: account.value.user.login };
+  }
+
+  async function recheckJobAuthorization(options) {
+    return checkJobAuthorization(options);
+  }
+
+  async function acquireTokenForAuthority({
+    authorizationEpoch,
+    session = null,
+    budget,
+  }) {
+    if (session) await recheckOwner({ session, budget });
+    else
+      await checkJobAuthorization({
+        ownerId: config.ownerId,
+        authorizationEpoch,
+        budget,
+        allowRefreshWait: true,
+      });
     let collisions = 0;
     while (true) {
       assert(budget);
       const stored = await accountRead(budget);
-      if (
-        !stored ||
-        stored.value.authorizationEpoch !== session.authorizationEpoch
-      )
-        throw new BoardError('session_required');
+      if (!stored || stored.value.authorizationEpoch !== authorizationEpoch)
+        throw new BoardError(
+          session ? 'session_required' : 'source_authorization_required',
+        );
       const record = stored.value;
       if (record.state === 'reauthorization-required')
         throw new BoardError('source_authorization_required');
@@ -825,7 +874,14 @@ export function createAuth({
         );
         if (!confirmation.modified) continue;
         publicationAcknowledged = true;
-        await recheckOwner({ session, budget });
+        if (session) await recheckOwner({ session, budget });
+        else
+          await recheckJobAuthorization({
+            ownerId: config.ownerId,
+            authorizationEpoch,
+            generation: refreshed.generation,
+            budget,
+          });
         return {
           ownerId: config.ownerId,
           accessToken: refreshed.accessToken,
@@ -845,6 +901,20 @@ export function createAuth({
         throw new BoardError('source_authorization_required');
       }
     }
+  }
+
+  async function acquireToken({ session, budget }) {
+    return acquireTokenForAuthority({
+      authorizationEpoch: session.authorizationEpoch,
+      session,
+      budget,
+    });
+  }
+
+  async function acquireJobToken({ ownerId, authorizationEpoch, budget }) {
+    if (ownerId !== config.ownerId)
+      throw new BoardError('source_authorization_required');
+    return acquireTokenForAuthority({ authorizationEpoch, budget });
   }
 
   async function noteTokenRejected({ lease, budget }) {
@@ -961,7 +1031,9 @@ export function createAuth({
     requireAuthorizedOwner,
     requireCsrf,
     acquireToken,
+    acquireJobToken,
     recheckOwner,
+    recheckJobAuthorization,
     logout,
     noteTokenRejected,
     recordSourceAuthorization,

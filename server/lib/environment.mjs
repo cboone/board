@@ -12,6 +12,13 @@ export function requireProductionContext(context) {
     throw new BoardError('forbidden');
 }
 
+export function requirePublishedDeploy(context) {
+  requireProductionContext(context);
+  if (context.deploy.published !== true || !identifier(context.deploy.id))
+    throw new BoardError('forbidden');
+  return context.deploy.id;
+}
+
 export function readPublicOrigin(env) {
   try {
     const value = env.BOARD_APP_ORIGIN;
@@ -90,4 +97,16 @@ export function readEnvironment(env) {
     callbackUrl: `${origin}/api/auth/callback`,
     keyring: Object.freeze({ currentId: keyId, keys }),
   });
+}
+
+export function readAnalysisEnvironment(env) {
+  const apiKey = env.ANTHROPIC_API_KEY;
+  if (
+    typeof apiKey !== 'string' ||
+    apiKey.length < 1 ||
+    apiKey.length > 4096 ||
+    /[\r\n\0]/u.test(apiKey)
+  )
+    fail();
+  return Object.freeze({ apiKey });
 }
