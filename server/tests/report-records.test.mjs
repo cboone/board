@@ -88,7 +88,7 @@ test('failed or stale publication cannot rotate a newer successful report', () =
         expectedCurrentReportId: null,
         current: pointer(17),
       }),
-    { code: 'source_unstable' },
+    { code: 'report_state_changed' },
   );
   const claimed = claimRepositoryJob(state, {
     jobId,
@@ -103,7 +103,56 @@ test('failed or stale publication cannot rotate a newer successful report', () =
         expectedCurrentReportId: 'f'.repeat(64),
         current: pointer(17),
       }),
-    { code: 'source_unstable' },
+    { code: 'report_state_changed' },
+  );
+});
+
+test('repository completion binds the active job, operation, and publication state', () => {
+  const claimed = claimRepositoryJob(createRepositoryState(repository(17)), {
+    jobId,
+    operation: 'generate',
+    expectedCurrentReportId: null,
+    admittedAt: at(1),
+  });
+  const attempt = {
+    jobId,
+    operation: 'generate',
+    status: 'failed',
+    completedAt: at(5),
+    errorCode: 'analysis_provider_unavailable',
+  };
+  assert.throws(
+    () =>
+      clearRepositoryJob(claimed, {
+        jobId,
+        lastAnalysisAttempt: { ...attempt, jobId: 'f'.repeat(64) },
+      }),
+    { code: 'service_unavailable' },
+  );
+  assert.throws(
+    () =>
+      clearRepositoryJob(claimed, {
+        jobId,
+        lastAnalysisAttempt: { ...attempt, operation: 'refresh' },
+      }),
+    { code: 'service_unavailable' },
+  );
+  assert.throws(
+    () =>
+      clearRepositoryJob(claimed, {
+        jobId,
+        lastAnalysisAttempt: {
+          ...attempt,
+          status: 'succeeded',
+          errorCode: null,
+        },
+      }),
+    { code: 'service_unavailable' },
+  );
+  assert.equal(
+    clearRepositoryJob(claimed, { jobId, lastAnalysisAttempt: attempt })
+      .lastAnalysisAttempt.errorCode,
+    'analysis_provider_unavailable',
   );
 });
 

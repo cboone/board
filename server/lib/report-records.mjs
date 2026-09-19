@@ -27,7 +27,11 @@ const ANALYSIS_STATES = new Set([
 ]);
 const SAFE_ERRORS = new Set([
   'analysis_ambiguous',
+  'analysis_input_too_large',
   'analysis_output_invalid',
+  'analysis_provider_rate_limited',
+  'analysis_provider_unavailable',
+  'analysis_sensitive_input',
   'budget_discussion_required',
   'budget_exhausted',
   'pricing_review_required',
@@ -205,7 +209,9 @@ function projectLastAttempt(value) {
     !OPERATIONS.has(value.operation) ||
     !ANALYSIS_STATES.has(value.status) ||
     !nullable(value.errorCode, (item) => SAFE_ERRORS.has(item)) ||
-    (value.status === 'succeeded' && value.errorCode !== null)
+    (value.status === 'succeeded'
+      ? value.errorCode !== null
+      : value.errorCode === null)
   )
     fail();
   iso(value.completedAt);
@@ -479,7 +485,7 @@ export function claimRepositoryJob(
       (state.current === null ||
         expectedCurrentReportId !== state.current.reportId))
   )
-    throw new BoardError('source_unstable');
+    throw new BoardError('report_state_changed');
   const next = clone(state);
   next.activeJob = {
     jobId,
@@ -496,14 +502,18 @@ export function rotateRepositoryReport(
   { jobId, expectedCurrentReportId, current },
 ) {
   const state = projectRepositoryState(input);
+  const projectedCurrent = projectReportPointer(current, state.repository.id);
   if (
     state.activeJob?.jobId !== jobId ||
+    state.activeJob.expectedCurrentReportId !== expectedCurrentReportId ||
     (state.current?.reportId ?? null) !== expectedCurrentReportId
   )
-    throw new BoardError('source_unstable');
+    throw new BoardError('report_state_changed');
+  if (projectedCurrent.reportId === expectedCurrentReportId)
+    throw new BoardError('report_state_changed');
   const next = clone(state);
   next.previous = next.current;
-  next.current = projectReportPointer(current, state.repository.id);
+  next.current = projectedCurrent;
   next.revision += 1;
   return projectRepositoryState(next);
 }
@@ -511,9 +521,25 @@ export function rotateRepositoryReport(
 export function clearRepositoryJob(input, { jobId, lastAnalysisAttempt }) {
   const state = projectRepositoryState(input);
   if (state.activeJob?.jobId !== jobId) fail();
+  const projectedAttempt = projectLastAttempt(lastAnalysisAttempt);
+  if (
+    projectedAttempt.jobId !== state.activeJob.jobId ||
+    projectedAttempt.operation !== state.activeJob.operation
+  )
+    fail();
+  const published =
+    state.current !== null &&
+    state.current.reportId !== state.activeJob.expectedCurrentReportId;
+  if (
+    (projectedAttempt.status === 'succeeded' && !published) ||
+    (projectedAttempt.status !== 'succeeded' &&
+      projectedAttempt.status !== 'superseded' &&
+      published)
+  )
+    fail();
   const next = clone(state);
   next.activeJob = null;
-  next.lastAnalysisAttempt = projectLastAttempt(lastAnalysisAttempt);
+  next.lastAnalysisAttempt = projectedAttempt;
   next.revision += 1;
   return projectRepositoryState(next);
 }
