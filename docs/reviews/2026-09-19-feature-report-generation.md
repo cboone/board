@@ -309,6 +309,15 @@ phase-plan documents.
     unknown accounting. Deterministic tests cross the deadline between the
     ownership and signal clock reads; restoring the one-millisecond fallback
     makes both tests dispatch a provider request after expiry.
+20. **Refresh analysis continuity:** Saved reports may omit empty `contention`
+    and `notes` sections, so the advisory prior-analysis projection now carries
+    each section only when the stored report contains it. The projection also
+    reads saved issue uncertainty from its report-domain `uncertainty` object
+    before mapping it back to the flat provider advisory fields. Deterministic
+    tests cover neither optional section, each section independently,
+    reason-only uncertainty, uncertainty with a reference, and an exact-identity
+    worker refresh with omitted sections. Restoring the prior code makes valid
+    reports fail with `source_incomplete` and drops saved uncertainty.
 
 ## Plan compliance
 
@@ -383,8 +392,10 @@ Current-tree validation includes:
   below-threshold scope enforcement, and deploy-rollover idempotency;
 - paid-boundary tests that revoke authorization as primary and corrective
   preflight reads complete;
+- refresh-continuity tests covering omitted optional report sections, nested
+  uncertainty, and the exact-identity worker path;
 - `npm test`: 182 of 182 Vitest checks;
-- `npm run test:server`: 459 of 459 native backend checks;
+- `npm run test:server`: 462 of 462 native backend checks;
 - `npm run test:composition`: 5 of 5 composition checks;
 - `npm run test:browser:production`: 189 of 189 checks across Chromium,
   Firefox, and WebKit;
