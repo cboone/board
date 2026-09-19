@@ -104,6 +104,12 @@ gathers GitHub data in memory, performs free token admission, crosses a durable
 at-most-once paid boundary, validates the result, writes an immutable successful
 report version, and conditionally rotates the repository pointer.
 
+Implement the worker as `server/functions/report-job.mjs` with an explicit
+`config.background: true` export, following Netlify's current
+[Background Functions guidance](https://docs.netlify.com/build/functions/background-functions/).
+Invoke its default `/.netlify/functions/report-job` endpoint directly; do not
+route it through `/api/*` or use the legacy filename suffix.
+
 The browser polls Board state. A Netlify background response is only dispatch
 evidence because the platform returns an empty `202` before work completes.
 Netlify may deliver the same background invocation again after failure or
@@ -190,6 +196,39 @@ schema property names, descriptions, regular expressions, or provider headers.
 Do not fetch an external URL, use a provider tool, or follow repository text as
 an instruction.
 
+Apply versioned `SOURCE_SAFETY_POLICY_V1` to every provider-bound GitHub string
+after strict UTF-8 decoding and the existing path, type, and size filters, but
+before selection, serialization, token counting, or a Messages request. The
+policy has fixed rule IDs and bounded patterns for PEM/private-key headers;
+recognized GitHub, Anthropic, OpenAI, Slack, and AWS credential prefixes;
+credentials embedded in URL authority; and assignment or header forms whose
+case-insensitive key is `api_key`, `apikey`, `access_token`, `auth_token`,
+`client_secret`, `password`, `passwd`, `secret`, `private_key`, or
+`authorization` and whose bounded value is not a documented placeholder.
+Placeholders are limited to empty values, `example`, `test`, `dummy`,
+`redacted`, `changeme`, bounded repeated dummy characters, angle-bracket
+placeholders, and environment-variable references. Keep the exact patterns,
+maximum match length, and placeholder grammar in one reviewed constant and
+expose only safe rule IDs and counts.
+
+Known credential paths and their descendants never enter the provider's
+`repositoryTree`, even as metadata. Retain only their path/blob identities in
+the complete source fingerprint so a later change still affects freshness.
+Do not use an entropy-only heuristic.
+
+An invalid UTF-8, binary, oversized, or safety-matching optional file is omitted
+as a whole. A safety-matching or oversized optional comment is likewise
+omitted. GitHub JSON, including comment text, must already pass the transport's
+strict whole-response UTF-8 and JSON decoding; a malformed response fails source
+collection instead of salvaging individual items. Omission provenance records
+only canonical identity, existing content hash, safe rule ID, and omission
+count. A match in mandatory provider input, including an issue title or body,
+milestone or label text, pull-request title or description, branch metadata,
+reference fact, limitation, or prior analysis, fails before token counting. Use
+safe code `analysis_sensitive_input`; never truncate, redact, or override the
+match in this release. The matched text, value, and surrounding content never
+enter a durable record, response, or log.
+
 For refresh, `priorAnalysis` projects the current validated report's relations,
 uncertainty, lanes, starts, contention, and reasons. It omits canonical titles,
 milestones, progress, sync, and provenance. Treat it as advisory continuity;
@@ -205,29 +244,50 @@ projection or its structural output floor exceeds a bound, fail before a paid
 call.
 
 Only issue comments and selected file contents are optional provider context.
-Build one deterministic candidate prefix: round-robin comments by issue number,
-newest comment first with ID tie-breaking; files by reviewed relevance class and
-then path; and alternating comment/file candidates while either remains. Include
-only complete candidates. Apply named per-item, aggregate-class, complete HTTP
-request-byte, and token bounds. After byte admission, use bounded binary search
-over the prefix with the free count endpoint and send the largest prefix proven
-at or below 100,000 input tokens. The final counted and paid requests must match
+Build one deterministic candidate prefix. Sort issues by number ascending; sort
+each issue's comments by `updatedAt` descending and numeric ID ascending; then
+take one comment from each nonempty issue in that issue order on every
+round-robin pass. Classify files in this priority order: a repository-relative
+path explicitly named by issue or comment text through the versioned path
+extractor; repository guidance (`README*`, `AGENTS.md`, then `CLAUDE.md`);
+package, build, and test configuration recognized by the existing
+`CONFIG_FILE` policy; then every remaining Phase 2 selected path. Sort ties with
+`compareSourceKeys(path)`. Preserve the class in transient collection metadata
+or recompute it from the matched snapshot with the same versioned extractor.
+Replace the collector's global path-sort admission with this class order before
+its selected-file count and byte limits, so referenced and guidance files can
+enter the bounded fetched set.
+
+Interleave one comment first, then one file, repeating while both classes have
+candidates; when one is exhausted, append the other in its existing order.
+Include only complete candidates. Apply named per-item, aggregate-class, and
+complete HTTP request-byte bounds before counting. Count the mandatory request
+plus the complete byte-admitted prefix. If it exceeds 100,000 input tokens,
+replace the prefix length with its floor half and count again until the first
+exactly counted passing prefix is found. Count the mandatory-only request at
+length zero and fail if it does not pass. This performs at most
+`ceil(log2(candidateCount + 1)) + 1` count requests and does not claim the
+largest possible passing prefix. The final counted and paid requests must match
 in every input-affecting field.
 
 Persist an exact `analysisSelection` provenance manifest with version, mandatory
 manifest hash, selected comment IDs/body hashes, selected paths/blob IDs,
-selected and omitted counts, named limits, limited flag, and limitations. Never
-persist comment bodies or file contents. Optional omission does not change the
-complete source fingerprint, so changes to omitted context still affect the
-later freshness check.
+file relevance classes, safe omission rule IDs, selected and omitted counts,
+the exact tried prefix lengths and count results, named limits, limited flag,
+and limitations. Never persist comment bodies or file contents. Optional
+omission does not change the complete source fingerprint, so changes to omitted
+context still affect the later freshness check.
 
 Use these reviewed setup-calibration bounds initially:
 
 - At most 100,000 tokens from the free count endpoint for the exact request.
 - `max_tokens: 16384`, shared by adaptive thinking and visible JSON.
-- A hard serialized UTF-8 request-size bound recorded as a named server
-  constant and covered at its boundary. Confirm the provider's current request
-  limit before selecting that byte value; never assume the Netlify inbound
+- `BOARD_PROVIDER_REQUEST_MAX_BYTES = 8,388,608` for the complete serialized
+  UTF-8 JSON body of both count and Messages requests, covered at its exact
+  boundary. This app cap stays below Anthropic's current 32 MB limit for both
+  endpoints, as documented in the official
+  [API overview](https://platform.claude.com/docs/en/api/overview). Reverify that
+  upstream limit before live calibration; never assume the Netlify inbound
   limit governs an outbound provider request.
 - A structural-output floor check based on the actual issue count and required
   lane partition. Reject a request that cannot plausibly encode all issues
@@ -261,6 +321,9 @@ The fixed policy requires the model to:
 - Write concrete reasons in neutral language without em dashes, work estimates,
   effort proxies, or unsupported certainty. Preserve canonical GitHub titles
   verbatim; these prose restrictions apply only to model-authored fields.
+- Never quote or reproduce source bodies, comments, pull-request descriptions,
+  milestone or label descriptions, reference text, file content, or prior
+  analysis. Summarize only the evidence needed for an analysis conclusion.
 - Return analysis fields only. It cannot return or override repository identity,
   source IDs, canonical titles, milestones, progress, sync, fingerprint, or
   provenance.
@@ -312,6 +375,7 @@ Contention
 
 Claim
   name: string
+  query: string
   issues: integer[]
 
 Notes
@@ -321,7 +385,8 @@ Notes
 ```
 
 All properties are required to stay within provider grammar limits. Empty
-strings, empty arrays, `sameBranchAs:0`, and `kind:"none"` are wire sentinels;
+strings, empty arrays, `sameBranchAs:0`, `kind:"none"`, and an empty claim
+`query` are wire sentinels;
 the strict application validator controls where they are legal. Use only local,
 nonrecursive schema definitions. Keep `issueAnalysis` sparse; every issue still
 appears once in `lanes[].issues`.
@@ -343,16 +408,35 @@ sentinel limits than the provider schema. The trusted assembler then:
 4. Starts from the trusted inventory's report identity, sync, and issue records.
    It merges only allowed analysis fields into canonical issues.
 5. Translates wire references, removes explicit sentinels, and copies allowed
-   lanes, starts, contention, and prose without semantic repair. Rejects model
-   prose containing prohibited em dashes or estimate patterns and applies
-   bounded string/count checks; human quality acceptance still evaluates
-   concreteness and neutral wording that deterministic checks cannot prove.
+   lanes, starts, contention, and prose without semantic repair. A nonempty
+   claim query is validated and copied as the exact rendered search; an empty
+   query becomes the report contract's absent value. Comparison uses the
+   renderer's effective search, `claim.query || "is:open " + claim.name`, so an
+   absent query and an explicit default are reader-equivalent. Rejects model prose
+   containing prohibited em dashes or estimate patterns and applies bounded
+   string/count checks; human quality acceptance still evaluates concreteness
+   and neutral wording that deterministic checks cannot prove.
 6. Runs `validateReport(report, inventory)`, then `deriveReport(report)`, and
    verifies that the derived display/count state is safe for the renderer.
 7. Binds the candidate to the exact source fingerprint and job generation that
    produced it. A later source check cannot relabel the analysis as newer.
 
 Validation failure is an analysis failure. It never produces a partial report.
+
+Before trusted assembly, apply `NO_VERBATIM_POLICY_V1` to every model-authored
+persisted prose field. Build its transient corpus only from admitted issue
+bodies, comments, pull-request descriptions, milestone and label descriptions,
+reference text, selected file content, and prior-analysis prose. Normalize both
+sides with Unicode NFC, CRLF-to-LF conversion, case folding, and collapsed
+Unicode whitespace. Reject a candidate when model prose contains any normalized
+source line of at least 32 Unicode code points or any contiguous normalized
+source window of 64 Unicode code points. Implement the check with bounded
+line/window hashes over already bounded inputs, then confirm any hash match by
+exact normalized comparison. Canonical source fields inserted by the server,
+including titles and display identities, are not model prose and are outside
+this corpus check. Apply `SOURCE_SAFETY_POLICY_V1` to model output as well,
+regardless of match length. A violation is a strict output-validation failure;
+no raw match enters its safe error, job, report version, or log.
 
 ## Provider transport and paid-attempt policy
 
@@ -390,10 +474,16 @@ usage from `message_start`; replace output usage with the latest cumulative
 deltas. Missing, decreasing, contradictory, or incomplete final usage makes the
 attempt financially unknown and retains its full reservation. Select content by
 block type and never persist thinking blocks, signatures, SSE frames, raw model
-JSON, the provider request, or provider error bodies. Set the provider timeout
-far enough below Netlify's 15-minute worker limit to leave a fixed finalization
-margin, then abort the stream and durably classify the attempt within that
-margin when execution remains available.
+JSON, the provider request, or provider error bodies. From invocation start,
+stop provider work at 810,000 ms and reserve the final 90,000 ms of Netlify's
+15-minute limit for durable classification and bookkeeping. Bound complete
+source collection to 90,000 ms, all count requests together to 60,000 ms, and
+each Messages attempt to 300,000 ms or the earlier provider cutoff. Cross a paid
+boundary only when its full configured attempt window and the finalization
+margin remain. If a correction cannot start within that rule, release its
+never-dispatched reservation and fail with the primary's safe validation code.
+Abort a live stream at its attempt deadline and durably classify the outcome as
+ambiguous within the remaining margin when execution remains available.
 
 Allow at most one corrective attempt during setup calibration. Reserve both
 attempt ceilings atomically before the first dispatch. A corrective attempt is
@@ -421,6 +511,12 @@ record a bounded-validity pricing attestation tied to the setup policy version,
 deploy ID, exact rates, source, and verification time, and require that
 attestation at admission. A mismatch or expired attestation disables paid
 dispatch and returns a sanitized configuration error.
+
+The model metadata endpoint does not attest pricing. Keep the manually verified
+official rates, billed-feature exclusions, source URL, verification time, and
+valid-through time in a reviewed immutable policy constant; compare that exact
+constant with the durable policy and runtime deploy. Use model metadata only
+for model identity and supported positive limits.
 
 ## Durable keys and schemas
 
@@ -475,22 +571,47 @@ one.
 
 Use strongly read `board-reports` key `owners/99961/catalog` as the bounded
 discovery root. Its validated schema contains `schemaVersion`, `ownerId`,
-`revision`, `updatedAt`, and an ID-sorted `repositories[]` array. Each entry
-contains only repository ID, last trusted display identity, repository-state
-key, catalog-entry creation time, and safe current-report summary metadata.
+`revision`, `membershipRevision`, `updatedAt`, and an ID-sorted
+`repositories[]` array. Each entry contains only repository ID, last trusted
+display identity, repository-state key, catalog-entry creation time, and safe
+current-report summary metadata. Permit at most 1,000 entries and 1,048,576
+serialized UTF-8 bytes, including the complete record. Validate both exact
+ceilings before each conditional write and after each read.
 
 Before initial Generate admission can reserve or dispatch paid work, CAS-upsert
 the repository entry and resolve a lost write acknowledgement with a strong
 read. Concurrent upserts merge by numeric repository ID and preserve every
-existing entry; this release never deletes catalog membership. Therefore every
-publishable report already has a discoverable root. `GET /api/reports` reads the
-catalog, then strongly reads each referenced repository state, filters entries
-without a current report, and projects current state rather than trusting stale
-summary metadata. Publication and direct report reads idempotently repair a
-stale entry after pointer rotation. Normal discovery never relies on Blob
-prefix listing; a bounded operator audit may compare prefixes only as recovery
-evidence. Test concurrent first reports, a lost catalog CAS acknowledgement,
-publication interruption, later source deletion, and direct-route repair.
+existing entry; increment `membershipRevision` only when membership changes.
+This release never deletes catalog membership. Therefore every publishable
+report already has a discoverable root. At either catalog ceiling, a Generate
+for an uncataloged repository fails with `report_catalog_full` before job
+creation, repository claim, or spend reservation. Existing members may still
+generate or refresh, and no current or historical report is deleted.
+
+`GET /api/reports` pages over at most 50 catalog entries, strongly reads at
+most those 50 repository states, filters entries without a current report, and
+projects current state rather than trusting stale summary metadata. It repairs
+at most five stale safe catalog summaries per request. A versioned base64url
+cursor contains the validated membership revision/digest and last numeric
+repository ID; it contains no authority or secret. Reject malformed cursors and
+return `report_catalog_changed` when membership changed so the browser can
+restart from page one. Summary-only repairs do not change the membership
+digest. Return `nextCursor` after the last examined entry, including when a
+page contains no saved reports. The browser deduplicates by repository ID and
+follows at most 20 pages per pass; after one membership-change restart it stops
+after another 20 pages and shows a retryable list error.
+
+Publication and direct report reads idempotently repair a stale entry after
+pointer rotation within the same five-repair request budget. If projected
+repair would exceed the catalog byte cap, leave its summary stale and still
+return state-derived data. Normal discovery never relies on Blob prefix
+listing; a bounded operator audit may compare prefixes only as recovery
+evidence. Test concurrent first reports, a lost
+catalog CAS acknowledgement, publication interruption, later source deletion,
+direct-route repair, exact 1,000-entry and 1,048,576-byte limits, 50-entry pages,
+empty filtered pages, malformed and stale cursors, a stale later-page entry,
+both browser pass bounds, and uncataloged versus existing-member behavior at
+each ceiling.
 
 ### Successful report version
 
@@ -540,11 +661,13 @@ closed issues; title, displayed milestone, assignment, progress, hard blocker,
 blocker reason, soft ordering, uncertainty, and branch-unit changes; lane membership,
 addition, removal, mode, issue order, lane order, name, ownership, and note;
 start membership, order, reason, and footprint; contention claim membership,
-issue order, claim order, row label, and displayed milestone labels; summary,
-notes, and displayed short titles. Initial generation has an explicit
-`initial-generation` comparison state, distinct from a refresh with no
-reader-visible changes. Render this saved comparison separately from source
-freshness so a later free check cannot rewrite what changed at analysis time.
+issue order, claim order, claim name, effective rendered claim search, row label,
+and displayed milestone labels; summary, notes, and displayed short titles.
+The trusted report stores every claim's `query`, using the report contract's
+absent value after the empty wire sentinel. Initial generation has an explicit
+`initial` comparison state, distinct from a refresh with no reader-visible
+changes. Render this saved comparison separately from source freshness so a
+later free check cannot rewrite what changed at analysis time.
 
 Define comparison `kind` as a closed enum and validate kind-specific optional
 fields and `before`/`after` shapes. Bound entry count, nested arrays, text, depth,
@@ -665,14 +788,18 @@ strong read proves its own token and unexpired deadline; all other invocations
 exit. Every later worker CAS requires that same token. A paid boundary never
 becomes lease-recoverable.
 
-When a stream ends definitively, first CAS the owned attempt to persist its
-terminal class and complete usage and move the job to `validating`; only then
-validate or assemble in memory. If the first output is invalid but eligible for
-correction, persist its bounded safe validation classification, settle that
-attempt in the ledger while retaining the full second reservation, resolve any
-uncertain ledger acknowledgement by strong read, and only then fence attempt two
-as `corrective-in-flight`. An invocation never dispatches the correction while
-attempt-one accounting is uncertain.
+When a stream ends definitively, first CAS the token-owned attempt to persist
+its terminal class and complete usage. Move `primary-in-flight` to
+`primary-response-complete` or `corrective-in-flight` to
+`corrective-response-complete`. The original invocation then separately
+CAS-claims its finalization token and moves to `validating-primary` or
+`validating-corrective` before validating or assembling in memory. If the first
+output is invalid but eligible for correction, persist its bounded safe
+validation classification, settle that attempt in the ledger while retaining
+the full second reservation, resolve any uncertain ledger acknowledgement by
+strong read, and only then fence attempt two as `corrective-in-flight`. An
+invocation never dispatches the correction while attempt-one accounting is
+uncertain.
 
 State progression is explicit and monotonic:
 
@@ -744,10 +871,10 @@ unknown
       number, exposureMicrousd, recordedAt
 discussions
   <policy-id>
-    status, triggeredAt, triggerRevision, triggerExposureMicrousd
-    acknowledgement
-      revision, acknowledgedAt, observedExposureMicrousd
-      decisionId, authorizedThroughMicrousd, authorizedOperations
+    status, currentRevision, triggeredAt, triggerExposureMicrousd
+    decisions[]
+      triggerRevision, decidedAt, observedExposureMicrousd
+      decisionId, decision, authorizedThroughMicrousd, authorizedOperations
 pricingReviewRequired
 updatedAt
 ```
@@ -773,6 +900,20 @@ trigger revision. The acknowledgement records the observed exposure, concrete
 remaining setup scope, and a ceiling no greater than $25; it never raises or
 resets the cap. A later proposal beyond its authorized ceiling triggers a new
 discussion revision.
+
+A revision-bound `required -> stopped` decision permanently rejects every later
+paid setup admission under that immutable price policy. An acknowledged
+decision admits only an operation listed in `authorizedOperations` and only
+when exposure including the proposal is at or below
+`authorizedThroughMicrousd` and the lifetime $25 cap. Validate the exact policy
+ID, trigger revision, current ledger revision, operation enum, ceiling, and
+aggregate exposure in the same conditional ledger write that reserves spend.
+An acknowledgement for one policy never authorizes a later policy; each new
+policy has its own discussion state while all policies share the lifetime cap.
+Keep `decisions[]` append-only, ordered by trigger revision, unique by bounded
+decision ID, and limited to 32 entries per policy. A proposal outside an
+acknowledged operation or ceiling advances that policy to a new `required`
+revision without dispatch. A stopped policy cannot advance or be reopened.
 
 Preserve every immutable price policy and its discussion decision. Changing
 `activePolicyId` never reinterprets, releases, or deletes earlier spend or
@@ -827,23 +968,32 @@ The synchronous admission route performs these steps in order:
 1. Enforce production/published/canonical-origin guards, authorized owner
    session, CSRF, request shape, idempotency key, operation, and exact expected
    current report.
-2. Verify current GitHub eligibility and access using a complete matched source
-   collection, or use a just-completed request-bound snapshot only within the
-   same invocation. Do not persist the snapshot for handoff.
+2. Run the bounded lightweight `pinRepository` access check: list the current
+   user's installations, list the repositories granted to matching App
+   installations, require the numeric owner and repository membership, fetch
+   the repository directly, compare its identity and eligibility to the list,
+   and fetch its named default branch tip. This proves current App installation,
+   grant, owner, nonfork, nonarchived, repository identity, access, default
+   branch, and tip without fetching issues, comments, pulls, trees, or files.
+   Retain only the safe repository facts needed by this invocation.
 3. CAS-upsert and strongly confirm the owner-catalog entry before initial
    Generate can proceed.
 4. Create an inert job with `onlyIfNew`, including deterministic report/version
    identity. For an existing job, validate the complete idempotency tuple and
    run state-specific reconciliation before returning its safe view.
 5. CAS the repository state to claim `activeJob`. A competing active job wins;
-   release or avoid any reservation for the losing job.
+   terminally fence the losing inert job before returning and avoid any
+   reservation for it.
 6. CAS the applicable ledger to reserve every possible attempt, then CAS the
    job to `reserved` with the exact policy, ledger revision, and accounting
    digest. If reservation is rejected, terminally fence the job as
    `budget-blocked` before clearing its repository claim.
-7. CAS the job to `dispatchable`, generate a raw dispatch capability, store its
-   hash, and invoke the production background endpoint with only job ID and
-   capability. The body remains below Netlify's 256 KB background limit.
+7. Generate a raw cryptographic dispatch capability in memory. In one
+   `onlyIfMatch` write, move the exact reserved job to `dispatchable` and install
+   the capability hash and generation. If the write loses, discard the raw
+   value. Invoke the production background endpoint with only job ID and the
+   capability after the write succeeds or a strong read proves that exact hash.
+   The body remains below Netlify's 256 KB background limit.
 8. Record dispatch acknowledgement and return `202` with the safe job view.
 
 Every uncertain job, ledger, catalog, repository, or version write is resolved
@@ -851,12 +1001,11 @@ by an exact strong read before the next cross-key step. Netlify Blobs offers no
 multi-object transaction; never describe or implement these ordered writes as
 one CAS.
 
-Because raw source may not be persisted, the worker performs its own fresh
-two-pass GitHub collection after claiming the free lease. Admission may use a
-lightweight eligibility check rather than duplicate full collection, provided
-the worker independently enforces owner, repository, installation, archive,
-fork, and access rules before token counting. A source that becomes ineligible
-between admission and worker collection fails without a paid call.
+Because raw source may not be persisted, the worker performs its own complete
+fresh two-pass GitHub collection after claiming the free lease. It independently
+enforces owner, repository, installation, archive, fork, and access rules before
+token counting. A source that becomes ineligible between the lightweight
+admission check and worker collection fails without a paid call.
 
 If dispatch acknowledgement is lost, a bounded redispatch in the same
 admission may deliver the same capability again. Duplicate workers still share
@@ -865,11 +1014,17 @@ reservation.
 
 Repeating an identical admission resumes a job that is still safely before its
 paid boundary. It may rotate the dispatch-capability hash and redispatch only
-after a strong read proves that no worker has claimed the job. An inert or
-free-lease job that cannot be resumed may expire through a CAS transition that
-releases its reservation and repository claim, after which a new explicit
-Generate/Refresh action is required. A report GET or job poll never creates a
-new reservation or dispatches a new paid attempt.
+after a strong read proves that no worker has claimed the job. When a `created`,
+`reserved`, `dispatchable`, `collecting`, or `counting` job cannot be resumed,
+recovery first CAS-fences that exact job and lease as terminal. It then
+CAS-releases any still-reserved exact ledger attempts, CAS-marks the job's
+accounting complete with the resulting ledger revision and digest, and finally
+CAS-clears only its matching repository claim. A `created` job can have no
+reservation, so its ledger step is conditional. If the terminal job CAS loses
+to a paid transition, recovery releases nothing and reconciles the newly read
+state. A new explicit Generate/Refresh action is required after terminal
+cleanup. A report GET or job poll never creates a new reservation or dispatches
+a new paid attempt.
 
 The worker performs:
 
@@ -914,12 +1069,18 @@ Anthropic.
   hard deadline, CAS the exact state/token to `ambiguous`, move that attempt's
   full ceiling to unknown, release only never-dispatched attempts, mark
   accounting complete, and clear the matching repository claim.
-- A response-complete or validating state first checks the deterministic
-  version. A matching exact version advances to `version-written`; without one
-  after finalization expiry, fence as failed, settle durable complete usage, and
-  release never-dispatched attempts. Incomplete usage becomes unknown.
-- `primary-invalid` never becomes corrective in reconciliation. It settles the
-  primary, releases the correction, and fails.
+- An unexpired response-complete state remains untouched until its state
+  deadline, and an unexpired validating state remains untouched until its
+  finalization-token deadline. After the applicable expiry, first check the
+  deterministic version. A matching exact version advances to
+  `version-written`; without one, fence as failed, settle durable complete
+  usage, and release never-dispatched attempts. Incomplete usage becomes
+  unknown.
+- An unexpired `primary-invalid` with live finalization ownership remains
+  untouched; only that owner may settle attempt one and fence the corrective
+  attempt. After finalization expiry, reconciliation settles durably known
+  primary usage, releases the never-dispatched correction, fails the job, marks
+  accounting complete, and clears the matching claim.
 - `version-written` resumes guarded pointer publication; `published` resumes
   ledger settlement, job success, claim clearing, catalog repair, and cleanup.
   Terminal states with pending accounting resume bookkeeping only.
@@ -946,14 +1107,20 @@ Add these owner-authenticated routes:
 | POST   | `/api/setup-budget-decision`         | Record an explicit decision  |
 | POST   | Netlify background function endpoint | Run one capability-bound job |
 
-`GET /api/reports` requires only the Board session. It must not acquire a GitHub
-token or reject access because source authorization expired. It reads the
-strong owner catalog and each referenced state, filters entries without a
-current report, repairs stale safe catalog metadata within a bound, and returns
-saved repository IDs and last trusted display identities, current report IDs
-and generation times, safe source status, and safe active-job summaries. The UI
-merges these with the current eligible repository list so inaccessible saved
-reports remain discoverable.
+`GET /api/reports?cursor=<cursor>` requires only the Board session. It must not
+acquire a GitHub token or reject access because source authorization expired.
+It applies the catalog's 50-entry scan, 50-state-read, and five-repair bounds,
+then returns `items` and `nextCursor`. Items contain saved repository IDs and
+last trusted display identities, current report IDs and generation times, safe
+source status, and safe active-job summaries. An examined page may have no
+items and still return a cursor. The UI performs the bounded, restartable page
+merge described above and combines it with the current eligible repository list
+so inaccessible saved reports remain discoverable.
+
+After storage reads and immediately before returning any catalog or report
+response, recheck the authoritative Board session generation and owner. A
+logout, expiry, revocation, or replacement session that wins the race returns
+`401` and no private response body.
 
 `GET /api/repositories/:id/report` also requires only Board authentication. It
 returns the validated current report plus inventory, saved comparison,
@@ -1002,10 +1169,11 @@ the required user discussion and performs no dispatch or reservation.
 Add stable errors and status mapping for `report_state_changed`,
 `analysis_in_progress`, `analysis_unavailable`, `analysis_input_too_large`,
 `analysis_output_invalid`, `analysis_ambiguous`, `budget_exhausted`, and
-`budget_discussion_required`. A provider rate limit remains distinct from a
-GitHub rate limit in internal code even if the browser messages are similarly
-brief. Session `401` remains the only response that clears Board
-authentication. GitHub `403` does not hide saved reports.
+`budget_discussion_required`, plus `analysis_sensitive_input`,
+`report_catalog_full`, and retryable `report_catalog_changed`. A provider rate
+limit remains distinct from a GitHub rate limit in internal code even if the
+browser messages are similarly brief. Session `401` remains the only response
+that clears Board authentication. GitHub `403` does not hide saved reports.
 
 ## Browser behavior and report presentation
 
@@ -1107,8 +1275,18 @@ Before any paid call, verify in the deployed artifact:
 - Test normalized input catalogs, ID joins, no duplicate source text, prior
   analysis projection, prompt-injection-shaped source strings, complete issue
   and issue-body retention, deterministic whole-comment/file selection,
+  overlapping file relevance classes, one-stream exhaustion, shuffled source
+  order, exact count-request sequences including nonmonotonic mock results,
   selection manifests, zero/exact/over byte and token bounds, mandatory-only
   failure, and structural output-floor rejection.
+- Test `SOURCE_SAFETY_POLICY_V1` against ordinary-path secret-bearing files,
+  credential paths in tree metadata, every rule and placeholder boundary,
+  invalid UTF-8, mandatory-input failure before count, optional whole-item
+  omission, and safe provenance. Test `NO_VERBATIM_POLICY_V1` at 31/32-line and
+  63/64-span boundaries, Unicode/whitespace normalization, canonical-title
+  exemption, prompt-injection requests to copy text, claim queries, output
+  secrets, corrective-output rejection, and absence of matched text from jobs,
+  versions, errors, and logs.
 - Test every wire sentinel and invalid combination, sparse issue analysis,
   duplicate/unknown IDs, output limits, source binding, canonical-field
   protection, uncertainty, branch units, assignment-only behavior, and final
@@ -1118,8 +1296,10 @@ Before any paid call, verify in the deployed artifact:
   targets. Only exact gathered unverified targets may support uncertainty.
 - Port fixtures for every original comparison category, including summary,
   notes, displayed short titles and milestones, blocker and start reasons,
-  footprints, lane details/order, and contention labels/order. Independently
-  test `initial`, `unchanged`, and `changed` plus all comparison bounds.
+  footprints, lane details/order, contention labels/order, and effective claim
+  searches. Cover absent, explicit-default, and changed override queries.
+  Independently test `initial`, `unchanged`, and `changed` plus all comparison
+  bounds.
 
 ### Provider tests
 
@@ -1135,6 +1315,13 @@ Before any paid call, verify in the deployed artifact:
 - Prove one primary request and at most one narrowly eligible corrective
   request. Plant duplicate delivery and lost-CAS-response conditions and count
   provider mock invocations.
+- Reject an expired or mismatched pricing attestation, policy ID, model, rates,
+  billed-feature hash, or deploy ID before a Messages call. For a dispatched
+  response with an unpriceable model, cache use, tool use, premium/service tier,
+  geography, or unknown billed field, prove the job publishes no version,
+  records unknown exposure at `max(full attempt ceiling, known lower bound)`,
+  sets `pricingReviewRequired`, cannot run correction, and blocks later paid
+  admission.
 - Assert no raw request, output, thinking, error body, or source text enters
   logs, persisted jobs, ledgers, or report envelopes.
 
@@ -1146,9 +1333,17 @@ Before any paid call, verify in the deployed artifact:
 - Race identical and different idempotency keys, concurrent repositories,
   global cross-repository UUID reuse, active-job claims, source checks, catalog
   merges/repair, report publication, and ledger reservations.
+- Exercise exact 1,000-entry and 1,048,576-byte catalog bounds, 50/51-entry
+  pagination, empty filtered pages with a next cursor, malformed and changed
+  cursors, one bounded restart, a stale entry on a later page, a repair that
+  would exceed the byte cap, and uncataloged versus existing-member behavior at
+  each ceiling.
 - Prove aggregate setup exposure cannot exceed $25 and a proposed dispatch at
   or above $20 enters the discussion gate without a provider call. Verify exact
   revision-bound acknowledgement and stop decisions without changing the cap.
+  Cover stale revisions, duplicate decision IDs, permanent stopped-policy
+  rejection, wrong operations, the authorized ceiling boundary, the 32-decision
+  bound, a new policy's separate gate, and lifetime exposure preservation.
 - Cover successful settlement, output-rejected settlement, unused retry
   release, classifier refusal handling, unknown reservation retention, and
   reconciliation after each interruption point.
@@ -1159,6 +1354,11 @@ Before any paid call, verify in the deployed artifact:
   responses. Verify only free states repeat, attempts settle once, successful
   publication resumes without another model call, and ambiguous paid states
   never replay.
+- Interrupt after lightweight eligibility, capability generation, capability
+  installation, and committed-but-unacknowledged installation. Race the
+  repository-claim loser and each ordered pre-provider terminal/accounting/claim
+  cleanup step. Poll after `primary-invalid` but before primary settlement and
+  prove the live owner can still fence exactly one corrective paid attempt.
 - Prove current/previous rotation is exact, failed jobs leave both pointers
   unchanged, stale jobs cannot overwrite newer success, deterministic version
   read-back resolves lost acknowledgements, and cleanup never removes current,
@@ -1176,7 +1376,8 @@ Before any paid call, verify in the deployed artifact:
 - Retrieve a saved report without a current GitHub token or eligible source;
   discover it through the durable catalog and preserve it across
   sign-out/sign-in and simulated browsers/devices. Cover a missing/stale catalog
-  summary, direct-route repair, source deletion, and concurrent first reports.
+  summary, direct-route repair, source deletion, concurrent first reports, and a
+  logout/session-replacement race after storage reads but before response.
 - Verify no saved report, report open, report list, automatic source check, job
   poll, failure retry UI, or page reload calls the provider mock.
 - Verify only explicit Generate/Refresh creates a job, repeats use one
@@ -1197,6 +1398,7 @@ Before any paid call, verify in the deployed artifact:
   default-deny.
 - Extend production composition tests to include both API and background
   functions, then build fixture context and prove both are removed. Assert
+  `report-job.mjs` exports `config.background:true`; assert
   missing/unknown/preview/branch contexts never install or stage server code.
 - Verify buffered API responses remain under 6 MB and dispatch bodies under
   256 KB. Bound provider streams and stored JSON independently.

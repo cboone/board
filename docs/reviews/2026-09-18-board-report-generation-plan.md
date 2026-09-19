@@ -2,9 +2,10 @@
 
 Date: 2026-09-18
 
-Status: needs revision. Three independent reviews of exact planning commit
-`976e1249f9b54776f44c0956e26bc2990e144125` found ten required corrections
-before implementation. The implementation baseline is Phase 2 merge
+Status: corrections applied; exact-commit re-review pending. Three independent
+reviews of exact planning commit
+`976e1249f9b54776f44c0956e26bc2990e144125` found ten required corrections. The
+implementation baseline is Phase 2 merge
 `370c257c49c09492426b4d8df24d37240884e908`.
 
 ## Scope and evidence
@@ -42,7 +43,7 @@ source corpus, plus output secret screening. Test that prohibited input never
 enters count or Messages requests and that source excerpts never enter durable
 records, logs, or errors.
 
-Disposition: pending plan correction.
+Disposition: resolved in the corrected plan; exact-commit re-review pending.
 
 ### R2 Admission and capability installation
 
@@ -58,7 +59,7 @@ Generate the raw capability before one conditional write installs both the
 `dispatchable` state and capability hash. Add interruption tests at both
 boundaries.
 
-Disposition: pending plan correction.
+Disposition: resolved in the corrected plan; exact-commit re-review pending.
 
 ### R3 Corrective-attempt polling race
 
@@ -74,7 +75,7 @@ untouched. Permit only its owner to settle attempt one and fence correction.
 After finalization expiry, the reconciler may settle known usage, release the
 never-dispatched attempt, and fail. Add a poll race regression.
 
-Disposition: pending plan correction.
+Disposition: resolved in the corrected plan; exact-commit re-review pending.
 
 ### R4 Deterministic optional context
 
@@ -92,7 +93,7 @@ the maximality claim with a bounded-halving procedure that uses the first
 exactly counted passing prefix. Test shuffled inputs, the exact manifest, and
 the exact count-request sequence.
 
-Disposition: pending plan correction.
+Disposition: resolved in the corrected plan; exact-commit re-review pending.
 
 ### R5 Comparison contract parity
 
@@ -109,7 +110,7 @@ Required resolution: add required `Claim.query` handling with an empty-string
 sentinel, trusted assembly, validation, effective rendered-search comparison,
 and a regression fixture. Use `initial` consistently.
 
-Disposition: pending plan correction.
+Disposition: resolved in the corrected plan; exact-commit re-review pending.
 
 ### R6 Bounded report catalog
 
@@ -126,7 +127,7 @@ and have the browser merge bounded pages. Define admission behavior at the
 ceiling without deleting reports. Test every exact boundary and a stale entry
 on a later page.
 
-Disposition: pending plan correction.
+Disposition: resolved in the corrected plan; exact-commit re-review pending.
 
 ### R7 Response-completion state
 
@@ -141,7 +142,7 @@ Required resolution: move a primary response to
 `corrective-response-complete`, then separately claim finalization into the
 corresponding validation state.
 
-Disposition: pending plan correction.
+Disposition: resolved in the corrected plan; exact-commit re-review pending.
 
 ### R8 Pre-provider expiry ordering
 
@@ -156,7 +157,7 @@ exact job state, release any matching reservation, mark job accounting
 complete, and finally clear only its repository claim. If the first CAS loses
 to a paid transition, reconcile the newly observed state instead.
 
-Disposition: pending plan correction.
+Disposition: resolved in the corrected plan; exact-commit re-review pending.
 
 ### R9 Discussion-decision enforcement
 
@@ -170,7 +171,7 @@ admission under that price policy. An acknowledged admission must match its
 authorized operations and ceiling as well as the lifetime cap. Enforce every
 decision against exact revisions and policy identities.
 
-Disposition: pending plan correction.
+Disposition: resolved in the corrected plan; exact-commit re-review pending.
 
 ### R10 Price-policy failure tests
 
@@ -186,7 +187,7 @@ attempt must become unknown at the greater of its full ceiling or known lower
 bound, set `pricingReviewRequired`, prevent publication, and block later paid
 work.
 
-Disposition: pending plan correction.
+Disposition: resolved in the corrected plan; exact-commit re-review pending.
 
 ## Confirmed design decisions
 
