@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   ANTHROPIC_POLICY,
   buildCountRequest,
+  buildCorrectiveAnalysisInput,
   buildMessageRequest,
   createAnthropicClient,
   parseMessageStream,
@@ -101,6 +102,55 @@ test('count and paid request envelopes share fixed analysis controls while billi
   assert.equal(paid.service_tier, 'standard_only');
   assert.equal(paid.tools, undefined);
   assert.equal(paid.temperature, undefined);
+});
+
+test('corrective input sends only bounded validation codes with the admitted source input', () => {
+  const corrective = buildCorrectiveAnalysisInput({
+    analysisInput: input,
+    validationErrors: [
+      {
+        path: 'analysisDelta.lanes.0',
+        code: 'lane_binding',
+        message: 'private validator detail is intentionally omitted',
+      },
+      {
+        path: 'analysisDelta.lanes.1',
+        code: 'lane_binding',
+        message: 'another omitted detail',
+      },
+      {
+        path: 'analysisDelta.startNow',
+        code: 'source_binding',
+        message: 'omitted detail',
+      },
+    ],
+  });
+  assert.deepEqual(corrective, {
+    analysisInput: input,
+    correction: {
+      kind: 'repair-invalid-analysis-v1',
+      validationCodes: ['lane_binding', 'source_binding'],
+    },
+  });
+  assert.equal(JSON.stringify(corrective).includes('validator detail'), false);
+  const count = buildCountRequest(corrective, schema);
+  const paid = buildMessageRequest(corrective, schema);
+  assert.deepEqual(count.messages, paid.messages);
+  assert.deepEqual(JSON.parse(count.messages[0].content), corrective);
+
+  for (const validationErrors of [
+    [],
+    [{ code: 'not-valid!' }],
+    Array.from({ length: 101 }, () => ({ code: 'text' })),
+  ])
+    assert.throws(
+      () =>
+        buildCorrectiveAnalysisInput({
+          analysisInput: input,
+          validationErrors,
+        }),
+      { code: 'analysis_output_invalid' },
+    );
 });
 
 test('stream parser handles fragmentation, omitted thinking and cumulative usage without retaining reasoning', async () => {
