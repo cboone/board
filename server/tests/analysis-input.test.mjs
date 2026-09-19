@@ -570,6 +570,80 @@ test('prior analysis projection excludes canonical and provenance fields', () =>
     assert.ok(!serialized.includes(excluded), excluded);
 });
 
+test('prior analysis projection preserves only present optional report sections', () => {
+  const base = { issues: [], lanes: [], startNow: [] };
+  assert.deepEqual(projectPriorAnalysis(base), {
+    issueAnalysis: [],
+    lanes: [],
+    startNow: [],
+  });
+  assert.deepEqual(
+    projectPriorAnalysis({
+      ...base,
+      contention: { rowLabel: 'Component', claims: [] },
+    }),
+    {
+      issueAnalysis: [],
+      lanes: [],
+      startNow: [],
+      contention: { rowLabel: 'Component', claims: [] },
+    },
+  );
+  assert.deepEqual(
+    projectPriorAnalysis({
+      ...base,
+      notes: { startNow: 'No starts selected.' },
+    }),
+    {
+      issueAnalysis: [],
+      lanes: [],
+      startNow: [],
+      notes: { startNow: 'No starts selected.' },
+    },
+  );
+});
+
+test('prior analysis projection preserves nested uncertainty continuity', () => {
+  const reference = {
+    url: 'https://outside.test/approval',
+    label: 'External approval',
+    title: 'Confirm the integration approval',
+  };
+  const projected = projectPriorAnalysis({
+    issues: [
+      {
+        number: 1,
+        uncertainty: {
+          reason: 'The scope could not be confirmed.',
+        },
+      },
+      {
+        number: 2,
+        uncertainty: {
+          reason: 'The approval could not be verified.',
+          reference,
+        },
+      },
+    ],
+    lanes: [],
+    startNow: [],
+    contention: { claims: [] },
+    notes: { startNow: 'No starts selected.' },
+  });
+
+  assert.deepEqual(projected.issueAnalysis, [
+    {
+      issue: 1,
+      uncertaintyReason: 'The scope could not be confirmed.',
+    },
+    {
+      issue: 2,
+      uncertaintyReason: 'The approval could not be verified.',
+      uncertaintyReference: reference,
+    },
+  ]);
+});
+
 test('default limits name every optional, request, and token bound', () => {
   assert.deepEqual(Object.keys(ANALYSIS_INPUT_LIMITS).sort(), [
     'commentBytes',

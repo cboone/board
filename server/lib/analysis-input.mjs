@@ -893,19 +893,23 @@ export function projectPriorAnalysis(report) {
     ...(Number.isSafeInteger(issue.sameBranchAs)
       ? { sameBranchAs: issue.sameBranchAs }
       : {}),
-    ...(typeof issue.uncertaintyReason === 'string'
-      ? { uncertaintyReason: issue.uncertaintyReason }
+    ...(typeof issue.uncertainty?.reason === 'string'
+      ? { uncertaintyReason: issue.uncertainty.reason }
       : {}),
-    ...(issue.uncertaintyReference !== undefined
-      ? { uncertaintyReference: jsonClone(issue.uncertaintyReference) }
+    ...(issue.uncertainty?.reference !== undefined
+      ? { uncertaintyReference: jsonClone(issue.uncertainty.reference) }
       : {}),
   }));
   const projected = {
     issueAnalysis,
     lanes: jsonClone(report.lanes),
     startNow: jsonClone(report.startNow),
-    contention: jsonClone(report.contention),
-    notes: jsonClone(report.notes),
+    ...(Object.hasOwn(report, 'contention')
+      ? { contention: jsonClone(report.contention) }
+      : {}),
+    ...(Object.hasOwn(report, 'notes')
+      ? { notes: jsonClone(report.notes) }
+      : {}),
   };
   assertMandatorySafety(projected);
   return projected;

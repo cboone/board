@@ -885,14 +885,29 @@ function refreshHistory() {
         issues: [],
         lanes: [],
         startNow: [],
-        contention: {},
-        notes: {},
       },
       source: { provenance: { repository } },
     },
     retainedEnvelope: { reportId: displacedReportId, retained: true },
   };
 }
+
+test('matching repository refresh projects a saved report without optional sections', async () => {
+  const history = refreshHistory();
+  const setup = fixture({
+    operation: 'refresh',
+    current: history.current,
+    previous: history.previous,
+    priorEnvelope: history.priorEnvelope,
+    retainedEnvelopes: [history.retainedEnvelope],
+  });
+
+  const result = await runWorker(setup);
+  assertRefreshedReport(result, setup, history);
+  assert.deepEqual(setup.metrics.priorAnalyses(), [
+    { issueAnalysis: [], lanes: [], startNow: [] },
+  ]);
+});
 
 test('a renamed repository refresh omits advisory prior analysis', async () => {
   const history = refreshHistory();
@@ -2006,8 +2021,6 @@ test('authorization revocation before immutable write preserves the saved report
       issues: [],
       lanes: [],
       startNow: [],
-      contention: {},
-      notes: {},
     },
   };
   const setup = fixture({
