@@ -43,7 +43,14 @@ test('source safety recognizes each fixed credential rule without exposing text'
     ['aws-access-key-prefix', 'AKIAABCDEFGHIJKLMNOP'],
     [
       'url-authority-credential',
-      'https://synthetic-user:synthetic-password@example.invalid/path',
+      [
+        'https://',
+        'synthetic-user',
+        ':',
+        'synthetic-password',
+        '@',
+        'example.invalid/path',
+      ].join(''),
     ],
     ['credential-assignment-or-header', 'API_KEY=synthetic-value'],
   ]);
