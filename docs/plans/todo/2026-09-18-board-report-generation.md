@@ -944,8 +944,12 @@ The initial per-attempt reservation is 5,409,600 microdollars:
 ```
 
 Two possible setup attempts reserve 10,819,200 microdollars atomically before
-the first dispatch. CAS conflicts repeat only the strong read and conditional
-ledger write within a bounded loop. Admission requires
+the first dispatch. Every reservation iteration strongly reads the ledger and
+its ETag, then strongly revalidates that the exact job is still
+`created`/`unreserved`, nonterminal, within its admission deadline, and owns the
+matching repository claim before conditionally writing against that ETag. A CAS
+conflict restarts the ledger read and every job/claim proof within a bounded
+loop; it never retries only the ledger operation. Admission requires
 `settled + reserved + unknown + proposed <= 25,000,000`. Before a proposed
 dispatch would make the same exposure reach or exceed 20,000,000, set
 the versioned discussion gate, reject paid dispatch with
@@ -1169,7 +1173,9 @@ terminal job with a prior reservation leaves accounting `pending` until the
 separate ledger CAS and job-accounting CAS finish. An unreserved `created` or
 reservation-rejected terminal job moves directly from `unreserved` to
 `complete` with nullable accounting facts only after a strong ledger read proves
-there is no matching active entry. If an interrupted reservation entry exists,
+there is no matching active entry and the conditional reservation-fence ledger
+CAS succeeds. A fence conflict restarts the read and uses the active-entry
+branch when a reservation won. If an interrupted reservation entry exists,
 recovery releases it and persists the full resulting accounting tuple before
 marking `complete`. A reservation rejection may still require a nonmonetary
 policy or discussion ledger CAS that advances only the logical ledger revision.
@@ -1527,9 +1533,12 @@ Before any paid call, verify in the deployed artifact:
   `complete` with nullable facts only after its reservation-fence ledger CAS.
   Delay the original reservation CAS until after the no-entry read: prove either
   the reservation wins and is released exactly once or the fence wins and the
-  delayed reservation cannot commit. If a terminal job is stale `complete` with
-  a still-reserved matching entry, prove the sweep reconciles it rather than
-  deleting or trusting the entry.
+  delayed reservation cannot commit. Make the losing reservation writer reread
+  and try to retry: prove the full job/deadline/claim revalidation observes the
+  terminal fence and prevents a new reservation. Delay writers around each
+  ledger read, job/claim proof, and reservation/fence CAS boundary. If a terminal
+  job is stale `complete` with a still-reserved matching entry, prove the sweep
+  reconciles it rather than deleting or trusting the entry.
 - Interrupt after lightweight eligibility, capability generation, capability
   installation, and committed-but-unacknowledged installation. Race the
   repository-claim loser and each ordered pre-provider terminal/accounting/claim

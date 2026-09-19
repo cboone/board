@@ -429,8 +429,11 @@ the logical ledger revision before nullable job completion so the write either
 fences the delayed reservation or conflicts and reveals it for release. Treat
 every terminal job with a matching reserved active entry as pending bookkeeping
 regardless of job accounting status; remove an entry only when its own last
-transition and the job's full tuple prove completion. Test both delayed-CAS
-linearizations and a stale terminal/`complete` job with a reserved entry.
+transition and the job's full tuple prove completion. Before every reservation
+CAS retry, strongly reread the ledger and then revalidate the exact live job,
+deadline, and matching claim; bind the write to that ledger ETag and restart all
+proofs after conflict. Test both delayed-CAS linearizations, a post-fence retry,
+and a stale terminal/`complete` job with a reserved entry.
 
 Disposition: resolved in the tenth corrected plan; exact-commit re-review
 pending.
