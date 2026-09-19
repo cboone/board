@@ -2,10 +2,12 @@
 
 Date: 2026-09-18
 
-Status: corrections applied; exact-commit re-review pending. Three independent
-reviews of exact planning commit
+Status: ready for implementation. Three independent reviews of exact planning
+commit
 `976e1249f9b54776f44c0956e26bc2990e144125` found ten required corrections;
-successive exact-commit reviews found further durability and policy gaps. The
+successive exact-commit reviews found and resolved further durability and policy
+gaps. Final whole-plan and durability reviews of
+`314f598db6044fafeed5e27c8427690a9f7c7382` found no material blocker. The
 implementation baseline is Phase 2 merge
 `370c257c49c09492426b4d8df24d37240884e908`.
 
@@ -44,7 +46,7 @@ source corpus, plus output secret screening. Test that prohibited input never
 enters count or Messages requests and that source excerpts never enter durable
 records, logs, or errors.
 
-Disposition: resolved in the corrected plan; exact-commit re-review pending.
+Disposition: resolved in the corrected plan; final review: verified.
 
 ### R2 Admission and capability installation
 
@@ -60,7 +62,7 @@ Generate the raw capability before one conditional write installs both the
 `dispatchable` state and capability hash. Add interruption tests at both
 boundaries.
 
-Disposition: resolved in the corrected plan; exact-commit re-review pending.
+Disposition: resolved in the corrected plan; final review: verified.
 
 ### R3 Corrective-attempt polling race
 
@@ -76,7 +78,7 @@ untouched. Permit only its owner to settle attempt one and fence correction.
 After finalization expiry, the reconciler may settle known usage, release the
 never-dispatched attempt, and fail. Add a poll race regression.
 
-Disposition: resolved in the corrected plan; exact-commit re-review pending.
+Disposition: resolved in the corrected plan; final review: verified.
 
 ### R4 Deterministic optional context
 
@@ -94,7 +96,7 @@ the maximality claim with a bounded-halving procedure that uses the first
 exactly counted passing prefix. Test shuffled inputs, the exact manifest, and
 the exact count-request sequence.
 
-Disposition: resolved in the corrected plan; exact-commit re-review pending.
+Disposition: resolved in the corrected plan; final review: verified.
 
 ### R5 Comparison contract parity
 
@@ -111,7 +113,7 @@ Required resolution: add required `Claim.query` handling with an empty-string
 sentinel, trusted assembly, validation, effective rendered-search comparison,
 and a regression fixture. Use `initial` consistently.
 
-Disposition: resolved in the corrected plan; exact-commit re-review pending.
+Disposition: resolved in the corrected plan; final review: verified.
 
 ### R6 Bounded report catalog
 
@@ -128,7 +130,7 @@ and have the browser merge bounded pages. Define admission behavior at the
 ceiling without deleting reports. Test every exact boundary and a stale entry
 on a later page.
 
-Disposition: resolved in the corrected plan; exact-commit re-review pending.
+Disposition: resolved in the corrected plan; final review: verified.
 
 ### R7 Response-completion state
 
@@ -143,7 +145,7 @@ Required resolution: move a primary response to
 `corrective-response-complete`, then separately claim finalization into the
 corresponding validation state.
 
-Disposition: resolved in the corrected plan; exact-commit re-review pending.
+Disposition: resolved in the corrected plan; final review: verified.
 
 ### R8 Pre-provider expiry ordering
 
@@ -158,7 +160,7 @@ exact job state, release any matching reservation, mark job accounting
 complete, and finally clear only its repository claim. If the first CAS loses
 to a paid transition, reconcile the newly observed state instead.
 
-Disposition: resolved in the corrected plan; exact-commit re-review pending.
+Disposition: resolved in the corrected plan; final review: verified.
 
 ### R9 Discussion-decision enforcement
 
@@ -172,7 +174,7 @@ admission under that price policy. An acknowledged admission must match its
 authorized operations and ceiling as well as the lifetime cap. Enforce every
 decision against exact revisions and policy identities.
 
-Disposition: resolved in the corrected plan; exact-commit re-review pending.
+Disposition: resolved in the corrected plan; final review: verified.
 
 ### R10 Price-policy failure tests
 
@@ -188,7 +190,7 @@ attempt must become unknown at the greater of its full ceiling or known lower
 bound, set `pricingReviewRequired`, prevent publication, and block later paid
 work.
 
-Disposition: resolved in the corrected plan; exact-commit re-review pending.
+Disposition: resolved in the corrected plan; final review: verified.
 
 ### R11 Fixed provider geography and service tier
 
@@ -202,8 +204,7 @@ global inference and standard-only service. Require matching effective response
 facts and treat missing or different billing classification as unknown exposure
 that blocks publication and later paid work.
 
-Disposition: resolved in the second corrected plan; exact-commit re-review
-pending.
+Disposition: resolved in the second corrected plan; final review: verified.
 
 ### R12 Bounded spend-ledger lifecycle
 
@@ -218,8 +219,7 @@ aggregate settled cost and a hash chain; keep terminal audit in each job; and
 remove known accounting-complete active entries while retaining unknown
 exposure. Add exact-cap and repeated zero-billed tests.
 
-Disposition: resolved in the second corrected plan; exact-commit re-review
-pending.
+Disposition: resolved in the second corrected plan; final review: verified.
 
 ### R13 Expired corrective recovery order
 
@@ -231,8 +231,7 @@ Required resolution: CAS the exact expired job to terminal failed first, then
 settle known primary usage, release the never-dispatched correction, complete
 accounting, and clear the claim.
 
-Disposition: resolved in the second corrected plan; exact-commit re-review
-pending.
+Disposition: resolved in the second corrected plan; final review: verified.
 
 ### R14 Prior-analysis reuse
 
@@ -245,8 +244,7 @@ Required resolution: keep validated prior-analysis prose outside the raw-source
 corpus and permit its reuse when the new source supports it. Retain the safety
 screen and strict validation for the new output.
 
-Disposition: resolved in the second corrected plan; exact-commit re-review
-pending.
+Disposition: resolved in the second corrected plan; final review: verified.
 
 ### R15 Exact no-verbatim normalization
 
@@ -259,8 +257,7 @@ and Unicode code-point operations against the pinned runtime. Reject exact
 whole-field equality at every nonempty length and state the shorter incidental
 overlap that deterministic validation permits.
 
-Disposition: resolved in the second corrected plan; exact-commit re-review
-pending.
+Disposition: resolved in the second corrected plan; final review: verified.
 
 ### R16 Background endpoint authentication
 
@@ -272,8 +269,7 @@ Required resolution: list it separately from browser API routes. Require
 production, published-deploy, method, origin, body, and capability guards, and
 never forward browser session, CSRF, or GitHub token material.
 
-Disposition: resolved in the second corrected plan; exact-commit re-review
-pending.
+Disposition: resolved in the second corrected plan; final review: verified.
 
 ### R17 Concurrent ledger lost-ack proof
 
@@ -289,8 +285,7 @@ the global head. Treat accounting-complete entry removal as idempotent
 housekeeping outside the monetary digest, and do not claim the compacted ledger
 can reproduce every historical intermediate digest.
 
-Disposition: resolved in the third corrected plan; exact-commit re-review
-pending.
+Disposition: resolved in the third corrected plan; final review: verified.
 
 ### R18 Cross-repository active-ledger recovery
 
@@ -303,8 +298,7 @@ jobs and run state-specific nonpaid reconciliation for every expired
 nonterminal entry. Leave live nonterminal and unknown entries untouched, and
 reject new paid work while an expired entry remains unresolved.
 
-Disposition: resolved in the third corrected plan; exact-commit re-review
-pending.
+Disposition: resolved in the third corrected plan; final review: verified.
 
 ### R19 Terminal accounting sweep and cross-repository proof
 
@@ -323,8 +317,7 @@ ledger/accounting/claim order through the global pre-reservation sweep. It must
 settle A exactly once, mark A accounting-complete, remove A's active entry,
 clear A's claim last, and only then reserve for B.
 
-Disposition: resolved in the fifth corrected plan; exact-commit re-review
-pending.
+Disposition: resolved in the fifth corrected plan; final review: verified.
 
 ### R20 Job accounting schema completeness
 
@@ -348,8 +341,7 @@ lost-ack recovery values after another job advances the global head in strict
 schema, ordered admission/recovery, serialization-boundary, and concurrency
 tests.
 
-Disposition: resolved in the sixth corrected plan; exact-commit re-review
-pending.
+Disposition: resolved in the sixth corrected plan; final review: verified.
 
 ### R21 Unknown accounting status
 
@@ -371,8 +363,7 @@ with nullable accounting facts and no monetary accounting transition or active
 entry; a required nonmonetary policy/discussion ledger CAS may still advance the
 logical ledger revision.
 
-Disposition: resolved in the seventh corrected plan; exact-commit re-review
-pending.
+Disposition: resolved in the seventh corrected plan; final review: verified.
 
 ### R22 Reservation-to-job interruption
 
@@ -391,8 +382,7 @@ clear the claim last. Move directly from `unreserved` to `complete` with nullabl
 facts only after proving no entry exists. Describe `complete` and `unknown` as
 final accounting states and test both interruption branches exactly.
 
-Disposition: resolved in the eighth corrected plan; exact-commit re-review
-pending.
+Disposition: resolved in the eighth corrected plan; final review: verified.
 
 ### R23 Interrupted reservation adoption and sweep
 
@@ -412,8 +402,7 @@ expired `created` job with an active entry in the global sweep, and prove a
 different-repository admission completes the interrupted cleanup and restores
 capacity.
 
-Disposition: resolved in the ninth corrected plan; exact-commit re-review
-pending.
+Disposition: resolved in the ninth corrected plan; final review: verified.
 
 ### R24 Delayed reservation CAS fencing
 
@@ -435,8 +424,7 @@ deadline, and matching claim; bind the write to that ledger ETag and restart all
 proofs after conflict. Test both delayed-CAS linearizations, a post-fence retry,
 and a stale terminal/`complete` job with a reserved entry.
 
-Disposition: resolved in the tenth corrected plan; exact-commit re-review
-pending.
+Disposition: resolved in the tenth corrected plan; final review: verified.
 
 ## Confirmed design decisions
 
