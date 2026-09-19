@@ -319,6 +319,17 @@ test('REST PR-shaped issues are filtered and source titles/milestones remain exa
     'Exact milestone title',
   );
 });
+test('issue-list and pull representations may have distinct database IDs', async () => {
+  const provider = fixtureProvider({ values: { pulls: [pull(2)] } });
+  const result = await operations(provider).checkRepository(params());
+  assert.deepEqual(
+    result.sourceSnapshot.pullRequests.map(({ id, number }) => ({
+      id,
+      number,
+    })),
+    [{ id: 1002, number: 2 }],
+  );
+});
 test('cross-source label/milestone joins allow matching facts and reject conflicting facts', async () => {
   const same = fixtureProvider({
     values: {

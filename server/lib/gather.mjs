@@ -203,8 +203,11 @@ function joinFacts(map, item) {
   map.set(item.id, item);
 }
 function pullJoinFacts(item) {
+  // GitHub models a pull request as both an Issue and a PullRequest. Their
+  // REST representations have different database IDs, so validate the
+  // issue-side identity without treating it as a shared fact.
+  positive(item.id);
   return {
-    id: positive(item.id),
     number: positive(item.number),
     title: canonicalText(item.title),
     body: text(item.body, { nullable: true }),
@@ -911,7 +914,6 @@ async function gatherPass(
       !pull ||
       sourceDigest(item) !==
         sourceDigest({
-          id: pull.id,
           number: pull.number,
           title: pull.title,
           body: pull.body,
