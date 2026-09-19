@@ -62,7 +62,11 @@ function summary() {
     ),
   };
 }
-async function setup(sourceOperations, reportOperations = null) {
+async function setup(
+  sourceOperations,
+  reportOperations = null,
+  analysisPreflight = null,
+) {
   const now = () => Date.parse('2026-09-18T12:00:00.000Z');
   const config = testConfig();
   const storage = memoryStorage();
@@ -127,6 +131,7 @@ async function setup(sourceOperations, reportOperations = null) {
     auth: apiAuth,
     sourceOperations: operations,
     reportOperations,
+    analysisPreflight,
     createOperationBudget: () => {
       const value = budget(now);
       budgets.push(value);
@@ -602,6 +607,10 @@ test('saved report reads and setup decisions stay on Board storage without acqui
   const calls = [];
   const jobId = 'd'.repeat(64);
   const spendMode = { available: true, mode: 'setup', reason: null };
+  const analysisReadiness = {
+    ready: false,
+    reason: 'analysis_preflight_required',
+  };
   const job = {
     id: jobId,
     operation: 'generate',
@@ -643,7 +652,7 @@ test('saved report reads and setup decisions stay on Board storage without acqui
     },
     async getAnalysisAvailability(input) {
       calls.push(['availability', input]);
-      return { spendMode };
+      return { spendMode, analysisReadiness };
     },
     async pollJob(input) {
       calls.push(['job', input]);
@@ -688,7 +697,7 @@ test('saved report reads and setup decisions stay on Board storage without acqui
         activeJob: null,
         spendMode,
       },
-      { spendMode },
+      { spendMode, analysisReadiness },
       { job },
       { status: 'updated', spendMode },
     ],
@@ -784,6 +793,99 @@ test('analysis admission validates its bounded body before GitHub work and retur
     expectedCurrentReportId: null,
   });
   assert.equal(admitted.budget, ctx.budgets[1]);
+});
+
+test('analysis preflight requires CSRF, pins access, rechecks the lease, and returns only safe readiness facts', async () => {
+  let sourceCalls = 0;
+  let verified;
+  const sourceOperations = {
+    async checkRepositoryAccess(input) {
+      sourceCalls += 1;
+      assert.equal(input.repositoryId, 17);
+      return {
+        ...repo,
+        defaultBranch: 'main',
+        defaultTip: 'a'.repeat(40),
+      };
+    },
+  };
+  const marker = {
+    schemaVersion: 1,
+    ownerId: 99961,
+    deployId: 'deploy-1',
+    policyId: 'setup-policy-v1',
+    requestContractHash: 'c'.repeat(64),
+    model: 'claude-opus-5',
+    effort: 'high',
+    modelMaxInputTokens: 1_000_000,
+    modelMaxOutputTokens: 32_000,
+    configuredInputTokens: 100_000,
+    configuredOutputTokens: 16_384,
+    inputTokens: 1234,
+    countRequestBytes: 4567,
+    messageRequestBytes: 4623,
+    verifiedAt: '2026-09-19T12:00:00.000Z',
+  };
+  const analysisPreflight = {
+    async verify(input) {
+      verified = input;
+      await input.authorize();
+      return { marker, privateSource: 'must-not-cross' };
+    },
+  };
+  const ctx = await setup(sourceOperations, {}, analysisPreflight);
+  const body = { operation: 'generate', expectedCurrentReportId: null };
+  const rejected = await ctx.api(
+    ctx.request(
+      '/api/repositories/17/analysis-preflight',
+      'POST',
+      { Origin: ORIGIN, 'Content-Type': 'application/json' },
+      body,
+    ),
+  );
+  assert.equal(rejected.status, 403);
+  assert.equal(sourceCalls, 0);
+
+  const invalid = await ctx.api(
+    ctx.request(
+      '/api/repositories/17/analysis-preflight',
+      'POST',
+      { ...ctx.csrf, 'Content-Type': 'application/json' },
+      { ...body, unexpected: true },
+    ),
+  );
+  assert.equal(invalid.status, 400);
+  assert.equal(sourceCalls, 0);
+
+  analysisPreflight.verify = async (input) => {
+    verified = input;
+    await input.authorize();
+    return { marker };
+  };
+  const response = await ctx.api(
+    ctx.request(
+      '/api/repositories/17/analysis-preflight',
+      'POST',
+      { ...ctx.csrf, 'Content-Type': 'application/json' },
+      body,
+    ),
+  );
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    preflight: {
+      status: 'ready',
+      ...Object.fromEntries(
+        Object.entries(marker).filter(
+          ([key]) => !['schemaVersion', 'ownerId'].includes(key),
+        ),
+      ),
+    },
+  });
+  assert.equal(sourceCalls, 1);
+  assert.equal(verified.ownerId, 99961);
+  assert.equal(verified.repository.id, 17);
+  assert.deepEqual(verified.request, body);
+  assert.equal(verified.budget, ctx.budgets[2]);
 });
 
 test('report routes reject malformed URLs, JSON, CSRF and operation tuples before delegated work', async () => {
@@ -981,4 +1083,110 @@ test('production report routes initialize the report job and spend stores', asyn
     'board-reports',
     'board-spend',
   ]);
+});
+
+test('production preflight reads the Anthropic key only inside the authorized no-Messages provider factory', async () => {
+  let keyReads = 0;
+  let providerFactories = 0;
+  let ownerRechecks = 0;
+  const env = environment();
+  Object.defineProperty(env, 'ANTHROPIC_API_KEY', {
+    enumerable: true,
+    get() {
+      keyReads += 1;
+      return 'synthetic-anthropic-key';
+    },
+  });
+  const marker = {
+    schemaVersion: 1,
+    ownerId: 99961,
+    deployId: 'deploy-1',
+    policyId: 'setup-policy-v1',
+    requestContractHash: 'c'.repeat(64),
+    model: 'claude-opus-5',
+    effort: 'high',
+    modelMaxInputTokens: 1_000_000,
+    modelMaxOutputTokens: 32_000,
+    configuredInputTokens: 100_000,
+    configuredOutputTokens: 16_384,
+    inputTokens: 1234,
+    countRequestBytes: 4567,
+    messageRequestBytes: 4623,
+    verifiedAt: '2026-09-19T12:00:00.000Z',
+  };
+  const auth = {
+    requireAuthorizedOwner: async () => ({
+      ownerId: 99961,
+      authorizationEpoch: 2,
+    }),
+    requireCsrf() {},
+    acquireToken: async () => ({
+      ownerId: 99961,
+      accessToken: 'github-token',
+      generation: 3,
+    }),
+    recheckOwner: async () => {
+      ownerRechecks += 1;
+      return { id: 99961, login: 'cboone' };
+    },
+    recordSourceAuthorization: async () => true,
+  };
+  const handler = createHandler({
+    env,
+    storageFactory: async () => memoryStorage(),
+    authFactory: () => auth,
+    sourceFactory: () => ({
+      checkRepositoryAccess: async () => ({
+        ...repo,
+        defaultBranch: 'main',
+        defaultTip: 'a'.repeat(40),
+      }),
+    }),
+    admissionFactory: () => ({ admit: async () => {} }),
+    reconcilerFactory: () => ({ reconcile: async () => {} }),
+    reportFactory: () => ({}),
+    anthropicFactory: ({ apiKey }) => {
+      providerFactories += 1;
+      assert.equal(apiKey, 'synthetic-anthropic-key');
+      return {
+        retrieveModel: async () => {},
+        countTokens: async () => {},
+        createMessage: async () => {
+          throw new Error('Messages must not be reachable');
+        },
+      };
+    },
+    preflightFactory: ({ createProvider }) => ({
+      async verify(input) {
+        assert.equal(keyReads, 0);
+        await input.authorize();
+        const provider = createProvider();
+        assert.deepEqual(Object.keys(provider), [
+          'retrieveModel',
+          'countTokens',
+        ]);
+        assert.equal(Object.hasOwn(provider, 'createMessage'), false);
+        return { marker };
+      },
+    }),
+  });
+  const response = await handler(
+    new Request(`${ORIGIN}/api/repositories/17/analysis-preflight`, {
+      method: 'POST',
+      headers: {
+        Origin: ORIGIN,
+        'X-CSRF-Token': 'synthetic-csrf',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        operation: 'generate',
+        expectedCurrentReportId: null,
+      }),
+    }),
+    { deploy: { context: 'production', published: true, id: 'deploy-1' } },
+  );
+  assert.equal(response.status, 200);
+  assert.equal(keyReads, 1);
+  assert.equal(providerFactories, 1);
+  assert.ok(ownerRechecks >= 2);
 });

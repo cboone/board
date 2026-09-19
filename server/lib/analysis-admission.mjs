@@ -1,4 +1,5 @@
 import { BoardError } from './errors.mjs';
+import { createAnalysisPreflightReadiness } from './analysis-preflight-readiness.mjs';
 import {
   createDispatchCapability,
   dispatchBackgroundJob,
@@ -195,6 +196,7 @@ export function createAnalysisAdmission({
   deployId,
   origin,
   pricingAttestation,
+  preflightReadiness,
   fetchImpl = fetch,
   randomBytes,
   now = Date.now,
@@ -219,6 +221,14 @@ export function createAnalysisAdmission({
     origin,
     pricingAttestation,
   };
+  const readiness =
+    preflightReadiness ??
+    createAnalysisPreflightReadiness({
+      storage: spendStorage,
+      deployId,
+      pricingAttestation,
+    });
+  if (typeof readiness?.requireReady !== 'function') throw unavailable();
   const jobs = createJobStore({ storage: jobStorage });
 
   async function readState(input, repositoryId) {
@@ -495,6 +505,7 @@ export function createAnalysisAdmission({
     )
       throw new BoardError('invalid_request');
     const identity = pinnedIdentity(input.repository);
+    await readiness.requireReady({ budget: input.budget });
     const admittedAt = clockTimestamp(now);
     await ensureCatalogRepository({
       storage: reportStorage,

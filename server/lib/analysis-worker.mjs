@@ -2,13 +2,17 @@ import { createHash, randomBytes as nativeRandomBytes } from 'node:crypto';
 import {
   ANALYSIS_INPUT_LIMITS,
   prepareAnalysisInput,
-  projectPriorAnalysis,
 } from './analysis-input.mjs';
 import {
   ANALYSIS_RESULT_CLASSIFICATION,
   AnalysisResultValidationError,
   assembleSuccessfulAnalysisResult,
 } from './analysis-result.mjs';
+import {
+  analysisInputFromCountRequest,
+  analysisPriorForSource,
+  buildAnalysisRequestPair,
+} from './analysis-request.mjs';
 import {
   ANTHROPIC_POLICY,
   AnthropicAttemptError,
@@ -91,6 +95,7 @@ function safeFailureCode(error, fallback = 'analysis_unavailable') {
     'analysis_output_invalid',
     'analysis_provider_rate_limited',
     'analysis_provider_unavailable',
+    'analysis_preflight_required',
     'analysis_sensitive_input',
     'analysis_unavailable',
     'pricing_review_required',
@@ -108,20 +113,6 @@ function safeFailureCode(error, fallback = 'analysis_unavailable') {
 }
 
 const TERMINAL = new Set(TERMINAL_JOB_STATES);
-
-function sameRepositoryIdentity(left, right) {
-  return (
-    left !== null &&
-    right !== null &&
-    typeof left === 'object' &&
-    typeof right === 'object' &&
-    left.id === right.id &&
-    left.fullName === right.fullName &&
-    left.name === right.name &&
-    left.private === right.private &&
-    left.url === right.url
-  );
-}
 
 function knownUsageCostMicrousd(error) {
   if (!(error instanceof AnthropicAttemptError)) return null;
@@ -319,6 +310,7 @@ function assertWorkerServices({
     [
       spend,
       [
+        'requirePreflight',
         'readReservation',
         'readPaidReservation',
         'settleAttempt',
@@ -332,22 +324,6 @@ function assertWorkerServices({
     )
   )
     throw unavailable();
-}
-
-function analysisInputFromRequest(request) {
-  try {
-    if (
-      !request ||
-      !Array.isArray(request.messages) ||
-      request.messages.length !== 1 ||
-      request.messages[0]?.role !== 'user' ||
-      typeof request.messages[0].content !== 'string'
-    )
-      throw new TypeError();
-    return JSON.parse(request.messages[0].content);
-  } catch {
-    throw new BoardError('analysis_provider_unavailable');
-  }
 }
 
 function assertProviderRequestBounds(analysisInput) {
@@ -595,6 +571,7 @@ export function createAnalysisWorker(input) {
       generation: lease.generation,
       budget,
     });
+    await spend.requirePreflight({ budget });
     return fresh;
   }
 
@@ -653,6 +630,7 @@ export function createAnalysisWorker(input) {
       generation: lease.generation,
       budget,
     });
+    await spend.requirePreflight({ budget });
     return fresh;
   }
 
@@ -1186,33 +1164,19 @@ export function createAnalysisWorker(input) {
       const countWindow = freeLeaseWindow(current, runtime);
       const countSignal = deadlineSignal(signal, countWindow.operationMs);
       await anthropic.retrieveModel({ signal: countSignal });
-      const priorRepository = priorVersion?.source?.provenance?.repository;
       const currentRepository = gathered.summary?.repo;
-      const priorAnalysis =
-        priorVersion !== null &&
-        sameRepositoryIdentity(priorRepository, currentRepository)
-          ? projectPriorAnalysis(priorVersion.report)
-          : null;
+      const priorAnalysis = analysisPriorForSource(
+        priorVersion,
+        currentRepository,
+      );
       prepared = await prepareInput({
         sourceSnapshot: gathered.sourceSnapshot,
         limitations: gathered.summary.provenance.limitations,
         priorAnalysis,
-        requestFactory: (message) => {
-          const analysisInput = JSON.parse(message.content);
-          return {
-            countRequest: buildCountRequest(
-              analysisInput,
-              ANALYSIS_DELTA_SCHEMA,
-            ),
-            messageRequest: buildMessageRequest(
-              analysisInput,
-              ANALYSIS_DELTA_SCHEMA,
-            ),
-          };
-        },
+        requestFactory: buildAnalysisRequestPair,
         countClient: async (request) =>
           countTokensBounded({
-            analysisInput: analysisInputFromRequest(request),
+            analysisInput: analysisInputFromCountRequest(request),
             runtime,
             signal: countSignal,
             deadlineAt: current.value.stateDeadlineAt,

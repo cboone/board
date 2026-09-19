@@ -1,6 +1,7 @@
 import { BoardError, errorResponse } from './errors.mjs';
 import {
   projectAnalysisAvailabilityResponse,
+  projectAnalysisPreflightResponse,
   projectCatalogPageResponse,
   projectDirectReportResponse,
   projectJobResponse,
@@ -243,6 +244,26 @@ function admissionRequest(value) {
   };
 }
 
+function preflightRequest(value) {
+  if (
+    !exact(value, ['operation', 'expectedCurrentReportId']) ||
+    !['generate', 'refresh'].includes(value.operation) ||
+    !(
+      value.expectedCurrentReportId === null ||
+      (typeof value.expectedCurrentReportId === 'string' &&
+        HEX_64.test(value.expectedCurrentReportId))
+    ) ||
+    (value.operation === 'generate' &&
+      value.expectedCurrentReportId !== null) ||
+    (value.operation === 'refresh' && value.expectedCurrentReportId === null)
+  )
+    throw new BoardError('invalid_request');
+  return {
+    operation: value.operation,
+    expectedCurrentReportId: value.expectedCurrentReportId,
+  };
+}
+
 function decisionRequest(value) {
   if (
     !exact(value, [
@@ -289,6 +310,7 @@ export function createApi({
   auth,
   sourceOperations,
   reportOperations = null,
+  analysisPreflight = null,
   createOperationBudget,
 }) {
   return async function api(request) {
@@ -315,6 +337,9 @@ export function createApi({
       const admissionMatch =
         request.method === 'POST' &&
         /^\/api\/repositories\/([1-9]\d*)\/report-jobs$/.exec(path);
+      const preflightMatch =
+        request.method === 'POST' &&
+        /^\/api\/repositories\/([1-9]\d*)\/analysis-preflight$/.exec(path);
       const jobMatch =
         request.method === 'GET' &&
         /^\/api\/report-jobs\/([a-f0-9]{64})$/.exec(path);
@@ -328,6 +353,7 @@ export function createApi({
         isAnalysisAvailability ||
         reportMatch ||
         admissionMatch ||
+        preflightMatch ||
         jobMatch ||
         isDecision;
       if (
@@ -336,20 +362,31 @@ export function createApi({
         (isReports &&
           [...url.searchParams.keys()].some((key) => key !== 'cursor')) ||
         (isReports && url.searchParams.getAll('cursor').length > 1) ||
-        (reportRoute && reportOperations === null)
+        (reportRoute && reportOperations === null) ||
+        (preflightMatch && analysisPreflight === null)
       )
         throw new BoardError('invalid_request');
-      const repositoryMatch = sourceMatch || reportMatch || admissionMatch;
+      const repositoryMatch =
+        sourceMatch || reportMatch || admissionMatch || preflightMatch;
       const repositoryId = repositoryMatch
         ? Number(repositoryMatch[1])
         : undefined;
       if (repositoryMatch && !Number.isSafeInteger(repositoryId))
         throw new BoardError('invalid_request');
       const session = await auth.requireAuthorizedOwner(request, { budget });
-      if (isLogout || sourceMatch || admissionMatch || isDecision)
+      if (
+        isLogout ||
+        sourceMatch ||
+        admissionMatch ||
+        preflightMatch ||
+        isDecision
+      )
         auth.requireCsrf(request, session);
       const parsedAdmission = admissionMatch
         ? admissionRequest(await requestJson(request))
+        : null;
+      const parsedPreflight = preflightMatch
+        ? preflightRequest(await requestJson(request))
         : null;
       if (isLogout) {
         const result = await auth.logout({ session, budget });
@@ -423,6 +460,18 @@ export function createApi({
             request: parsedAdmission,
             budget,
           });
+        } else if (preflightMatch) {
+          const pinned = await sourceOperations.checkRepositoryAccess({
+            ...shared,
+            repositoryId,
+          });
+          result = await analysisPreflight.verify({
+            ...shared,
+            repositoryId,
+            repository: pinned,
+            request: parsedPreflight,
+            authorize: () => auth.recheckOwner({ session, lease, budget }),
+          });
         } else if (reportOperations)
           result = await reportOperations.checkSource({
             ownerId: session.ownerId,
@@ -467,7 +516,7 @@ export function createApi({
           budget,
         });
         output = { repositories };
-      } else if (admissionMatch) {
+      } else if (admissionMatch || preflightMatch) {
         output = result;
         leaseIsCurrent = await auth.recordSourceAuthorization({
           lease,
@@ -486,6 +535,8 @@ export function createApi({
       if (!leaseIsCurrent) throw new BoardError('provider_unavailable');
       if (isList) output = projectRepositoryListResponse(output);
       else if (admissionMatch) output = projectJobResponse(output);
+      else if (preflightMatch)
+        output = projectAnalysisPreflightResponse(output);
       return json(output, [], admissionMatch ? 202 : 200);
     } catch (error) {
       return errorResponse(error);

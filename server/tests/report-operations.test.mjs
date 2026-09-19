@@ -1220,6 +1220,9 @@ test('global admission sweep completes another repository before reserving and d
     spendStorage,
     deployId: 'deploy-1',
     origin: 'https://tracker-boards.example',
+    preflightReadiness: {
+      requireReady: async () => ({ ready: true }),
+    },
     fetchImpl: async (_url, init) => {
       const body = JSON.parse(init.body);
       assert.notEqual(body.jobId, terminalJob.jobId);
@@ -1407,6 +1410,10 @@ test('returns initial analysis availability after a bounded nonpaid reconciliati
   });
   assert.deepEqual(result, {
     spendMode: { available: true, mode: 'setup', reason: null },
+    analysisReadiness: {
+      ready: false,
+      reason: 'analysis_preflight_required',
+    },
   });
   assert.deepEqual(board.reconciliations, [{ ownerId: OWNER_ID, budget }]);
   assert.equal(JSON.stringify(result).includes('Microusd'), false);

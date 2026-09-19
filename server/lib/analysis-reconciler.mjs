@@ -1,3 +1,4 @@
+import { createAnalysisPreflightReadiness } from './analysis-preflight-readiness.mjs';
 import { BoardError } from './errors.mjs';
 import { classifyJobRecovery } from './job-machine.mjs';
 import { createJobStore } from './job-store.mjs';
@@ -206,7 +207,13 @@ export function createAnalysisDurableServices(input) {
       ? {}
       : { pricingAttestation: input.pricingAttestation }),
   };
+  const preflight = createAnalysisPreflightReadiness({
+    storage: input.spendStorage,
+    deployId: input.deployId,
+    pricingAttestation: input.pricingAttestation,
+  });
   const spend = Object.freeze({
+    requirePreflight: (options) => preflight.requireReady(options),
     readReservation: (options) =>
       readSetupSpendReservation({ ...spendBase, ...options }),
     readPaidReservation: (options) =>

@@ -9,7 +9,7 @@ deployed Phase 2 site supports GitHub sign-in, eligible repository selection,
 and source checks; live owner sign-in, public and private source checks,
 sign-out, and preview isolation have passed. Phase 3 adds explicit report
 generation, refresh, and saved reports, but remains pending deployment and paid
-calibration. Open `/demo` to explore a complete report, an empty backlog, or
+acceptance. Open `/demo` to explore a complete report, an empty backlog, or
 issues with unresolved questions. Every sample uses synthetic data.
 
 ## Try the sample reports
@@ -36,22 +36,29 @@ browsing the sample never contacts GitHub or Anthropic and needs no credentials.
 Open [tracker-boards.netlify.app](https://tracker-boards.netlify.app) and sign
 in with the `cboone` GitHub account. The current Phase 2 deployment lets that
 owner select eligible public or private `cboone/*` repositories and run source
-checks. Phase 3 report controls will become available only after their reviewed
-deployment and calibration gates pass.
+checks. Phase 3 report controls will become available after their reviewed
+deployment and production setup.
 
 In the initial complete release, selecting a repository never starts paid
-analysis. A repository without a saved report shows **Generate report**. A saved
-report opens immediately, checks GitHub for changes without a paid call, and
-runs paid reanalysis only through **Refresh report**. Reports require sign-in,
-persist across browsers and devices, preserve the last successful result after a
-failure, and keep uncertain issues visible while withholding affected start
-recommendations.
+analysis. Before the first paid action for a deployment, **Verify analysis
+setup** gathers one bounded eligible repository input, verifies the fixed model
+metadata, and counts the exact request without calling Anthropic Messages or
+changing monetary setup exposure. **Generate report** and **Refresh report**
+remain disabled until that deployment, setup policy, and request contract are
+verified. A repository without a saved report then shows **Generate report**. A
+saved report opens immediately, checks GitHub for changes without a paid call,
+and runs paid reanalysis only through **Refresh report**. Reports require
+sign-in, persist across browsers and devices, preserve the last successful
+result after a failure, and keep uncertain issues visible while withholding
+affected start recommendations.
 
 Production source checks use read-only GitHub App authorization. Repository
 selection makes no paid calls; **Check GitHub** gathers the approved inputs
-under bounded limits and shows source provenance. Repository text and
-credentials stay on the server. Owner sessions remain separate from current
-source access.
+under bounded limits and shows source provenance. During setup verification and
+paid analysis, Board sends only the approved bounded source from its server to
+Anthropic. Raw source inputs and credentials never enter browser storage or
+static artifacts, and credentials are never sent to Anthropic. Owner sessions
+remain separate from current source access.
 
 Saved-report reads remain available after a source becomes inaccessible or
 ineligible, with a clear historical/source-unavailable status and analysis

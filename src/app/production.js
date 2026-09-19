@@ -45,6 +45,8 @@ const messages = Object.freeze({
     'Analysis is temporarily rate limited. Try again later.',
   analysis_provider_unavailable:
     'Analysis is temporarily unavailable. Try again later.',
+  analysis_preflight_required:
+    'Verify analysis setup before requesting paid analysis.',
   budget_exhausted: 'The configured analysis spending limit has been reached.',
   budget_discussion_required:
     'The setup spending threshold requires a decision before continuing.',
@@ -1030,10 +1032,76 @@ function validSpendMode(value) {
   ].includes(value.reason);
 }
 
+function validAnalysisReadiness(value) {
+  return (
+    strictExact(value, ['ready', 'reason']) &&
+    typeof value.ready === 'boolean' &&
+    (value.ready
+      ? value.reason === null
+      : value.reason === 'analysis_preflight_required')
+  );
+}
+
+function validAnalysisPreflight(value) {
+  return (
+    strictExact(value, [
+      'status',
+      'deployId',
+      'policyId',
+      'requestContractHash',
+      'model',
+      'effort',
+      'modelMaxInputTokens',
+      'modelMaxOutputTokens',
+      'configuredInputTokens',
+      'configuredOutputTokens',
+      'inputTokens',
+      'countRequestBytes',
+      'messageRequestBytes',
+      'verifiedAt',
+    ]) &&
+    value.status === 'ready' &&
+    strictText(value.deployId, 128) &&
+    /^[a-z0-9][a-z0-9._-]{0,127}$/u.test(value.policyId) &&
+    hex64.test(value.requestContractHash) &&
+    value.model === 'claude-opus-5' &&
+    value.effort === 'high' &&
+    isCount(value.modelMaxInputTokens) &&
+    value.modelMaxInputTokens >= value.configuredInputTokens &&
+    isCount(value.modelMaxOutputTokens) &&
+    value.modelMaxOutputTokens >= value.configuredOutputTokens &&
+    value.configuredInputTokens === 100000 &&
+    value.configuredOutputTokens === 16384 &&
+    isCount(value.inputTokens) &&
+    value.inputTokens <= value.configuredInputTokens &&
+    isCount(value.countRequestBytes) &&
+    value.countRequestBytes > 0 &&
+    isCount(value.messageRequestBytes) &&
+    value.messageRequestBytes > 0 &&
+    timestamp(value.verifiedAt)
+  );
+}
+
 function parseAnalysisAvailability(value) {
-  if (!strictExact(value, ['spendMode']) || !validSpendMode(value.spendMode))
+  if (
+    !strictExact(value, ['spendMode', 'analysisReadiness']) ||
+    !validSpendMode(value.spendMode) ||
+    !validAnalysisReadiness(value.analysisReadiness)
+  )
     throw new ApiError('invalid_response');
-  return { ...value.spendMode };
+  return {
+    spendMode: { ...value.spendMode },
+    analysisReadiness: { ...value.analysisReadiness },
+  };
+}
+
+function parseAnalysisPreflight(value) {
+  if (
+    !strictExact(value, ['preflight']) ||
+    !validAnalysisPreflight(value.preflight)
+  )
+    throw new ApiError('invalid_response');
+  return { ...value.preflight };
 }
 
 function parseDirectReport(value) {
@@ -1221,6 +1289,12 @@ export function mountProduction(mount) {
     error: null,
     listError: null,
     jobError: null,
+    analysisReadiness: {
+      ready: false,
+      reason: 'analysis_preflight_required',
+    },
+    preflight: null,
+    preflightError: null,
     notice: '',
     signingOut: false,
     admissionRetry: null,
@@ -1254,6 +1328,8 @@ export function mountProduction(mount) {
     state.freshness = { status: 'idle', summary: null, error: null };
     state.job = null;
     state.jobError = null;
+    state.preflight = null;
+    state.preflightError = null;
     state.admissionRetry = null;
     pendingFocus = null;
   }
@@ -1276,6 +1352,10 @@ export function mountProduction(mount) {
     state.pending = null;
     state.error = null;
     state.listError = null;
+    state.analysisReadiness = {
+      ready: false,
+      reason: 'analysis_preflight_required',
+    };
     state.notice = '';
     state.signingOut = false;
     document.title = 'Board';
@@ -1540,21 +1620,29 @@ export function mountProduction(mount) {
   }
 
   async function refreshAnalysisAvailability(stamp, repositoryId) {
-    let spendMode;
+    let availability;
     try {
-      spendMode = await readAnalysisAvailability();
+      availability = await readAnalysisAvailability();
     } catch (error) {
       if (error instanceof StaleRequest) throw error;
-      spendMode = closedSpendMode(error);
+      availability = {
+        spendMode: closedSpendMode(error),
+        analysisReadiness: {
+          ready: false,
+          reason: 'analysis_preflight_required',
+        },
+      };
     }
     if (!currentView(stamp, repositoryId)) return false;
     if (!state.board) throw new ApiError('invalid_response');
-    state.board = { ...state.board, spendMode };
+    state.board = { ...state.board, spendMode: availability.spendMode };
+    state.analysisReadiness = availability.analysisReadiness;
     return true;
   }
 
-  function openUnsavedRepository(repository, spendMode) {
-    state.board = localEmptyBoard(repository, spendMode);
+  function openUnsavedRepository(repository, availability) {
+    state.board = localEmptyBoard(repository, availability.spendMode);
+    state.analysisReadiness = availability.analysisReadiness;
     state.pending = null;
     state.job = null;
     state.jobError = null;
@@ -1613,15 +1701,21 @@ export function mountProduction(mount) {
         state.repositories.some(({ id }) => id === repositoryId)
       ) {
         state.error = null;
-        let spendMode;
+        let availability;
         try {
-          spendMode = await readAnalysisAvailability();
+          availability = await readAnalysisAvailability();
         } catch (availabilityError) {
           if (availabilityError instanceof StaleRequest) return;
-          spendMode = closedSpendMode(availabilityError);
+          availability = {
+            spendMode: closedSpendMode(availabilityError),
+            analysisReadiness: {
+              ready: false,
+              reason: 'analysis_preflight_required',
+            },
+          };
         }
         if (!currentView(stamp, repositoryId)) return;
-        openUnsavedRepository(state.selected, spendMode);
+        openUnsavedRepository(state.selected, availability);
         return;
       }
       state.pending = null;
@@ -1722,8 +1816,81 @@ export function mountProduction(mount) {
       state.sourceAuthorization === 'ready' &&
       state.freshness.status !== 'source-unavailable' &&
       !savedSourceUnavailable &&
+      state.analysisReadiness.ready === true &&
       state.board?.spendMode.available === true
     );
+  }
+
+  function preflightAllowed() {
+    const savedSourceUnavailable =
+      state.board?.sourceCheck?.status === 'source-unavailable' &&
+      !['ready', 'unchanged', 'changed'].includes(state.freshness.status);
+    return (
+      state.selected !== null &&
+      state.board !== null &&
+      state.repositories.some(({ id }) => id === state.selected.id) &&
+      state.sourceAuthorization === 'ready' &&
+      state.freshness.status !== 'checking' &&
+      state.freshness.status !== 'source-unavailable' &&
+      !savedSourceUnavailable &&
+      !(state.job && !terminalJobStates.has(state.job.state))
+    );
+  }
+
+  async function verifyAnalysisSetup() {
+    if (
+      !preflightAllowed() ||
+      state.analysisReadiness.ready ||
+      state.pending !== null
+    )
+      return;
+    const repositoryId = state.selected.id;
+    const requestBody = {
+      operation: state.board.current === null ? 'generate' : 'refresh',
+      expectedCurrentReportId: state.board.current?.reportId ?? null,
+    };
+    const stamp = { generation, view: viewGeneration };
+    state.pending = 'preflight';
+    state.preflight = null;
+    state.preflightError = null;
+    paint();
+    try {
+      const result = parseAnalysisPreflight(
+        await request(
+          'POST',
+          `/api/repositories/${repositoryId}/analysis-preflight`,
+          { body: requestBody, scope: 'view' },
+        ),
+      );
+      if (!currentView(stamp, repositoryId)) return;
+      state.pending = null;
+      state.analysisReadiness = { ready: true, reason: null };
+      state.preflight = result;
+      pendingFocus = 'analysis-setup-title';
+      paint();
+    } catch (error) {
+      if (!currentView(stamp, repositoryId)) return;
+      const safeError =
+        error instanceof ApiError ? error : new ApiError('internal_error');
+      state.pending = null;
+      state.preflightError = safeError;
+      state.analysisReadiness = {
+        ready: false,
+        reason: 'analysis_preflight_required',
+      };
+      if (safeError.code === 'source_authorization_required')
+        state.sourceAuthorization = 'reauthorization-required';
+      if (
+        ['report_state_changed', 'analysis_in_progress'].includes(
+          safeError.code,
+        )
+      ) {
+        await loadBoard(repositoryId);
+        return;
+      }
+      pendingFocus = 'analysis-setup-title';
+      paint();
+    }
   }
 
   async function startAnalysis() {
@@ -1777,6 +1944,11 @@ export function mountProduction(mount) {
         : null;
       if (safeError.code === 'source_authorization_required')
         state.sourceAuthorization = 'reauthorization-required';
+      if (safeError.code === 'analysis_preflight_required')
+        state.analysisReadiness = {
+          ready: false,
+          reason: 'analysis_preflight_required',
+        };
       if (
         ['report_state_changed', 'analysis_in_progress'].includes(
           safeError.code,
@@ -2195,6 +2367,17 @@ export function mountProduction(mount) {
       state.freshness.status === 'checking' ||
       state.sourceAuthorization === 'reauthorization-required';
     controls.append(check);
+    if (!state.analysisReadiness.ready) {
+      const verify = action(
+        state.pending === 'preflight'
+          ? 'Verifying analysis setup…'
+          : 'Verify analysis setup',
+        verifyAnalysisSetup,
+        true,
+      );
+      verify.disabled = state.pending !== null || !preflightAllowed();
+      controls.append(verify);
+    }
     const operation = state.board.current === null ? 'Generate' : 'Refresh';
     const retrying = state.admissionRetry !== null;
     const analyze = action(
@@ -2214,6 +2397,7 @@ export function mountProduction(mount) {
       link('Open repository on GitHub', state.selected.url),
     );
     source.append(controls);
+    paintAnalysisSetup(source);
     if (!analysisAllowed()) {
       const reason = analysisUnavailableReason();
       if (reason)
@@ -2222,7 +2406,7 @@ export function mountProduction(mount) {
     source.append(
       element(
         'p',
-        'The GitHub check is free. Paid analysis runs only when you choose Generate report or Refresh report.',
+        'The GitHub check and analysis setup verification make no paid Messages call. Paid analysis runs only when you choose Generate report or Refresh report.',
         `mt-4 text-sm ${mutedClass}`,
       ),
     );
@@ -2250,7 +2434,32 @@ export function mountProduction(mount) {
       return (
         messages[state.board.spendMode.reason] ?? messages.analysis_unavailable
       );
+    if (!state.analysisReadiness.ready)
+      return messages.analysis_preflight_required;
     return '';
+  }
+
+  function paintAnalysisSetup(section) {
+    const title = element(
+      'h3',
+      'Analysis setup',
+      'mt-5 text-base font-semibold',
+    );
+    title.id = 'analysis-setup-title';
+    section.append(title);
+    const text = state.analysisReadiness.ready
+      ? state.preflight
+        ? `Verified ${state.preflight.model} with ${state.preflight.inputTokens.toLocaleString()} input tokens in the bounded request. This verification made no paid Messages call.`
+        : 'Analysis setup is verified for this deployment. This verification made no paid Messages call.'
+      : 'Analysis setup has not been verified for this deployment.';
+    const status = element('p', text, `mt-2 text-sm ${mutedClass}`);
+    status.setAttribute('role', 'status');
+    section.append(status);
+    if (state.preflightError) {
+      const alert = element('p', state.preflightError.message, 'mt-2 text-sm');
+      alert.setAttribute('role', 'alert');
+      section.append(alert);
+    }
   }
 
   function paintFreshness() {

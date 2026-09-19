@@ -7,6 +7,7 @@ import {
   repositories,
   reportId,
   safeJob,
+  safePreflight,
   savedBoard,
   sourceSummary,
 } from './mock-api.js';
@@ -88,6 +89,57 @@ test('enables first-use generation after an unverified session completes a sourc
   await expect(
     page.getByRole('button', { name: 'Generate report' }),
   ).toBeEnabled();
+});
+
+test('requires the explicit no-spend setup verification before enabling paid analysis', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  flow.boards.set(202, emptyBoard());
+  flow.availability = async () => ({
+    status: 200,
+    data: {
+      spendMode: { available: true, mode: 'setup', reason: null },
+      analysisReadiness: {
+        ready: false,
+        reason: 'analysis_preflight_required',
+      },
+    },
+  });
+  flow.preflight = async () => ({
+    status: 200,
+    data: { preflight: safePreflight() },
+  });
+
+  await page.goto('/repositories/202');
+  await expect(
+    page.getByRole('button', { name: 'Verify analysis setup' }),
+  ).toBeEnabled();
+  await expect(
+    page.getByRole('button', { name: 'Generate report' }),
+  ).toBeDisabled();
+  await expect(
+    page.getByText('Analysis setup has not been verified'),
+  ).toBeVisible();
+
+  await page.getByRole('button', { name: 'Verify analysis setup' }).click();
+  await expect(
+    page.getByText('Verified claude-opus-5 with 1,234 input tokens'),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Generate report' }),
+  ).toBeEnabled();
+  const call = flow.calls.find(({ path }) =>
+    path.endsWith('/analysis-preflight'),
+  );
+  expect(call.csrfToken).toBe(flow.csrfToken);
+  expect(call.body).toEqual({
+    operation: 'generate',
+    expectedCurrentReportId: null,
+  });
+  expect(
+    flow.calls.filter(({ path }) => path.endsWith('/report-jobs')),
+  ).toEqual([]);
 });
 
 test('keeps a saved report readable and refreshable across a repository rename', async ({
@@ -228,6 +280,7 @@ test('rejects a contradictory available response for a new board', async ({
         mode: 'disabled',
         reason: 'budget_exhausted',
       },
+      analysisReadiness: { ready: true, reason: null },
     },
   });
   await page.goto('/repositories/202');

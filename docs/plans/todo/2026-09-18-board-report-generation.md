@@ -545,19 +545,37 @@ assume hard termination or the platform's 15-minute limit produces another
 delivery. A duplicate invocation that observes a paid-boundary state performs
 only the nonpaid reconciliation described below and never calls the provider.
 
-Before the first paid calibration request, use the configured credential to read
-live metadata for exact model `claude-opus-5`. Require positive current limits
-that support the reviewed context and output reservation. Separately verify
-current official pricing and every billed feature used by the request. Append
-that exact bounded-validity pricing attestation to the reviewed code registry
-and use only its last entry for new admission. Bind each immutable setup policy
-ID to that exact attestation plus the deploy ID. A missing, mismatched, or
-expired current attestation disables paid dispatch and returns a sanitized
-configuration error. Immediately before each paid-boundary CAS, strongly read
-the exact active policy and reservation and require its reviewed validity window
-to extend through the immutable provider cutoff. Every paid state deadline and
-Messages abort signal remains at or before that cutoff, so pricing cannot expire
-in the proof/CAS gap or during the request.
+Before the first paid calibration request for an exact deployment, require the
+owner to invoke **Verify analysis setup** through the authenticated,
+CSRF-protected `/api/repositories/:id/analysis-preflight` route. The route pins
+current repository access, gathers the complete bounded source transiently,
+rechecks authorization around provider work, and exposes only model-metadata and
+token-count capabilities. It builds the exact shared count and Messages request
+pair but calls no Messages method. Require live metadata for exact model
+`claude-opus-5`, positive current limits that support the reviewed context and
+output reservation, and a successful token count for the final bounded request.
+
+Persist one immutable global readiness marker bound to the exact deploy ID,
+reviewed setup-policy ID, and shared request-contract hash. Store only safe
+model, token, byte, deploy, policy, contract, and verification-time facts. Store
+no repository identity, source fingerprint, request hash, or raw input. Preflight
+creates no analysis job or reservation and leaves the monetary setup ledger at
+zero settled, reserved, unknown, and total exposure. A missing marker projects
+the distinct `analysis_preflight_required` availability state, blocks admission
+before any durable analysis write, and fails closed at strong reads immediately
+before both the primary and corrective paid boundaries. A deploy, policy, or
+request-contract change requires another explicit preflight.
+
+Separately verify current official pricing and every billed feature used by the
+request. Append that exact bounded-validity pricing attestation to the reviewed
+code registry and use only its last entry for new admission. Bind each immutable
+setup policy ID to that exact attestation plus the deploy ID. A missing,
+mismatched, or expired current attestation disables paid dispatch and returns a
+sanitized configuration error. Immediately before each paid-boundary CAS,
+strongly read the exact active policy and reservation and require its reviewed
+validity window to extend through the immutable provider cutoff. Every paid
+state deadline and Messages abort signal remains at or before that cutoff, so
+pricing cannot expire in the proof/CAS gap or during the request.
 
 The model metadata endpoint does not attest pricing. Keep the manually verified
 official rates, billed-feature exclusions, source URL, verification time, and
@@ -1307,13 +1325,14 @@ JSON envelope with fixed messages.
 
 Add these owner-authenticated routes:
 
-| Method | Route                               | Purpose                      |
-| ------ | ----------------------------------- | ---------------------------- |
-| GET    | `/api/reports`                      | List saved report identities |
-| GET    | `/api/repositories/:id/report`      | Load current board state     |
-| POST   | `/api/repositories/:id/report-jobs` | Admit Generate or Refresh    |
-| GET    | `/api/report-jobs/:jobId`           | Poll one authorized job      |
-| POST   | `/api/setup-budget-decision`        | Record an explicit decision  |
+| Method | Route                                      | Purpose                      |
+| ------ | ------------------------------------------ | ---------------------------- |
+| GET    | `/api/reports`                             | List saved report identities |
+| GET    | `/api/repositories/:id/report`             | Load current board state     |
+| POST   | `/api/repositories/:id/analysis-preflight` | Verify analysis setup        |
+| POST   | `/api/repositories/:id/report-jobs`        | Admit Generate or Refresh    |
+| GET    | `/api/report-jobs/:jobId`                  | Poll one authorized job      |
+| POST   | `/api/setup-budget-decision`               | Record an explicit decision  |
 
 The separate `POST /.netlify/functions/report-job` background endpoint is not
 session-authenticated and never receives cookies, a GitHub token, or a CSRF
@@ -1361,6 +1380,23 @@ Definitive ineligibility or inaccessible source produces historical/source-
 unavailable status and disables Generate/Refresh without hiding the report. No
 check route imports or calls the Anthropic client.
 
+`POST /api/repositories/:id/analysis-preflight` accepts exactly:
+
+```json
+{
+  "operation": "generate or refresh",
+  "expectedCurrentReportId": "null or current report ID"
+}
+```
+
+It requires the authorized owner, CSRF, current repository access, and the exact
+Generate or Refresh report tuple. A successful response projects only the ready
+status, deploy and policy IDs, request-contract hash, fixed model and effort,
+model/configured token limits, bounded token and request-byte counts, and the
+verification time. It exposes no repository identity or source/request hash.
+Once the global marker is current, later calls reuse it without another source
+or provider request.
+
 `POST /api/repositories/:id/report-jobs` accepts exactly:
 
 ```json
@@ -1389,9 +1425,10 @@ list, and, for acknowledgement, a ceiling at or below $25. It is used only after
 the required user discussion and performs no dispatch or reservation.
 
 Add stable errors and status mapping for `report_state_changed`,
-`analysis_in_progress`, `analysis_unavailable`, `analysis_input_too_large`,
-`analysis_output_invalid`, `analysis_ambiguous`, `budget_exhausted`, and
-`budget_discussion_required`, plus `analysis_sensitive_input`,
+`analysis_in_progress`, `analysis_preflight_required`, `analysis_unavailable`,
+`analysis_input_too_large`, `analysis_output_invalid`, `analysis_ambiguous`,
+`budget_exhausted`, and `budget_discussion_required`, plus
+`analysis_sensitive_input`,
 `report_catalog_full`, and retryable `report_catalog_changed`. A provider rate
 limit remains distinct from a GitHub rate limit in internal code even if the
 browser messages are similarly brief. Session `401` remains the only response
@@ -1415,8 +1452,11 @@ URLs, browser storage, or static artifacts.
 For a repository without a report:
 
 - Render repository identity and source-check status.
+- Show **Verify analysis setup** while the exact deployment, setup policy, and
+  request contract lack their global readiness marker. The action makes no paid
+  Messages call and reports the bounded token count when it succeeds.
 - Show **Generate report** only when source eligibility/access and spending mode
-  permit it.
+  permit it and analysis setup is ready.
 - Selecting the repository and completing the automatic source check remain
   free. Only the explicit button POST may start Anthropic analysis.
 
@@ -1433,9 +1473,9 @@ For a repository with a report:
   successful report.
 - Show automatic source freshness in a separate status region: checking,
   unchanged, changes detected, check failed, or source unavailable.
-- Show **Refresh report** as the only paid update action. A changed fingerprint
-  never starts it automatically. An unchanged fingerprint does not imply the
-  explicit action is free.
+- Show **Refresh report** as the only paid update action after analysis setup is
+  ready. A changed fingerprint never starts it automatically. An unchanged
+  fingerprint does not imply the explicit action is free.
 - Preserve the rendered report during job progress and every refresh failure.
   Show job failure, ambiguity, or budget blocking in a separate live-status
   region.
@@ -1488,7 +1528,9 @@ Before any paid call, verify in the deployed artifact:
   remains correct, and the background endpoint rejects missing/invalid
   capabilities without work.
 - Model metadata and free token counting work with the exact fixed request; the
-  durable ledger still records zero settled spend before the first Messages
+  deployment-bound readiness marker is current, contains no repository-derived
+  identity or hashes, and the durable monetary ledger still records zero
+  settled, reserved, unknown, and total exposure before the first Messages
   request.
 
 ## Validation plan
@@ -1532,6 +1574,9 @@ Before any paid call, verify in the deployed artifact:
 
 ### Provider tests
 
+- Prove the preflight provider surface exposes only model metadata and token
+  counting, rejects any Messages-capable surface, shares the worker's exact
+  request builder, and leaves Messages calls and monetary exposure at zero.
 - Compare the free-count and Messages request envelopes field for field and
   assert the exact model, effort, thinking, schema, version header, paid-only
   global-inference and standard-only-service controls, and omitted paid
@@ -1564,6 +1609,9 @@ Before any paid call, verify in the deployed artifact:
 
 ### Storage, concurrency, and budget tests
 
+- Persist one exact-key, source-free global preflight marker and reject unknown
+  fields, repository/source/request identity, stale deploy/policy/contract
+  bindings, and missing markers before admission or either paid boundary.
 - Exercise exact allowlist schemas and byte bounds, strict key validation,
   strong reads, `onlyIfNew`, `onlyIfMatch`, bounded CAS conflicts, and
   fail-closed storage errors. Include the job accounting sequence, digest,
@@ -1661,6 +1709,9 @@ Before any paid call, verify in the deployed artifact:
 
 ### API and browser tests
 
+- Verify the owner/CSRF preflight route, exact request tuple, repeated
+  authorization checks, strict safe response projection, deployment-global
+  reuse, distinct readiness state, and **Verify analysis setup** control.
 - Require owner authentication for all real reports and jobs, including public
   repositories and direct URLs. Reject another account, repository, job, CSRF
   token, or stale expected report ID.
@@ -1715,7 +1766,10 @@ admitted by the setup ledger and recorded without private source content.
 
 Run live acceptance in this order:
 
-1. Verify exact model metadata and token counting without a paid Messages call.
+1. Use **Verify analysis setup** on an eligible repository. Verify exact model
+   metadata and token counting without a paid Messages call, confirm the safe
+   deployment/policy/request-contract marker, and confirm all monetary exposure
+   remains zero.
 2. Generate one representative eligible public-repository report through the
    explicit owner action. Verify full issue coverage, report semantics,
    uncertainty, provenance, usage settlement, current-envelope retrieval with

@@ -61,6 +61,7 @@ const ERROR_CODES = new Set([
   'analysis_output_invalid',
   'analysis_provider_rate_limited',
   'analysis_provider_unavailable',
+  'analysis_preflight_required',
   'analysis_sensitive_input',
   'analysis_unavailable',
   'budget_discussion_required',

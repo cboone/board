@@ -4,6 +4,7 @@ import {
   cp,
   mkdir,
   mkdtemp,
+  readdir,
   rm,
   symlink,
   writeFile,
@@ -201,6 +202,20 @@ test('staged authored functions resolve dependencies and reject preview before p
     installServer: async () => {},
     buildFrontend: staticBuild,
   });
+  assert.deepEqual((await readdir(result.functionsDirectory)).sort(), [
+    'api.mjs',
+    'report-job.mjs',
+  ]);
+  for (const module of [
+    'analysis-preflight.mjs',
+    'analysis-preflight-readiness.mjs',
+    'analysis-request.mjs',
+  ])
+    await access(resolve(result.functionsDirectory, '../lib', module));
+  await assert.rejects(
+    access(resolve(directory, 'server/.generated/edge-functions')),
+    { code: 'ENOENT' },
+  );
   await childRun(
     directory,
     `
@@ -215,6 +230,9 @@ test('staged authored functions resolve dependencies and reject preview before p
     const response=await handler(new Request('https://tracker-boards.netlify.app/api/session'),{deploy:{context:'deploy-preview'}});
     assert.equal(response.status,403);
     assert.equal((await response.json()).error.code,'forbidden');
+    const preflightResponse=await handler(new Request('https://tracker-boards.netlify.app/api/repositories/17/analysis-preflight',{method:'POST'}),{deploy:{context:'deploy-preview'}});
+    assert.equal(preflightResponse.status,403);
+    assert.equal((await preflightResponse.json()).error.code,'forbidden');
     const workerModule=await import(workerEntry);
     assert.deepEqual(workerModule.config,{background:true});
     const workerResponse=await workerModule.default(new Request('https://tracker-boards.netlify.app/.netlify/functions/report-job',{method:'POST'}),{deploy:{context:'deploy-preview'}});

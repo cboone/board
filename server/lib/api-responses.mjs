@@ -1,3 +1,5 @@
+import { ANALYSIS_INPUT_LIMITS } from './analysis-input.mjs';
+import { ANTHROPIC_POLICY } from './anthropic.mjs';
 import { BoardError } from './errors.mjs';
 import {
   REPORT_STORAGE_LIMITS,
@@ -30,6 +32,7 @@ const JOB_ERRORS = new Set([
   'analysis_output_invalid',
   'analysis_provider_rate_limited',
   'analysis_provider_unavailable',
+  'analysis_preflight_required',
   'analysis_sensitive_input',
   'analysis_unavailable',
   'budget_discussion_required',
@@ -191,6 +194,17 @@ function spendMode(value) {
     mode: value.mode,
     reason: value.reason,
   };
+}
+
+function analysisReadiness(value) {
+  exact(value, ['ready', 'reason']);
+  if (
+    typeof value.ready !== 'boolean' ||
+    (value.ready && value.reason !== null) ||
+    (!value.ready && value.reason !== 'analysis_preflight_required')
+  )
+    fail();
+  return { ready: value.ready, reason: value.reason };
 }
 
 function repositoryStateMetadata(value, projectedRepository) {
@@ -377,8 +391,76 @@ export function projectDirectReportResponse(value) {
 }
 
 export function projectAnalysisAvailabilityResponse(value) {
-  exact(value, ['spendMode']);
-  return { spendMode: spendMode(value.spendMode) };
+  exact(value, ['spendMode', 'analysisReadiness']);
+  return {
+    spendMode: spendMode(value.spendMode),
+    analysisReadiness: analysisReadiness(value.analysisReadiness),
+  };
+}
+
+export function projectAnalysisPreflightResponse(value) {
+  exact(value, ['marker']);
+  exact(value.marker, [
+    'schemaVersion',
+    'ownerId',
+    'deployId',
+    'policyId',
+    'requestContractHash',
+    'model',
+    'effort',
+    'modelMaxInputTokens',
+    'modelMaxOutputTokens',
+    'configuredInputTokens',
+    'configuredOutputTokens',
+    'inputTokens',
+    'countRequestBytes',
+    'messageRequestBytes',
+    'verifiedAt',
+  ]);
+  const marker = value.marker;
+  if (
+    marker.schemaVersion !== 1 ||
+    marker.ownerId !== 99961 ||
+    !text(marker.deployId, 128) ||
+    !/^[a-z0-9][a-z0-9._-]{0,127}$/u.test(marker.policyId) ||
+    !HEX_64.test(marker.requestContractHash) ||
+    marker.model !== 'claude-opus-5' ||
+    marker.effort !== 'high' ||
+    !Number.isSafeInteger(marker.modelMaxInputTokens) ||
+    marker.modelMaxInputTokens < marker.configuredInputTokens ||
+    !Number.isSafeInteger(marker.modelMaxOutputTokens) ||
+    marker.modelMaxOutputTokens < marker.configuredOutputTokens ||
+    marker.configuredInputTokens !== ANALYSIS_INPUT_LIMITS.inputTokens ||
+    marker.configuredOutputTokens !== ANTHROPIC_POLICY.maxTokens ||
+    !Number.isSafeInteger(marker.inputTokens) ||
+    marker.inputTokens < 0 ||
+    marker.inputTokens > marker.configuredInputTokens ||
+    !Number.isSafeInteger(marker.countRequestBytes) ||
+    marker.countRequestBytes < 1 ||
+    marker.countRequestBytes > ANTHROPIC_POLICY.requestBytes ||
+    !Number.isSafeInteger(marker.messageRequestBytes) ||
+    marker.messageRequestBytes < 1 ||
+    marker.messageRequestBytes > ANTHROPIC_POLICY.requestBytes
+  )
+    fail();
+  return {
+    preflight: {
+      status: 'ready',
+      deployId: marker.deployId,
+      policyId: marker.policyId,
+      requestContractHash: marker.requestContractHash,
+      model: marker.model,
+      effort: marker.effort,
+      modelMaxInputTokens: marker.modelMaxInputTokens,
+      modelMaxOutputTokens: marker.modelMaxOutputTokens,
+      configuredInputTokens: marker.configuredInputTokens,
+      configuredOutputTokens: marker.configuredOutputTokens,
+      inputTokens: marker.inputTokens,
+      countRequestBytes: marker.countRequestBytes,
+      messageRequestBytes: marker.messageRequestBytes,
+      verifiedAt: iso(marker.verifiedAt),
+    },
+  };
 }
 
 export function projectJobResponse(value) {

@@ -299,6 +299,7 @@ test('withholds a late analysis availability response after sign-out', async ({
       status: 200,
       data: {
         spendMode: { available: true, mode: 'setup', reason: null },
+        analysisReadiness: { ready: true, reason: null },
       },
     };
   };

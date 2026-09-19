@@ -114,7 +114,7 @@ Production data is isolated by purpose:
 | `board-auth`    | OAuth transactions, sessions, and encrypted owner tokens  |
 | `board-reports` | Repository state and immutable successful report versions |
 | `board-jobs`    | Durable analysis jobs and publication state               |
-| `board-spend`   | Setup and future production spending ledgers              |
+| `board-spend`   | Spending ledgers and deploy-bound preflight marker        |
 
 The production build installs the independent server package and stages the two
 Functions plus their server and shared-domain modules. Every missing, unknown,
@@ -131,8 +131,47 @@ production-context value to its trusted production build, so build code must
 never read or export it. Do not create `development`, `branch-deploy`,
 `deploy-preview`, or all-context values. Never give it a `VITE_` name, expose it
 to the frontend, place it in a command argument, print it, download it for
-inspection, or record its value here. Only the guarded background Function reads
-it when handling an authorized analysis job.
+inspection, or record its value here. The guarded `api` Function reads it only
+inside an authenticated, CSRF-protected setup preflight after current repository
+access is pinned. The guarded background Function reads it when handling an
+authorized analysis job.
+
+### No-spend analysis preflight
+
+The first paid operation on an exact production deployment requires an explicit
+**Verify analysis setup** action. It posts the current Generate or Refresh tuple
+to `/api/repositories/:id/analysis-preflight`. The route repeats owner and token
+authorization checks, gathers the bounded repository input transiently, reads
+the fixed `claude-opus-5` metadata, and runs the exact shared request builder
+through Anthropic token counting. Its provider capability exposes only model
+metadata and token counting; no Messages method is reachable from this path.
+
+```json
+{
+  "operation": "generate or refresh",
+  "expectedCurrentReportId": "null or current report ID"
+}
+```
+
+Success conditionally writes one immutable global readiness marker bound to the
+exact deployment ID, reviewed setup-policy ID, and request-contract hash. The
+marker contains only fixed model and limit facts, bounded token and byte counts,
+and its verification time. It contains no repository identity, source
+fingerprint, request hash, or raw source. Repository and provider request data
+remain transient. The monetary setup ledger remains at zero settled, reserved,
+unknown, and total exposure because preflight creates no job or reservation and
+makes no Messages call.
+
+Analysis availability projects readiness separately from spending mode. A
+missing marker returns `analysis_preflight_required`, keeps Generate and Refresh
+disabled, and prevents admission before any catalog, job, claim, reservation,
+or dispatch write. The worker strongly rereads the marker immediately before
+the primary paid boundary and again before a corrective paid boundary. A new
+deployment, reviewed setup policy, or request contract selects a different
+marker key and requires another explicit verification. A later paid operation
+recollects and recounts its current source; preflight verifies the request
+contract and provider capability rather than freezing repository input for a
+future job.
 
 The implemented setup policy fixes model `claude-opus-5`, high effort, global
 inference, and standard service. Its ledger admits at most two attempts for an
@@ -168,13 +207,15 @@ reservations require the exact current active policy. A lost activation
 acknowledgement is resolved by strong read without repeating policy or monetary
 accounting changes. The 16-policy limit fails closed.
 
-Collection and counting use committed 90,000 ms and 60,000 ms durable windows.
-Authentication, token refresh, and prior-report retrieval consume the collection
-window. The worker strongly rereads the job and proves the same live collecting
-token before any GitHub request. GitHub, model-metadata, and token counting
-operations receive only the time remaining before their current
-`stateDeadlineAt` and the provider cutoff. An expired worker cannot adopt a
-replacement lease; reconciliation owns expiry finalization.
+Background-worker collection and counting use committed 90,000 ms and 60,000 ms
+durable windows. Authentication, token refresh, and prior-report retrieval
+consume the collection window. The worker strongly rereads the job and proves
+the same live collecting token before any GitHub request. GitHub,
+model-metadata, and token counting operations receive only the time remaining
+before their current `stateDeadlineAt` and the provider cutoff. An expired
+worker cannot adopt a replacement lease; reconciliation owns expiry
+finalization. The synchronous setup preflight instead uses the API operation
+budget and does not create a worker lease.
 
 This setup policy does not authorize ordinary production paid usage. That mode
 remains disabled until measured calibration evidence supports a separate user
@@ -217,6 +258,9 @@ Complete this checklist against the exact proposed PR head:
       `ANTHROPIC_API_KEY` is documented only for production server use.
 - [ ] Setup limits and future production-policy decisions are clearly separate;
       no paid calibration or ordinary production authorization is implied.
+- [ ] The explicit preflight calls only model metadata and token counting,
+      persists no repository-derived identity or request hash, leaves monetary
+      exposure at zero, and gates admission plus both paid worker boundaries.
 - [ ] Deploy rollover preserves lifetime setup accounting and prior-policy
       reconciliation while current admission uses the last exact reviewed
       pricing attestation and the current deploy-bound policy.

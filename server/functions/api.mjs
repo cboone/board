@@ -1,5 +1,7 @@
 import { createApi } from '../lib/api.mjs';
 import { createAnalysisAdmission } from '../lib/analysis-admission.mjs';
+import { createAnalysisPreflight } from '../lib/analysis-preflight.mjs';
+import { createAnthropicClient } from '../lib/anthropic.mjs';
 import {
   createAnalysisDurableServices,
   createAnalysisReconciler,
@@ -7,6 +9,7 @@ import {
 import { createAuth } from '../lib/auth.mjs';
 import { createCrypto } from '../lib/crypto.mjs';
 import {
+  readAnalysisEnvironment,
   readEnvironment,
   readPublicOrigin,
   requireCanonicalOrigin,
@@ -28,11 +31,22 @@ function requiresReportOperations(request) {
       ['/api/reports', '/api/analysis-availability'].includes(path)) ||
     (request.method === 'POST' && path === '/api/setup-budget-decision') ||
     (request.method === 'POST' &&
-      /^\/api\/repositories\/[1-9]\d*\/(?:check|report-jobs)$/u.test(path)) ||
+      /^\/api\/repositories\/[1-9]\d*\/(?:analysis-preflight|check|report-jobs)$/u.test(
+        path,
+      )) ||
     (request.method === 'GET' &&
       /^\/api\/repositories\/[1-9]\d*\/report$/u.test(path)) ||
     (request.method === 'GET' &&
       /^\/api\/report-jobs\/[a-f0-9]{64}$/u.test(path))
+  );
+}
+
+function requiresAnalysisPreflight(request) {
+  return (
+    request.method === 'POST' &&
+    /^\/api\/repositories\/[1-9]\d*\/analysis-preflight$/u.test(
+      new URL(request.url).pathname,
+    )
   );
 }
 
@@ -42,6 +56,8 @@ export function createHandler({
   sourceFactory = createSourceOperations,
   authFactory = createAuth,
   admissionFactory = createAnalysisAdmission,
+  preflightFactory = createAnalysisPreflight,
+  anthropicFactory = createAnthropicClient,
   reconcilerFactory = createAnalysisReconciler,
   reportFactory = createReportOperations,
   fetchImpl = fetch,
@@ -72,6 +88,7 @@ export function createHandler({
         now,
       });
       let reportOperations = null;
+      let analysisPreflight = null;
       if (requiresReportOperations(request)) {
         const [reportStorage, jobStorage, spendStorage] = await Promise.all(
           ['board-reports', 'board-jobs', 'board-spend'].map((storeName) =>
@@ -107,11 +124,29 @@ export function createHandler({
           pricingAttestation: REVIEWED_SETUP_PRICING_ATTESTATION,
           now,
         });
+        if (requiresAnalysisPreflight(request))
+          analysisPreflight = preflightFactory({
+            reportStorage,
+            spendStorage,
+            sourceOperations,
+            deployId,
+            pricingAttestation: REVIEWED_SETUP_PRICING_ATTESTATION,
+            createProvider: () => {
+              const { apiKey } = readAnalysisEnvironment(env);
+              const client = anthropicFactory({ apiKey, fetchImpl });
+              return Object.freeze({
+                retrieveModel: (options) => client.retrieveModel(options),
+                countTokens: (options) => client.countTokens(options),
+              });
+            },
+            now,
+          });
       }
       return await createApi({
         auth,
         sourceOperations,
         reportOperations,
+        analysisPreflight,
         createOperationBudget: (options) =>
           createOperationBudget({ ...options, now }),
       })(request);

@@ -12,6 +12,7 @@ test('analysis admission exposes the reviewed stable browser codes', () => {
   for (const code of [
     'report_state_changed',
     'analysis_in_progress',
+    'analysis_preflight_required',
     'analysis_unavailable',
   ]) {
     const error = new BoardError(code);

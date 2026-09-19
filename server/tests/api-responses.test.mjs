@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   API_RESPONSE_LIMITS,
   projectAnalysisAvailabilityResponse,
+  projectAnalysisPreflightResponse,
   projectCatalogPageResponse,
   projectDirectReportResponse,
   projectJobResponse,
@@ -20,6 +21,27 @@ const repository = {
   url: 'https://github.com/cboone/widgets',
 };
 const spendMode = { available: true, mode: 'setup', reason: null };
+const analysisReadiness = {
+  ready: false,
+  reason: 'analysis_preflight_required',
+};
+const preflightMarker = {
+  schemaVersion: 1,
+  ownerId: 99961,
+  deployId: 'deploy-1',
+  policyId: 'setup-policy-v1',
+  requestContractHash: 'd'.repeat(64),
+  model: 'claude-opus-5',
+  effort: 'high',
+  modelMaxInputTokens: 1_000_000,
+  modelMaxOutputTokens: 32_000,
+  configuredInputTokens: 100_000,
+  configuredOutputTokens: 16_384,
+  inputTokens: 12_345,
+  countRequestBytes: 123_456,
+  messageRequestBytes: 123_512,
+  verifiedAt: '2026-09-19T12:00:00.000Z',
+};
 const job = {
   id: 'a'.repeat(64),
   operation: 'generate',
@@ -76,13 +98,29 @@ test('projects every JSON response family through an exact recursive allowlist',
       },
     ],
     [projectDirectReportResponse, emptyReport()],
-    [projectAnalysisAvailabilityResponse, { spendMode }],
+    [projectAnalysisAvailabilityResponse, { spendMode, analysisReadiness }],
+    [
+      projectAnalysisPreflightResponse,
+      {
+        marker: preflightMarker,
+      },
+      {
+        preflight: {
+          status: 'ready',
+          ...Object.fromEntries(
+            Object.entries(preflightMarker).filter(
+              ([key]) => !['schemaVersion', 'ownerId'].includes(key),
+            ),
+          ),
+        },
+      },
+    ],
     [projectJobResponse, { job }],
     [projectSetupDecisionResponse, { status: 'updated', spendMode }],
   ];
-  for (const [project, value] of cases) {
+  for (const [project, value, expected = value] of cases) {
     const projected = project(structuredClone(value));
-    assert.deepEqual(projected, value);
+    assert.deepEqual(projected, expected);
     const unexpected = structuredClone(value);
     unexpected.privateMarker = 'must-not-cross';
     assert.throws(() => project(unexpected), { code: 'internal_error' });
@@ -113,4 +151,18 @@ test('enforces the final buffered JSON ceiling on exact UTF-8 bytes', () => {
   assert.throws(() => serializeApiResponse(`${multibyte}🧭`), {
     code: 'internal_error',
   });
+});
+
+test('rejects inconsistent or oversized analysis preflight facts', () => {
+  for (const marker of [
+    { ...preflightMarker, configuredInputTokens: 99_999 },
+    { ...preflightMarker, configuredOutputTokens: 16_383 },
+    { ...preflightMarker, modelMaxInputTokens: 99_999 },
+    { ...preflightMarker, modelMaxOutputTokens: 16_383 },
+    { ...preflightMarker, countRequestBytes: 8 * 1024 * 1024 + 1 },
+    { ...preflightMarker, messageRequestBytes: 8 * 1024 * 1024 + 1 },
+  ])
+    assert.throws(() => projectAnalysisPreflightResponse({ marker }), {
+      code: 'internal_error',
+    });
 });

@@ -1,4 +1,8 @@
 import { BoardError } from './errors.mjs';
+import {
+  createAnalysisPreflightReadiness,
+  projectAnalysisReadiness,
+} from './analysis-preflight-readiness.mjs';
 import { createJobStore } from './job-store.mjs';
 import {
   beginSourceCheck,
@@ -296,6 +300,11 @@ export function createReportOperations({
   const decide = decisionFunction(applySpendDecision);
   const jobs = createJobStore({ storage: jobStorage });
   const safeJob = safeJobReader(jobs);
+  const preflight = createAnalysisPreflightReadiness({
+    storage: spendStorage,
+    deployId,
+    pricingAttestation,
+  });
   const spendContext = (budget) => ({
     storage: spendStorage,
     budget,
@@ -427,7 +436,12 @@ export function createReportOperations({
       ...spendContext(input.budget),
       at,
     });
-    return { spendMode: projectSpendMode(spend) };
+    return {
+      spendMode: projectSpendMode(spend),
+      analysisReadiness: projectAnalysisReadiness(
+        await preflight.read({ budget: input.budget }),
+      ),
+    };
   }
 
   async function pollJob(input) {

@@ -535,14 +535,14 @@ The [detailed phase plan](2026-09-18-board-report-generation.md) fixes the Opus
 5/high-effort wire contract, deterministic optional context selection,
 source-bound assembly, durable report catalog and current/previous rotation,
 at-most-once paid state machine, setup spending ledger, authenticated recovery,
-and Generate/Refresh browser flow. The active worktree implements those paths
-from the verified Phase 2 merge with native `fetch`, synchronous admission, and
-a native `report-job` background Function. It composes exactly `api` and
-`report-job` in production and uses the isolated `board-auth`, `board-reports`,
-`board-jobs`, and `board-spend` Blob stores. Synthetic and mocked tests exercise
-the implementation; complete local verification, PR review, a live deployment,
-and paid acceptance remain. Anthropic setup spend remains $0 until its
-deployment and paid-call gates pass.
+an explicit no-spend setup preflight, and Generate/Refresh browser flow. The
+active worktree implements those paths from the verified Phase 2 merge with
+native `fetch`, synchronous admission, and a native `report-job` background
+Function. It composes exactly `api` and `report-job` in production and uses the
+isolated `board-auth`, `board-reports`, `board-jobs`, and `board-spend` Blob
+stores. Synthetic and mocked tests exercise the implementation; complete local
+verification, PR review, a live deployment, and paid acceptance remain.
+Anthropic setup spend remains $0 until its deployment and paid-call gates pass.
 
 The server enforces the fixed model configuration, bounded input collection,
 validated analysis, comparison with the previous successful report, access and
@@ -556,18 +556,21 @@ Store successful reports durably server-side. On opening a saved report,
 automatically check GitHub for changes and display the check outcome separately
 from the saved analysis. Anthropic reanalysis of an existing report requires an
 explicit refresh request. When no saved report exists, show a **Generate
-report** button and initiate paid analysis only through that action. Selecting a
-repository never initiates a paid call. Collect the approved issue, comment, PR,
-branch, tree, and relevant-file context within agreed bounds; expose input
-provenance and limitations. Repository state exposes logical current and
-previous successful pointers while the report route returns content only from
-the current immutable envelope. Keep raw inputs transient and preserve
-provenance. Before attempting pointer rotation, the job records every non-null
-former-previous key as inert `cleanupCandidateKey` metadata. After rotation,
-that version remains physically stored outside the logical current/previous
-history until an explicit retention and deletion policy is approved. The initial
-release has no history listing/retrieval API and no report deletion API. Logout
-retains saved reports.
+report** button and initiate paid analysis only through that action after
+**Verify analysis setup** succeeds for the exact deployment, policy, and request
+contract. Setup verification uses only model metadata and token counting, makes
+no Messages call, and persists a global marker without repository identity or
+source/request hashes. Selecting a repository never initiates a paid call.
+Collect the approved issue, comment, PR, branch, tree, and relevant-file context
+within agreed bounds; expose input provenance and limitations. Repository state
+exposes logical current and previous successful pointers while the report route
+returns content only from the current immutable envelope. Keep raw inputs
+transient and preserve provenance. Before attempting pointer rotation, the job
+records every non-null former-previous key as inert `cleanupCandidateKey`
+metadata. After rotation, that version remains physically stored outside the
+logical current/previous history until an explicit retention and deletion
+policy is approved. The initial release has no history listing/retrieval API and
+no report deletion API. Logout retains saved reports.
 
 Exit when a real supported repository produces the full report, repeated use
 follows the agreed freshness policy, and failures preserve the last successful

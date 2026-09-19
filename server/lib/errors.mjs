@@ -56,6 +56,11 @@ const ERRORS = Object.freeze({
     'Analysis is temporarily unavailable.',
     true,
   ],
+  analysis_preflight_required: [
+    409,
+    'Verify analysis setup before requesting paid analysis.',
+    false,
+  ],
   budget_discussion_required: [
     409,
     'The setup spending threshold requires a decision before continuing.',

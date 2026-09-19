@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createAnalysisAdmission } from '../lib/analysis-admission.mjs';
+import { BoardError } from '../lib/errors.mjs';
 import { createJobStore } from '../lib/job-store.mjs';
 import { transitionJob } from '../lib/job-machine.mjs';
 import { deriveAnalysisJobIdentity } from '../lib/jobs.mjs';
@@ -100,7 +101,14 @@ function memoryStorage(name, log, expectedBudget = budget) {
   };
 }
 
-function fixture({ now = NOW, fetchImpl, operationBudget = budget } = {}) {
+function fixture({
+  now = NOW,
+  fetchImpl,
+  operationBudget = budget,
+  preflightReadiness = Object.freeze({
+    requireReady: async () => Object.freeze({ ready: true }),
+  }),
+} = {}) {
   const log = [];
   const reportStorage = memoryStorage('reports', log, operationBudget);
   const jobStorage = memoryStorage('jobs', log, operationBudget);
@@ -119,6 +127,7 @@ function fixture({ now = NOW, fetchImpl, operationBudget = budget } = {}) {
     spendStorage,
     deployId: 'deploy-1',
     origin: 'https://tracker-boards.example',
+    preflightReadiness,
     fetchImpl: resolvedFetch,
     randomBytes: (size) => {
       randomCalls += 1;
@@ -191,6 +200,25 @@ test('admission orders durable stores, dispatches only a capability, and returns
     Object.keys(board.spendStorage.value(SETUP_SPEND_LEDGER_KEY).active).length,
     1,
   );
+});
+
+test('admission requires the current preflight marker before any durable job, claim, reservation, or dispatch', async () => {
+  let reads = 0;
+  const board = fixture({
+    preflightReadiness: {
+      async requireReady({ budget: receivedBudget }) {
+        reads += 1;
+        assert.equal(receivedBudget, budget);
+        throw new BoardError('analysis_preflight_required');
+      },
+    },
+  });
+  await assert.rejects(board.admission.admit(request()), {
+    code: 'analysis_preflight_required',
+  });
+  assert.equal(reads, 1);
+  assert.deepEqual(board.log, []);
+  assert.deepEqual(board.dispatches, []);
 });
 
 test('background dispatch combines request cancellation with the operation deadline', async () => {

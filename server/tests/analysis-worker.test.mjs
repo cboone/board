@@ -255,6 +255,7 @@ function spendService(
     pricingVerifiedAt = '2026-09-18T04:00:00.000Z',
     pricingValidThrough = '2026-09-20T04:00:00.000Z',
     afterPaidRead = null,
+    preflightRequiredAt = null,
   } = {},
 ) {
   let reservation = {
@@ -339,7 +340,14 @@ function spendService(
         }
       : null;
   let paidReads = 0;
+  let preflightReads = 0;
   return Object.freeze({
+    requirePreflight: async () => {
+      preflightReads += 1;
+      if (preflightReads === preflightRequiredAt)
+        throw new BoardError('analysis_preflight_required');
+      return { ready: true };
+    },
     readReservation: async ({ jobId }) => readReservation(jobId),
     readPaidReservation: async ({ jobId, at, requiredThrough }) => {
       const value = readReservation(jobId);
@@ -380,6 +388,7 @@ function spendService(
     reservation: () =>
       reservation === null ? null : structuredClone(reservation),
     pricingReviewRequired: () => pricingReviewRequired,
+    preflightReads: () => preflightReads,
     requirePricingReview: () => {
       pricingReviewRequired = true;
     },
@@ -436,6 +445,7 @@ function fixture({
   afterSettleAdvance = 0,
   correctiveStartAdvance = 0,
   paidPolicyExpiryAt = null,
+  preflightRequiredAt = null,
   pricingVerifiedAt,
   pricingValidThrough,
   pricingReviewAfterCount = null,
@@ -501,6 +511,7 @@ function fixture({
   const spend = spendService(job, {
     fault,
     paidPolicyExpiryAt,
+    preflightRequiredAt,
     pricingVerifiedAt,
     pricingValidThrough,
     afterPaidRead: (number) => {
@@ -875,6 +886,29 @@ test('full worker success publishes once and duplicate delivery performs no paid
   });
   assert.equal(duplicate.state, 'succeeded');
   assert.equal(setup.metrics.messages(), 1);
+});
+
+test('a missing preflight marker at the primary paid boundary prevents every Messages call', async () => {
+  const setup = fixture({ preflightRequiredAt: 1 });
+  const result = await runWorker(setup);
+  assert.equal(result.state, 'failed');
+  assert.equal(result.terminal.errorCode, 'analysis_preflight_required');
+  assert.equal(setup.metrics.messages(), 0);
+  assert.equal(setup.spend.preflightReads(), 1);
+  assertNoReport(setup);
+});
+
+test('the corrective paid boundary strongly rereads preflight and stops before its Messages call', async () => {
+  const setup = fixture({
+    responses: [primaryResponse({ invalid: true }), primaryResponse()],
+    preflightRequiredAt: 2,
+  });
+  const result = await runWorker(setup);
+  assert.equal(result.state, 'failed');
+  assert.equal(result.terminal.errorCode, 'analysis_preflight_required');
+  assert.equal(setup.metrics.messages(), 1);
+  assert.equal(setup.spend.preflightReads(), 2);
+  assertNoReport(setup);
 });
 
 for (const outcome of ['absent', 'committed']) {

@@ -77,6 +77,7 @@ test('fixed report, job and spend stores reject cross-namespace keys and unsafe 
   await reports.read(`owners/99961/repositories/17/versions/${'a'.repeat(64)}`);
   await jobs.read(`jobs/${'b'.repeat(64)}`);
   await spend.read('setup/v1');
+  await spend.read(`setup/preflight/v1/${'d'.repeat(64)}`);
   await spend.read('production/policy.v1/2026-09');
   await reports.delete(
     `owners/99961/repositories/17/versions/${'c'.repeat(64)}`,

@@ -260,6 +260,26 @@ export function safeJob(state, overrides = {}) {
   };
 }
 
+export function safePreflight(overrides = {}) {
+  return {
+    status: 'ready',
+    deployId: 'deploy-1',
+    policyId: 'setup-policy-v1',
+    requestContractHash: 'd'.repeat(64),
+    model: 'claude-opus-5',
+    effort: 'high',
+    modelMaxInputTokens: 1_000_000,
+    modelMaxOutputTokens: 32_000,
+    configuredInputTokens: 100_000,
+    configuredOutputTokens: 16_384,
+    inputTokens: 1234,
+    countRequestBytes: 4567,
+    messageRequestBytes: 4623,
+    verifiedAt: '2026-09-19T12:00:00.000Z',
+    ...overrides,
+  };
+}
+
 export function deferred() {
   let resolve;
   const promise = new Promise((complete) => {
@@ -290,6 +310,7 @@ export async function mockApi(page) {
     reports: null,
     report: null,
     availability: null,
+    preflight: null,
     check: null,
     admission: null,
     job: null,
@@ -337,6 +358,7 @@ export async function mockApi(page) {
             status: 200,
             data: {
               spendMode: { available: true, mode: 'setup', reason: null },
+              analysisReadiness: { ready: true, reason: null },
             },
           };
     } else if (/^\/api\/repositories\/[1-9]\d*\/report$/u.test(path)) {
@@ -362,6 +384,13 @@ export async function mockApi(page) {
                 flow.boards.get(id)?.repository,
             ),
           };
+    } else if (
+      /^\/api\/repositories\/[1-9]\d*\/analysis-preflight$/u.test(path)
+    ) {
+      const id = Number(path.split('/')[3]);
+      response = flow.preflight
+        ? await flow.preflight(id, call.body)
+        : { status: 200, data: { preflight: safePreflight() } };
     } else if (/^\/api\/repositories\/[1-9]\d*\/report-jobs$/u.test(path)) {
       const id = Number(path.split('/')[3]);
       response = flow.admission
