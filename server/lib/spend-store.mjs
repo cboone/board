@@ -172,6 +172,29 @@ function attemptResult(status, ledger, jobId, attemptNumber) {
   });
 }
 
+function reservationReadResult(ledger, entry) {
+  return Object.freeze({
+    policyId: entry.policyId,
+    pricingReviewRequired: ledger.pricingReviewRequired,
+    reservationMicrousd: Object.freeze(
+      entry.attempts.map((attempt) => attempt.ceilingMicrousd),
+    ),
+    attempts: Object.freeze(
+      entry.attempts.map((attempt) =>
+        Object.freeze({
+          number: attempt.number,
+          ceilingMicrousd: attempt.ceilingMicrousd,
+          state: attempt.state,
+          actualCostMicrousd: attempt.actualCostMicrousd,
+          unknownExposureMicrousd: attempt.unknownExposureMicrousd,
+          recordedAt: attempt.recordedAt,
+        }),
+      ),
+    ),
+    accounting: entryAccounting(entry),
+  });
+}
+
 function safeSummary(ledger, at) {
   iso(at);
   const policyId = ledger.activePolicyId;
@@ -297,25 +320,32 @@ export async function readSetupSpendReservation(input) {
   if (current === null) throw unavailable();
   const entry = current.ledger.active[input.jobId];
   if (!entry) return null;
+  return reservationReadResult(current.ledger, entry);
+}
+
+/** Prove one reservation still uses the current reviewed policy before payment. */
+export async function readSetupPaidReservation(input) {
+  const selected = select(input);
+  if (!HEX_64.test(input.jobId)) throw unavailable();
+  const paidAt = iso(input.at);
+  const requiredThrough = iso(input.requiredThrough);
+  const current = await readLedger(selected);
+  if (current === null) throw unavailable();
+  const ledger = bindCurrentLedger(current.ledger, selected);
+  const policy = ledger.policies[ledger.activePolicyId];
+  const entry = ledger.active[input.jobId];
+  if (!entry) return null;
+  if (
+    entry.policyId !== ledger.activePolicyId ||
+    Date.parse(requiredThrough) < Date.parse(paidAt) ||
+    Date.parse(paidAt) < Date.parse(policy.pricingVerifiedAt) ||
+    Date.parse(paidAt) >= Date.parse(policy.pricingValidThrough) ||
+    Date.parse(requiredThrough) > Date.parse(policy.pricingValidThrough)
+  )
+    throw new BoardError('pricing_review_required');
   return Object.freeze({
-    policyId: entry.policyId,
-    pricingReviewRequired: current.ledger.pricingReviewRequired,
-    reservationMicrousd: Object.freeze(
-      entry.attempts.map((attempt) => attempt.ceilingMicrousd),
-    ),
-    attempts: Object.freeze(
-      entry.attempts.map((attempt) =>
-        Object.freeze({
-          number: attempt.number,
-          ceilingMicrousd: attempt.ceilingMicrousd,
-          state: attempt.state,
-          actualCostMicrousd: attempt.actualCostMicrousd,
-          unknownExposureMicrousd: attempt.unknownExposureMicrousd,
-          recordedAt: attempt.recordedAt,
-        }),
-      ),
-    ),
-    accounting: entryAccounting(entry),
+    ...reservationReadResult(ledger, entry),
+    pricingValidThrough: policy.pricingValidThrough,
   });
 }
 

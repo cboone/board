@@ -227,7 +227,16 @@ function reportService(
   });
 }
 
-function spendService(job, { afterSettle, fault } = {}) {
+function spendService(
+  job,
+  {
+    afterSettle,
+    fault,
+    paidPolicyExpiryAt = null,
+    pricingVerifiedAt = '2026-09-18T04:00:00.000Z',
+    pricingValidThrough = '2026-09-20T04:00:00.000Z',
+  } = {},
+) {
   let reservation = {
     jobId: job.jobId,
     policyId: job.pricePolicyId,
@@ -302,14 +311,29 @@ function spendService(job, { afterSettle, fault } = {}) {
       accounting: structuredClone(reservation.accounting),
     };
   };
+  const readReservation = (jobId) =>
+    reservation?.jobId === jobId
+      ? {
+          ...structuredClone(reservation),
+          pricingReviewRequired,
+        }
+      : null;
+  let paidReads = 0;
   return Object.freeze({
-    readReservation: async ({ jobId }) =>
-      reservation?.jobId === jobId
-        ? {
-            ...structuredClone(reservation),
-            pricingReviewRequired,
-          }
-        : null,
+    readReservation: async ({ jobId }) => readReservation(jobId),
+    readPaidReservation: async ({ jobId, at, requiredThrough }) => {
+      const value = readReservation(jobId);
+      if (value === null) return null;
+      paidReads += 1;
+      if (
+        paidReads === paidPolicyExpiryAt ||
+        Date.parse(at) < Date.parse(pricingVerifiedAt) ||
+        Date.parse(at) >= Date.parse(pricingValidThrough) ||
+        Date.parse(requiredThrough) > Date.parse(pricingValidThrough)
+      )
+        throw new BoardError('pricing_review_required');
+      return { ...value, pricingValidThrough };
+    },
     listReservations: async () =>
       reservation === null ? [] : [structuredClone(reservation)],
     fenceReservation: async ({ revalidate }) => {
@@ -388,6 +412,9 @@ function fixture({
   responseAdvance = 0,
   afterSettleAdvance = 0,
   correctiveStartAdvance = 0,
+  paidPolicyExpiryAt = null,
+  pricingVerifiedAt,
+  pricingValidThrough,
   pricingReviewAfterCount = null,
   messageClient = null,
   reconcileBeforeErrorAt = null,
@@ -420,6 +447,9 @@ function fixture({
   });
   const spend = spendService(job, {
     fault,
+    paidPolicyExpiryAt,
+    pricingVerifiedAt,
+    pricingValidThrough,
     afterSettle: (number) => {
       if (number === 1) time.advance(afterSettleAdvance);
     },
@@ -1085,6 +1115,23 @@ test('a pricing gate raised by another reserved job blocks the primary paid boun
   );
 });
 
+test('an expired reviewed policy blocks the primary paid boundary', async () => {
+  const setup = fixture({ paidPolicyExpiryAt: 1 });
+  const result = await setup.worker.run({
+    jobId: setup.job.jobId,
+    capability,
+    budget,
+  });
+  assert.equal(result.state, 'failed');
+  assert.equal(result.terminal.errorCode, 'pricing_review_required');
+  assert.equal(setup.metrics.counts(), 1);
+  assert.equal(setup.metrics.messages(), 0);
+  assert.deepEqual(
+    result.attempts.map(({ state }) => state),
+    ['released', 'released'],
+  );
+});
+
 test('ambiguous provider transport retains conservative exposure and never replays', async () => {
   const setup = fixture({
     responses: [new AnthropicAttemptError('analysis_ambiguous')],
@@ -1404,6 +1451,26 @@ test('a pricing gate raised by another reserved job blocks the corrective paid b
   });
   assert.equal(result.state, 'failed');
   assert.equal(result.terminal.errorCode, 'analysis_unavailable');
+  assert.equal(setup.metrics.messages(), 1);
+  assert.deepEqual(
+    result.attempts.map(({ state }) => state),
+    ['settled', 'released'],
+  );
+});
+
+test('an expired reviewed policy blocks the corrective paid boundary', async () => {
+  const setup = fixture({
+    responses: [primaryResponse({ invalid: true })],
+    paidPolicyExpiryAt: 2,
+  });
+  const result = await setup.worker.run({
+    jobId: setup.job.jobId,
+    capability,
+    budget,
+  });
+  assert.equal(result.state, 'failed');
+  assert.equal(result.terminal.errorCode, 'pricing_review_required');
+  assert.equal(setup.metrics.counts(), 2);
   assert.equal(setup.metrics.messages(), 1);
   assert.deepEqual(
     result.attempts.map(({ state }) => state),

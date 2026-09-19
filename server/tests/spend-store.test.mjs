@@ -8,6 +8,7 @@ import {
   fenceSetupReservation,
   listSetupSpendReservations,
   markSetupAttemptUnknown,
+  readSetupPaidReservation,
   readSetupSpendReservation,
   readSetupSpendSummary,
   releaseSetupAttempt,
@@ -341,6 +342,46 @@ test('reservation reads expose exact immutable worker accounting without creatin
   assert.equal(Object.isFrozen(reserved.reservationMicrousd), true);
   assert.equal(Object.isFrozen(reserved.attempts), true);
   assert.equal(Object.isFrozen(reserved.attempts[0]), true);
+  const paid = await readSetupPaidReservation({
+    ...context(storage),
+    jobId: id('a'),
+    at: at(5),
+    requiredThrough: at(6),
+  });
+  assert.deepEqual(Object.keys(paid), [
+    'policyId',
+    'pricingReviewRequired',
+    'reservationMicrousd',
+    'attempts',
+    'accounting',
+    'pricingValidThrough',
+  ]);
+  assert.equal(
+    paid.pricingValidThrough,
+    REVIEWED_SETUP_PRICING_ATTESTATION.pricingValidThrough,
+  );
+  assert.equal(Object.isFrozen(paid), true);
+  await assert.rejects(
+    readSetupPaidReservation({
+      ...context(storage),
+      jobId: id('a'),
+      at: REVIEWED_SETUP_PRICING_ATTESTATION.pricingValidThrough,
+      requiredThrough: REVIEWED_SETUP_PRICING_ATTESTATION.pricingValidThrough,
+    }),
+    { code: 'pricing_review_required' },
+  );
+  const validThrough = Date.parse(
+    REVIEWED_SETUP_PRICING_ATTESTATION.pricingValidThrough,
+  );
+  await assert.rejects(
+    readSetupPaidReservation({
+      ...context(storage),
+      jobId: id('a'),
+      at: new Date(validThrough - 1).toISOString(),
+      requiredThrough: new Date(validThrough + 1).toISOString(),
+    }),
+    { code: 'pricing_review_required' },
+  );
   assert.equal(storage.metrics.writes, writes + 1);
   const active = await listSetupSpendReservations({
     ...context(storage),
@@ -461,6 +502,15 @@ test('deploy rollover preserves old reservations and lifetime accounting across 
     jobId: id('a'),
   });
   assert.equal(priorReservation.policyId, before.activePolicyId);
+  await assert.rejects(
+    readSetupPaidReservation({
+      ...next,
+      jobId: id('a'),
+      at: at(8),
+      requiredThrough: at(9),
+    }),
+    { code: 'pricing_review_required' },
+  );
   const released = await releaseSetupAttempt({
     ...next,
     jobId: id('a'),

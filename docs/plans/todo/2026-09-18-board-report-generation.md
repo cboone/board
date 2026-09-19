@@ -549,7 +549,11 @@ that exact bounded-validity pricing attestation to the reviewed code registry
 and use only its last entry for new admission. Bind each immutable setup policy
 ID to that exact attestation plus the deploy ID. A missing, mismatched, or
 expired current attestation disables paid dispatch and returns a sanitized
-configuration error.
+configuration error. Immediately before each paid-boundary CAS, strongly read
+the exact active policy and reservation and require its reviewed validity window
+to extend through the immutable provider cutoff. Every paid state deadline and
+Messages abort signal remains at or before that cutoff, so pricing cannot expire
+in the proof/CAS gap or during the request.
 
 The model metadata endpoint does not attest pricing. Keep the manually verified
 official rates, billed-feature exclusions, source URL, verification time, and

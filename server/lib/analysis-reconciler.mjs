@@ -16,6 +16,7 @@ import {
   fenceSetupReservation,
   listSetupSpendReservations,
   markSetupAttemptUnknown,
+  readSetupPaidReservation,
   readSetupSpendReservation,
   releaseSetupAttempt,
   removeCompletedSetupSpend,
@@ -208,6 +209,8 @@ export function createAnalysisDurableServices(input) {
   const spend = Object.freeze({
     readReservation: (options) =>
       readSetupSpendReservation({ ...spendBase, ...options }),
+    readPaidReservation: (options) =>
+      readSetupPaidReservation({ ...spendBase, ...options }),
     listReservations: (options) =>
       listSetupSpendReservations({ ...spendBase, ...options }),
     fenceReservation: (options) =>

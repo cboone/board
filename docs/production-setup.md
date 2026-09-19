@@ -153,7 +153,10 @@ entry's rates and computed attempt ceiling match the fixed setup constants. A
 new exact pricing attestation requires an appended reviewed registry entry that
 retains referenced historical entries, or another explicit versioned migration.
 Model, feature, and schema changes require an explicit migration and otherwise
-fail closed.
+fail closed. Immediately before either paid-boundary CAS, the worker strongly
+reads the exact active policy and reservation and requires the reviewed pricing
+window to remain valid through the immutable provider cutoff. Every paid state
+deadline and Messages abort signal is at or before that cutoff.
 
 On an ordinary deploy rollover, `ensureSetupSpendLedger` strongly reads the
 shared `setup/v1` lifetime ledger and conditionally adds and selects the new

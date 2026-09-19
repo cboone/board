@@ -298,7 +298,15 @@ function assertWorkerServices({
         'writeImmutableReportVersion',
       ],
     ],
-    [spend, ['readReservation', 'settleAttempt', 'markAttemptUnknown']],
+    [
+      spend,
+      [
+        'readReservation',
+        'readPaidReservation',
+        'settleAttempt',
+        'markAttemptUnknown',
+      ],
+    ],
   ];
   if (
     requirements.some(([service, names]) =>
@@ -529,7 +537,13 @@ export function createAnalysisWorker(input) {
     return { startedAt, operationMs };
   }
 
-  async function provePaidAdmission(current, freeTokenHash, lease, budget) {
+  async function provePaidAdmission(
+    current,
+    freeTokenHash,
+    lease,
+    runtime,
+    budget,
+  ) {
     const fresh = await readJob(current.value.jobId, budget);
     if (
       fresh.value.state !== 'counting' ||
@@ -544,11 +558,16 @@ export function createAnalysisWorker(input) {
       generation: lease.generation,
       budget,
     });
-    const reservation = await spend.readReservation({
+    const reservation = await spend.readPaidReservation({
       jobId: fresh.value.jobId,
+      at: transitionTime(fresh.value, now),
+      requiredThrough: timestampAt(runtime.providerCutoff),
       budget,
     });
-    return reservationMatches(fresh.value, reservation) ? fresh : null;
+    if (!reservationMatches(fresh.value, reservation)) return null;
+    if (clockMilliseconds(now) >= Date.parse(reservation.pricingValidThrough))
+      throw new BoardError('pricing_review_required');
+    return fresh;
   }
 
   async function proveCorrectiveAdmission(
@@ -556,6 +575,7 @@ export function createAnalysisWorker(input) {
     primaryTokenHash,
     finalizationTokenHash,
     lease,
+    runtime,
     budget,
   ) {
     const fresh = await readJob(current.value.jobId, budget);
@@ -578,8 +598,10 @@ export function createAnalysisWorker(input) {
       generation: lease.generation,
       budget,
     });
-    const reservation = await spend.readReservation({
+    const reservation = await spend.readPaidReservation({
       jobId: fresh.value.jobId,
+      at: transitionTime(fresh.value, now),
+      requiredThrough: timestampAt(runtime.providerCutoff),
       budget,
     });
     if (
@@ -601,6 +623,8 @@ export function createAnalysisWorker(input) {
         fresh.value.attempts[1].reservationMicrousd
     )
       throw unavailable();
+    if (clockMilliseconds(now) >= Date.parse(reservation.pricingValidThrough))
+      throw new BoardError('pricing_review_required');
     return fresh;
   }
 
@@ -1163,6 +1187,7 @@ export function createAnalysisWorker(input) {
         current,
         freeToken.hash,
         lease,
+        runtime,
         budget,
       );
     } catch (error) {
@@ -1464,6 +1489,7 @@ export function createAnalysisWorker(input) {
         primary.token.hash,
         primaryFinalization.token.hash,
         lease,
+        runtime,
         budget,
       );
     } catch (error) {
