@@ -252,13 +252,32 @@ test('primary path crosses each durable boundary before later work', () => {
     }),
     false,
   );
+  const cleanupCandidateKey = `owners/99961/repositories/17/versions/${hash('9')}`;
+  job = transitionJob(job, {
+    type: 'cleanup-candidate-recorded',
+    at: TIMES.version,
+    deadlineAt: '2026-09-18T12:40:00.000Z',
+    cleanupCandidateKey,
+  });
+  assert.equal(job.state, 'version-written');
+  assert.equal(job.publication.cleanupCandidateKey, cleanupCandidateKey);
+  assert.throws(
+    () =>
+      transitionJob(job, {
+        type: 'cleanup-candidate-recorded',
+        at: TIMES.published,
+        deadlineAt: '2026-09-18T12:40:00.000Z',
+        cleanupCandidateKey: `owners/99961/repositories/17/versions/${hash('8')}`,
+      }),
+    { code: 'service_unavailable' },
+  );
   job = transitionJob(job, {
     type: 'report-published',
     at: TIMES.published,
     deadlineAt: '2026-09-18T12:40:00.000Z',
     pointerRevision: 3,
-    cleanupCandidateKey: null,
   });
+  assert.equal(job.publication.cleanupCandidateKey, cleanupCandidateKey);
   job = transitionJob(job, {
     type: 'accounting-recorded',
     at: TIMES.settled,
@@ -304,7 +323,6 @@ test('expired published bookkeeping resumes with a fresh nonpaid deadline', () =
     at: '2026-09-18T12:24:00.000Z',
     deadlineAt: '2026-09-18T12:30:00.000Z',
     pointerRevision: 3,
-    cleanupCandidateKey: null,
   });
   job = transitionJob(job, {
     type: 'accounting-recorded',

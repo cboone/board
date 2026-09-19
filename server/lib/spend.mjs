@@ -64,6 +64,12 @@ const checkedAdd = (...values) => {
   }
   return result;
 };
+const checkedMultiply = (left, right) => {
+  if (!integer(left) || !integer(right)) fail();
+  const result = left * right;
+  if (!Number.isSafeInteger(result)) fail();
+  return result;
+};
 
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
@@ -82,6 +88,14 @@ const digest = (domain, value) =>
 const clone = (value) => structuredClone(value);
 const byteLength = (value) => Buffer.byteLength(JSON.stringify(value), 'utf8');
 
+function deploymentPolicyId(pricingAttestation, deployId) {
+  if (!text(deployId, 128)) fail();
+  return `${SETUP_POLICY_ID}.${digest('board-setup-policy-deploy-v1', {
+    pricingAttestation,
+    deployId,
+  })}`;
+}
+
 const SETUP_FEATURE_POLICY = Object.freeze({
   caching: false,
   tools: false,
@@ -94,7 +108,7 @@ export const SETUP_FEATURE_POLICY_HASH = digest(
   SETUP_FEATURE_POLICY,
 );
 
-export function projectSetupPricingAttestation(value) {
+function projectPricingAttestationShape(value) {
   exact(value, [
     'schemaVersion',
     'policyId',
@@ -110,8 +124,8 @@ export function projectSetupPricingAttestation(value) {
     value.schemaVersion !== 1 ||
     value.policyId !== SETUP_POLICY_ID ||
     value.model !== 'claude-opus-5' ||
-    value.inputRateMicrousd !== SETUP_SPEND_LIMITS.inputRateMicrousd ||
-    value.outputRateMicrousd !== SETUP_SPEND_LIMITS.outputRateMicrousd ||
+    !positive(value.inputRateMicrousd) ||
+    !positive(value.outputRateMicrousd) ||
     value.featurePolicyHash !== SETUP_FEATURE_POLICY_HASH ||
     value.pricingSource !== SETUP_PRICING_SOURCE
   )
@@ -122,27 +136,95 @@ export function projectSetupPricingAttestation(value) {
   return Object.freeze(clone(value));
 }
 
-export function createSetupPricingAttestation(value) {
-  exact(value, ['pricingVerifiedAt', 'pricingValidThrough']);
-  return projectSetupPricingAttestation({
+// Retain prior exact entries when appending a newly reviewed current attestation.
+const REVIEWED_SETUP_PRICING_ATTESTATION_VALUES = [
+  {
     schemaVersion: 1,
     policyId: SETUP_POLICY_ID,
     model: 'claude-opus-5',
-    inputRateMicrousd: SETUP_SPEND_LIMITS.inputRateMicrousd,
-    outputRateMicrousd: SETUP_SPEND_LIMITS.outputRateMicrousd,
+    inputRateMicrousd: 5,
+    outputRateMicrousd: 25,
     featurePolicyHash: SETUP_FEATURE_POLICY_HASH,
     pricingSource: SETUP_PRICING_SOURCE,
+    pricingVerifiedAt: '2026-09-19T05:35:41.000Z',
+    pricingValidThrough: '2026-09-26T05:35:41.000Z',
+  },
+];
+
+export const REVIEWED_SETUP_PRICING_ATTESTATIONS = Object.freeze(
+  REVIEWED_SETUP_PRICING_ATTESTATION_VALUES.map(projectPricingAttestationShape),
+);
+export const REVIEWED_SETUP_PRICING_ATTESTATION =
+  REVIEWED_SETUP_PRICING_ATTESTATIONS.at(-1);
+
+export function projectSetupPricingAttestation(value) {
+  const projected = projectPricingAttestationShape(value);
+  if (
+    !REVIEWED_SETUP_PRICING_ATTESTATIONS.some(
+      (attestation) =>
+        JSON.stringify(canonical(attestation)) ===
+        JSON.stringify(canonical(projected)),
+    )
+  )
+    fail();
+  return projected;
+}
+
+export function createSetupPricingAttestation(value) {
+  exact(value, ['pricingVerifiedAt', 'pricingValidThrough']);
+  return projectSetupPricingAttestation({
+    ...REVIEWED_SETUP_PRICING_ATTESTATION,
     pricingVerifiedAt: value.pricingVerifiedAt,
     pricingValidThrough: value.pricingValidThrough,
   });
 }
 
-export const REVIEWED_SETUP_PRICING_ATTESTATION = createSetupPricingAttestation(
-  {
-    pricingVerifiedAt: '2026-09-19T03:18:41.000Z',
-    pricingValidThrough: '2026-09-26T03:18:41.000Z',
-  },
-);
+function reviewedPolicyValue(pricingAttestation, deployId) {
+  if (!text(deployId, 128)) fail();
+  const attemptCostCeilingMicrousd = checkedAdd(
+    checkedMultiply(
+      SETUP_SPEND_LIMITS.attemptInputTokens,
+      pricingAttestation.inputRateMicrousd,
+    ),
+    checkedMultiply(
+      SETUP_SPEND_LIMITS.attemptOutputTokens,
+      pricingAttestation.outputRateMicrousd,
+    ),
+  );
+  return {
+    policyId: deploymentPolicyId(pricingAttestation, deployId),
+    policy: {
+      model: 'claude-opus-5',
+      effort: 'high',
+      inferenceGeo: 'global',
+      serviceTier: 'standard_only',
+      maximumAttempts: SETUP_SPEND_LIMITS.maximumAttempts,
+      inputRateMicrousd: pricingAttestation.inputRateMicrousd,
+      outputRateMicrousd: pricingAttestation.outputRateMicrousd,
+      attemptInputCeiling: SETUP_SPEND_LIMITS.attemptInputTokens,
+      attemptOutputCeiling: SETUP_SPEND_LIMITS.attemptOutputTokens,
+      attemptCostCeilingMicrousd,
+      capMicrousd: SETUP_SPEND_LIMITS.capMicrousd,
+      discussionMicrousd: SETUP_SPEND_LIMITS.discussionMicrousd,
+      featurePolicyHash: pricingAttestation.featurePolicyHash,
+      pricingSource: pricingAttestation.pricingSource,
+      pricingVerifiedAt: pricingAttestation.pricingVerifiedAt,
+      pricingValidThrough: pricingAttestation.pricingValidThrough,
+      deployId,
+    },
+  };
+}
+
+function reviewedPolicyMatches(value, expectedId) {
+  return REVIEWED_SETUP_PRICING_ATTESTATIONS.some((attestation) => {
+    const expected = reviewedPolicyValue(attestation, value.deployId);
+    return (
+      expected.policyId === expectedId &&
+      JSON.stringify(canonical(expected.policy)) ===
+        JSON.stringify(canonical(value))
+    );
+  });
+}
 
 function projectPolicy(value, expectedId) {
   exact(value, [
@@ -171,21 +253,14 @@ function projectPolicy(value, expectedId) {
     value.inferenceGeo !== 'global' ||
     value.serviceTier !== 'standard_only' ||
     value.maximumAttempts !== SETUP_SPEND_LIMITS.maximumAttempts ||
-    value.inputRateMicrousd !== SETUP_SPEND_LIMITS.inputRateMicrousd ||
-    value.outputRateMicrousd !== SETUP_SPEND_LIMITS.outputRateMicrousd ||
     value.attemptInputCeiling !== SETUP_SPEND_LIMITS.attemptInputTokens ||
     value.attemptOutputCeiling !== SETUP_SPEND_LIMITS.attemptOutputTokens ||
-    value.attemptCostCeilingMicrousd !==
-      SETUP_SPEND_LIMITS.attemptCostMicrousd ||
     value.capMicrousd !== SETUP_SPEND_LIMITS.capMicrousd ||
     value.discussionMicrousd !== SETUP_SPEND_LIMITS.discussionMicrousd ||
     value.featurePolicyHash !== SETUP_FEATURE_POLICY_HASH ||
     value.pricingSource !== SETUP_PRICING_SOURCE ||
-    value.pricingVerifiedAt !==
-      REVIEWED_SETUP_PRICING_ATTESTATION.pricingVerifiedAt ||
-    value.pricingValidThrough !==
-      REVIEWED_SETUP_PRICING_ATTESTATION.pricingValidThrough ||
-    !text(value.deployId, 128)
+    !text(value.deployId, 128) ||
+    !reviewedPolicyMatches(value, expectedId)
   )
     fail();
   const verified = iso(value.pricingVerifiedAt);
@@ -194,7 +269,7 @@ function projectPolicy(value, expectedId) {
   return clone(value);
 }
 
-function projectAttempt(value, number) {
+function projectAttempt(value, number, ceilingMicrousd) {
   exact(value, [
     'number',
     'ceilingMicrousd',
@@ -205,7 +280,7 @@ function projectAttempt(value, number) {
   ]);
   if (
     value.number !== number ||
-    value.ceilingMicrousd !== SETUP_SPEND_LIMITS.attemptCostMicrousd ||
+    value.ceilingMicrousd !== ceilingMicrousd ||
     !ATTEMPT_STATES.has(value.state) ||
     !integer(value.actualCostMicrousd) ||
     !integer(value.unknownExposureMicrousd) ||
@@ -244,7 +319,7 @@ function projectAttempt(value, number) {
   return clone(value);
 }
 
-function projectActive(value, jobId, policyIds) {
+function projectActive(value, jobId, policies) {
   exact(value, [
     'policyId',
     'createdAt',
@@ -257,21 +332,25 @@ function projectActive(value, jobId, policyIds) {
   ]);
   if (
     !HEX_64.test(jobId) ||
-    !policyIds.has(value.policyId) ||
+    !Object.hasOwn(policies, value.policyId) ||
     !['pending', 'unknown'].includes(value.accountingState) ||
     !positive(value.lastLedgerRevision) ||
     !positive(value.lastAccountingSequence) ||
     !HEX_64.test(value.lastAccountingDigest) ||
     !HEX_64.test(value.lastTransitionId) ||
     !Array.isArray(value.attempts) ||
-    value.attempts.length !== SETUP_SPEND_LIMITS.maximumAttempts
+    value.attempts.length !== policies[value.policyId].maximumAttempts
   )
     fail();
   iso(value.createdAt);
   return {
     ...clone(value),
     attempts: value.attempts.map((attempt, index) =>
-      projectAttempt(attempt, index + 1),
+      projectAttempt(
+        attempt,
+        index + 1,
+        policies[value.policyId].attemptCostCeilingMicrousd,
+      ),
     ),
   };
 }
@@ -385,7 +464,7 @@ export function projectSpendLedger(value) {
   const active = Object.fromEntries(
     activeEntries.map(([id, entry]) => [
       id,
-      projectActive(entry, id, policyIds),
+      projectActive(entry, id, policies),
     ]),
   );
   const discussions = Object.fromEntries(
@@ -418,31 +497,18 @@ function setupPolicyValue(pricingAttestation, deployId) {
   if (
     JSON.stringify(canonical(attestation)) !==
       JSON.stringify(canonical(REVIEWED_SETUP_PRICING_ATTESTATION)) ||
+    attestation.inputRateMicrousd !== SETUP_SPEND_LIMITS.inputRateMicrousd ||
+    attestation.outputRateMicrousd !== SETUP_SPEND_LIMITS.outputRateMicrousd ||
     !text(deployId, 128)
   )
     fail();
-  return {
-    policyId: attestation.policyId,
-    policy: {
-      model: 'claude-opus-5',
-      effort: 'high',
-      inferenceGeo: 'global',
-      serviceTier: 'standard_only',
-      maximumAttempts: SETUP_SPEND_LIMITS.maximumAttempts,
-      inputRateMicrousd: SETUP_SPEND_LIMITS.inputRateMicrousd,
-      outputRateMicrousd: SETUP_SPEND_LIMITS.outputRateMicrousd,
-      attemptInputCeiling: SETUP_SPEND_LIMITS.attemptInputTokens,
-      attemptOutputCeiling: SETUP_SPEND_LIMITS.attemptOutputTokens,
-      attemptCostCeilingMicrousd: SETUP_SPEND_LIMITS.attemptCostMicrousd,
-      capMicrousd: SETUP_SPEND_LIMITS.capMicrousd,
-      discussionMicrousd: SETUP_SPEND_LIMITS.discussionMicrousd,
-      featurePolicyHash: attestation.featurePolicyHash,
-      pricingSource: attestation.pricingSource,
-      pricingVerifiedAt: attestation.pricingVerifiedAt,
-      pricingValidThrough: attestation.pricingValidThrough,
-      deployId,
-    },
-  };
+  const expected = reviewedPolicyValue(attestation, deployId);
+  if (
+    expected.policy.attemptCostCeilingMicrousd !==
+    SETUP_SPEND_LIMITS.attemptCostMicrousd
+  )
+    fail();
+  return expected;
 }
 
 export function createSetupPolicy({ deployId, pricingAttestation }) {
@@ -500,6 +566,43 @@ export function createSetupLedger({ policyId, policy, at }) {
     updatedAt: iso(at),
   };
   return projectSpendLedger(ledger);
+}
+
+/**
+ * Install and select one immutable deploy policy without changing monetary
+ * accounting or removing policy-scoped decisions from earlier deploys.
+ */
+export function activateSetupPolicy(
+  input,
+  { policyId, policy, at, expectedRevision },
+) {
+  const ledger = projectSpendLedger(input);
+  const projectedPolicy = projectPolicy(policy, policyId);
+  const activatedAt = iso(at);
+  if (ledger.revision !== expectedRevision) fail();
+  const existing = ledger.policies[policyId];
+  if (
+    existing &&
+    JSON.stringify(canonical(existing)) !==
+      JSON.stringify(canonical(projectedPolicy))
+  )
+    fail();
+  if (ledger.activePolicyId === policyId) {
+    if (!existing) fail();
+    return ledger;
+  }
+  if (
+    Date.parse(activatedAt) < Date.parse(ledger.updatedAt) ||
+    (!existing &&
+      Object.keys(ledger.policies).length >= SETUP_SPEND_LIMITS.maxPolicies)
+  )
+    fail();
+  const next = clone(ledger);
+  next.revision = checkedAdd(next.revision, 1);
+  if (!existing) next.policies[policyId] = projectedPolicy;
+  next.activePolicyId = policyId;
+  next.updatedAt = activatedAt;
+  return projectSpendLedger(next);
 }
 
 export function exposureMicrousd(ledger) {
@@ -603,8 +706,8 @@ export function reserveSetupJob(
     return { status: 'stopped', ledger };
   const proposed = checkedAdd(
     ...Array.from(
-      { length: SETUP_SPEND_LIMITS.maximumAttempts },
-      () => SETUP_SPEND_LIMITS.attemptCostMicrousd,
+      { length: policy.maximumAttempts },
+      () => policy.attemptCostCeilingMicrousd,
     ),
   );
   const proposedExposure = checkedAdd(exposureMicrousd(ledger), proposed);
@@ -653,10 +756,10 @@ export function reserveSetupJob(
           lastAccountingDigest: facts.nextDigest,
           lastTransitionId: facts.transitionId,
           attempts: Array.from(
-            { length: SETUP_SPEND_LIMITS.maximumAttempts },
+            { length: policy.maximumAttempts },
             (_, index) => ({
               number: index + 1,
-              ceilingMicrousd: SETUP_SPEND_LIMITS.attemptCostMicrousd,
+              ceilingMicrousd: policy.attemptCostCeilingMicrousd,
               state: 'reserved',
               actualCostMicrousd: 0,
               unknownExposureMicrousd: 0,
@@ -678,6 +781,7 @@ export function updateSetupAttempt(
     state,
     actualCostMicrousd = 0,
     unknownExposureMicrousd = 0,
+    pricingReviewRequired = false,
     at,
     expectedRevision,
   },
@@ -692,18 +796,25 @@ export function updateSetupAttempt(
   )
     fail();
   const current = entry.attempts[attemptNumber - 1];
-  if (!current || current.state !== 'reserved') fail();
+  const upgradesUnknown = current?.state === 'unknown' && state === 'unknown';
+  if (!current || (current.state !== 'reserved' && !upgradesUnknown)) fail();
   const recordedAt = iso(at);
   const ceiling = current.ceilingMicrousd;
   if (
     !integer(actualCostMicrousd) ||
     !integer(unknownExposureMicrousd) ||
+    typeof pricingReviewRequired !== 'boolean' ||
+    (pricingReviewRequired && state !== 'unknown') ||
     (state === 'settled' &&
       (actualCostMicrousd > ceiling || unknownExposureMicrousd !== 0)) ||
     (state === 'released' &&
       (actualCostMicrousd !== 0 || unknownExposureMicrousd !== 0)) ||
     (state === 'unknown' &&
-      unknownExposureMicrousd < Math.max(ceiling, actualCostMicrousd))
+      unknownExposureMicrousd < Math.max(ceiling, actualCostMicrousd)) ||
+    (upgradesUnknown &&
+      (actualCostMicrousd < current.actualCostMicrousd ||
+        unknownExposureMicrousd < current.unknownExposureMicrousd ||
+        Date.parse(recordedAt) < Date.parse(current.recordedAt)))
   )
     fail();
   return accountingTransition(
@@ -715,6 +826,7 @@ export function updateSetupAttempt(
       state,
       actualCostMicrousd,
       unknownExposureMicrousd,
+      pricingReviewRequired,
     },
     (next) => {
       const attempt = next.active[jobId].attempts[attemptNumber - 1];
@@ -729,7 +841,8 @@ export function updateSetupAttempt(
           next.settledMicrousd,
           actualCostMicrousd,
         );
-      if (actualCostMicrousd > ceiling) next.pricingReviewRequired = true;
+      if (pricingReviewRequired || actualCostMicrousd > ceiling)
+        next.pricingReviewRequired = true;
       next.active[jobId].accountingState = next.active[jobId].attempts.some(
         (item) => item.state === 'unknown',
       )

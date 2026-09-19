@@ -34,6 +34,27 @@ test('deadline includes time spent by a caller before source reads', () => {
   assert.throws(() => budget.takeRequest(), { code: 'source_timeout' });
   assert.throws(() => budget.takeBytes(0), { code: 'source_timeout' });
 });
+test('an explicit invocation start includes composition time in the deadline', () => {
+  let current = 1040;
+  const budget = createOperationBudget({
+    now: () => current,
+    startedAt: 1000,
+    limits: { operationMs: 45 },
+  });
+  assert.equal(budget.deadline, 1045);
+  assert.equal(budget.remainingMs(), 5);
+  current = 1045;
+  assert.throws(() => budget.assertActive(), { code: 'source_timeout' });
+  for (const startedAt of [-1, 1046, 0.5])
+    assert.throws(
+      () =>
+        createOperationBudget({
+          now: () => current,
+          startedAt,
+        }),
+      { code: 'invalid_request' },
+    );
+});
 test('external abort fails without resetting counters or deadline', () => {
   const controller = new AbortController();
   const budget = createOperationBudget({ signal: controller.signal });

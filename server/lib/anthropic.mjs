@@ -39,6 +39,14 @@ export class AnthropicAttemptError extends BoardError {
   }
 }
 
+export class AnthropicRefusalError extends BoardError {
+  constructor(code) {
+    super(code);
+    this.name = 'AnthropicRefusalError';
+    this.zeroBilled = true;
+  }
+}
+
 function validApiKey(value) {
   return (
     typeof value === 'string' &&
@@ -191,8 +199,8 @@ async function boundedResponseBody(response) {
 
 function responseError(response) {
   if (response.status === 429)
-    return new BoardError('analysis_provider_rate_limited');
-  return new BoardError('analysis_provider_unavailable');
+    return new AnthropicRefusalError('analysis_provider_rate_limited');
+  return new AnthropicRefusalError('analysis_provider_unavailable');
 }
 
 function cleanUsage(value, prior = null) {
@@ -303,8 +311,7 @@ function parseEvent(block) {
 }
 
 export async function parseMessageStream(body) {
-  if (!body || typeof body.getReader !== 'function') fail();
-  const reader = body.getReader();
+  let reader = null;
   const decoder = new TextDecoder('utf-8', { fatal: true });
   let pending = '';
   let undecidedLineEnding = '';
@@ -327,11 +334,12 @@ export async function parseMessageStream(body) {
     if (event === 'error') fail();
     if (stopped || (!started && event !== 'message_start')) fail();
     if (event === 'message_start') {
+      if (value.message?.model !== ANTHROPIC_POLICY.model)
+        throw new BillingError();
       if (
         started ||
         value.message?.type !== 'message' ||
         value.message?.role !== 'assistant' ||
-        value.message?.model !== ANTHROPIC_POLICY.model ||
         !Array.isArray(value.message?.content) ||
         value.message.content.length !== 0
       )
@@ -420,6 +428,8 @@ export async function parseMessageStream(body) {
   };
 
   try {
+    if (!body || typeof body.getReader !== 'function') fail();
+    reader = body.getReader();
     while (true) {
       const part = await reader.read();
       if (part.done) break;
@@ -444,7 +454,7 @@ export async function parseMessageStream(body) {
       fail();
     return { model, stopReason, usage, output };
   } catch (error) {
-    void reader.cancel().catch(() => {});
+    void reader?.cancel().catch(() => {});
     const pricingReviewRequired = error instanceof BillingError;
     throw new AnthropicAttemptError(
       pricingReviewRequired ? 'pricing_review_required' : 'analysis_ambiguous',

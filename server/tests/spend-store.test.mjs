@@ -24,8 +24,10 @@ import {
 const budget = Object.freeze({ name: 'synthetic-budget' });
 const deployId = 'deploy-1';
 const id = (character) => character.repeat(64);
-const at = (hour) =>
-  `2026-09-${hour < 20 ? '19' : '20'}T${String(hour % 20).padStart(2, '0')}:30:00.000Z`;
+const at = (hour) => {
+  const shiftedHour = hour + 2;
+  return `2026-09-${shiftedHour < 20 ? '19' : '20'}T${String(shiftedHour % 20).padStart(2, '0')}:30:00.000Z`;
+};
 const context = (storage) => ({
   storage,
   budget,
@@ -316,10 +318,12 @@ test('reservation reads expose exact immutable worker accounting without creatin
   });
   assert.deepEqual(Object.keys(reserved), [
     'policyId',
+    'pricingReviewRequired',
     'reservationMicrousd',
     'attempts',
     'accounting',
   ]);
+  assert.equal(reserved.pricingReviewRequired, false);
   assert.deepEqual(reserved.reservationMicrousd, [5_409_600, 5_409_600]);
   assert.deepEqual(
     reserved.attempts.map(({ number, ceilingMicrousd, state }) => ({
@@ -343,7 +347,15 @@ test('reservation reads expose exact immutable worker accounting without creatin
   });
   assert.equal(Object.isFrozen(active), true);
   assert.equal(Object.isFrozen(active[0]), true);
-  assert.deepEqual(active, [{ jobId: id('a'), ...reserved }]);
+  assert.deepEqual(active, [
+    {
+      jobId: id('a'),
+      policyId: reserved.policyId,
+      reservationMicrousd: reserved.reservationMicrousd,
+      attempts: reserved.attempts,
+      accounting: reserved.accounting,
+    },
+  ]);
 
   await settleSetupAttempt({
     ...context(storage),
@@ -377,21 +389,103 @@ test('reservation reads expose exact immutable worker accounting without creatin
   assert.ok(!Object.hasOwn(accounted, 'createdAt'));
   assert.ok(!JSON.stringify(accounted).includes('deploy-1'));
 
-  await assert.rejects(
-    readSetupSpendReservation({
+  assert.deepEqual(
+    await readSetupSpendReservation({
       ...context(storage),
       deployId: 'another-deploy',
       jobId: id('a'),
     }),
-    { code: 'service_unavailable' },
+    accounted,
   );
-  await assert.rejects(
-    listSetupSpendReservations({
+  assert.deepEqual(
+    await listSetupSpendReservations({
       ...context(storage),
       deployId: 'another-deploy',
     }),
+    await listSetupSpendReservations(context(storage)),
+  );
+});
+
+test('deploy rollover preserves old reservations and lifetime accounting across a lost acknowledgement', async () => {
+  const storage = memoryStorage();
+  await setup(storage);
+  await reserveSetupSpend({
+    ...context(storage),
+    jobId: id('a'),
+    operation: 'generate',
+    at: at(5),
+    revalidate: authorize,
+  });
+  await settleSetupAttempt({
+    ...context(storage),
+    jobId: id('a'),
+    attemptNumber: 1,
+    actualCostMicrousd: 123_456,
+    at: at(6),
+    revalidate: authorize,
+  });
+  const before = storage.value();
+  const next = { ...context(storage), deployId: 'deploy-2' };
+
+  await assert.rejects(
+    reserveSetupSpend({
+      ...next,
+      jobId: id('b'),
+      operation: 'refresh',
+      at: at(7),
+      revalidate: authorize,
+    }),
     { code: 'service_unavailable' },
   );
+
+  storage.loseNextAcknowledgement();
+  assert.deepEqual(await ensureSetupSpendLedger({ ...next, at: at(7) }), {
+    status: 'existing',
+    revision: before.revision + 1,
+  });
+  const rolled = storage.value();
+  assert.notEqual(rolled.activePolicyId, before.activePolicyId);
+  assert.deepEqual(
+    rolled.policies[before.activePolicyId],
+    before.policies[before.activePolicyId],
+  );
+  assert.equal(Object.keys(rolled.policies).length, 2);
+  assert.deepEqual(rolled.active, before.active);
+  assert.deepEqual(rolled.discussions, before.discussions);
+  assert.equal(rolled.settledMicrousd, before.settledMicrousd);
+  assert.equal(rolled.accountingSequence, before.accountingSequence);
+  assert.equal(rolled.accountingDigest, before.accountingDigest);
+
+  const priorReservation = await readSetupSpendReservation({
+    ...next,
+    jobId: id('a'),
+  });
+  assert.equal(priorReservation.policyId, before.activePolicyId);
+  const released = await releaseSetupAttempt({
+    ...next,
+    jobId: id('a'),
+    attemptNumber: 2,
+    at: at(8),
+    revalidate: authorize,
+  });
+  assert.equal(released.status, 'updated');
+  await removeCompletedSetupSpend({
+    ...next,
+    jobId: id('a'),
+    accounting: released.accounting,
+    at: at(9),
+  });
+  const reserved = await reserveSetupSpend({
+    ...next,
+    jobId: id('b'),
+    operation: 'refresh',
+    at: at(10),
+    revalidate: authorize,
+  });
+  assert.equal(reserved.status, 'reserved');
+  assert.equal(reserved.policyId, storage.value().activePolicyId);
+  assert.notEqual(reserved.policyId, before.activePolicyId);
+  assert.equal(storage.value().settledMicrousd, 123_456);
 });
 
 test('reservation fencing advances only logical revision and resolves a lost acknowledgement', async () => {
@@ -552,6 +646,144 @@ test('unknown exposure is idempotent and prevents completed-entry removal', asyn
     { code: 'service_unavailable' },
   );
   assert.equal(Object.hasOwn(storage.value().active, id('a')), true);
+});
+
+test('a lost-ack unknown upgrade preserves stronger evidence across a ceiling-only race', async () => {
+  const storage = memoryStorage();
+  await setup(storage);
+  await reserveSetupSpend({
+    ...context(storage),
+    jobId: id('a'),
+    operation: 'generate',
+    at: at(5),
+    revalidate: authorize,
+  });
+  await markSetupAttemptUnknown({
+    ...context(storage),
+    jobId: id('a'),
+    attemptNumber: 1,
+    actualCostMicrousd: 0,
+    unknownExposureMicrousd: SETUP_SPEND_LIMITS.attemptCostMicrousd,
+    at: at(10),
+    revalidate: authorize,
+  });
+  let validations = 0;
+  storage.loseNextAcknowledgement();
+  const upgraded = await markSetupAttemptUnknown({
+    ...context(storage),
+    jobId: id('a'),
+    attemptNumber: 1,
+    actualCostMicrousd: 7_000_000,
+    unknownExposureMicrousd: 7_000_000,
+    pricingReviewRequired: true,
+    at: at(6),
+    revalidate: async (details) => {
+      validations += 1;
+      assert.equal(details.kind, 'attempt-accounting');
+      assert.equal(details.attemptNumber, 1);
+      assert.equal(details.attemptState, 'unknown');
+      return true;
+    },
+  });
+  assert.equal(upgraded.status, 'updated');
+  assert.equal(upgraded.attempt.actualCostMicrousd, 7_000_000);
+  assert.equal(upgraded.attempt.unknownExposureMicrousd, 7_000_000);
+  assert.equal(upgraded.attempt.recordedAt, at(10));
+  assert.equal(validations, 1);
+  assert.equal(storage.value().pricingReviewRequired, true);
+  const writes = storage.metrics.writes;
+  const accountingSequence = storage.value().accountingSequence;
+  const ceilingOnly = await markSetupAttemptUnknown({
+    ...context(storage),
+    jobId: id('a'),
+    attemptNumber: 1,
+    actualCostMicrousd: 0,
+    unknownExposureMicrousd: SETUP_SPEND_LIMITS.attemptCostMicrousd,
+    at: at(11),
+    revalidate: authorize,
+  });
+  assert.equal(ceilingOnly.status, 'existing');
+  assert.equal(ceilingOnly.attempt.actualCostMicrousd, 7_000_000);
+  assert.equal(ceilingOnly.attempt.unknownExposureMicrousd, 7_000_000);
+  assert.equal(storage.metrics.writes, writes);
+  assert.equal(storage.value().accountingSequence, accountingSequence);
+});
+
+test('unknown unpriceable usage atomically requires pricing review', async () => {
+  const storage = memoryStorage();
+  await setup(storage);
+  await reserveSetupSpend({
+    ...context(storage),
+    jobId: id('a'),
+    operation: 'generate',
+    at: at(5),
+    revalidate: authorize,
+  });
+  const gated = await reserveSetupSpend({
+    ...context(storage),
+    jobId: id('b'),
+    operation: 'refresh',
+    at: at(6),
+    revalidate: authorize,
+  });
+  assert.equal(gated.status, 'discussion-required');
+  const ledger = storage.value();
+  const discussion = ledger.discussions[ledger.activePolicyId];
+  await applySetupDiscussionDecision({
+    ...context(storage),
+    policyId: ledger.activePolicyId,
+    triggerRevision: discussion.currentRevision,
+    decisionId: id('d'),
+    decision: 'acknowledged',
+    authorizedThroughMicrousd: 25_000_000,
+    authorizedOperations: ['refresh'],
+    observedExposureMicrousd: exposureMicrousd(ledger),
+    expectedRevision: ledger.revision,
+    at: at(7),
+  });
+  assert.equal(
+    (
+      await reserveSetupSpend({
+        ...context(storage),
+        jobId: id('b'),
+        operation: 'refresh',
+        at: at(8),
+        revalidate: authorize,
+      })
+    ).status,
+    'reserved',
+  );
+  const input = {
+    ...context(storage),
+    jobId: id('a'),
+    attemptNumber: 1,
+    actualCostMicrousd: SETUP_SPEND_LIMITS.attemptCostMicrousd,
+    unknownExposureMicrousd: SETUP_SPEND_LIMITS.attemptCostMicrousd,
+    pricingReviewRequired: true,
+    at: at(9),
+    revalidate: authorize,
+  };
+  const unknown = await markSetupAttemptUnknown(input);
+  assert.equal(unknown.accounting.status, 'unknown');
+  assert.equal(storage.value().pricingReviewRequired, true);
+  assert.equal(
+    (
+      await readSetupSpendReservation({
+        ...context(storage),
+        jobId: id('b'),
+      })
+    ).pricingReviewRequired,
+    true,
+  );
+  assert.equal((await markSetupAttemptUnknown(input)).status, 'existing');
+  const blocked = await reserveSetupSpend({
+    ...context(storage),
+    jobId: id('c'),
+    operation: 'generate',
+    at: at(10),
+    revalidate: authorize,
+  });
+  assert.equal(blocked.status, 'pricing-review-required');
 });
 
 test('discussion decisions are exact, lost-ack safe and never raise the cap', async () => {

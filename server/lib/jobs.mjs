@@ -375,8 +375,12 @@ function validateJobShape(job) {
   if (
     !['published', 'succeeded'].includes(job.state) &&
     (job.publication.pointerRevision !== null ||
-      job.publication.publishedAt !== null ||
-      job.publication.cleanupCandidateKey !== null)
+      job.publication.publishedAt !== null)
+  )
+    fail();
+  if (
+    !['version-written', 'published', 'succeeded'].includes(job.state) &&
+    job.publication.cleanupCandidateKey !== null
   )
     fail();
   if (

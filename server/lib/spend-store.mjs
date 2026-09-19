@@ -2,8 +2,8 @@ import { BoardError } from './errors.mjs';
 import { canonicalStringify } from './fingerprint.mjs';
 import {
   REVIEWED_SETUP_PRICING_ATTESTATION,
-  SETUP_POLICY_ID,
   SETUP_SPEND_LIMITS,
+  activateSetupPolicy,
   assertSetupPolicyBinding,
   createSetupLedger,
   createSetupPolicy,
@@ -19,6 +19,7 @@ export const SETUP_SPEND_LEDGER_KEY = 'setup/v1';
 export const SPEND_STORE_LIMITS = Object.freeze({ conflicts: 8 });
 
 const HEX_64 = /^[a-f0-9]{64}$/u;
+const POLICY_ID = /^[a-z0-9][a-z0-9._-]{0,127}$/u;
 const unavailable = () => new BoardError('service_unavailable');
 const same = (left, right) =>
   canonicalStringify(left) === canonicalStringify(right);
@@ -59,9 +60,17 @@ function select(input) {
   };
 }
 
-function bindLedger(ledger, selected) {
-  const projected = projectSpendLedger(ledger);
-  if (projected.activePolicyId !== SETUP_POLICY_ID) throw unavailable();
+function bindLedger(ledger) {
+  return projectSpendLedger(ledger);
+}
+
+function bindCurrentLedger(ledger, selected) {
+  const projected = bindLedger(ledger);
+  const expected = createSetupPolicy({
+    deployId: selected.deployId,
+    pricingAttestation: selected.pricingAttestation,
+  });
+  if (projected.activePolicyId !== expected.policyId) throw unavailable();
   assertSetupPolicyBinding({
     policyId: projected.activePolicyId,
     policy: projected.policies[projected.activePolicyId],
@@ -82,11 +91,11 @@ async function readLedger(selected) {
   }
   if (record === null) return null;
   if (!record || !validEtag(record.etag)) throw unavailable();
-  return { ledger: bindLedger(record.value, selected), etag: record.etag };
+  return { ledger: bindLedger(record.value), etag: record.etag };
 }
 
 async function writeLedger(selected, current, ledger) {
-  const expected = bindLedger(ledger, selected);
+  const expected = bindLedger(ledger);
   try {
     const result = await selected.storage.write(
       SETUP_SPEND_LEDGER_KEY,
@@ -217,42 +226,59 @@ async function revalidate(input, details) {
   if (allowed !== true) throw unavailable();
 }
 
-/** Ensure the one setup ledger is bound to this deploy and reviewed pricing. */
+/** Ensure the one setup ledger selects this deploy's immutable price policy. */
 export async function ensureSetupSpendLedger(input) {
   const selected = select(input);
   const { policyId, policy } = createSetupPolicy({
     deployId: selected.deployId,
     pricingAttestation: selected.pricingAttestation,
   });
-  const expected = createSetupLedger({
+  const initial = createSetupLedger({
     policyId,
     policy,
     at: input.at,
   });
   let current = await readLedger(selected);
-  if (current !== null)
-    return Object.freeze({
-      status: 'existing',
-      revision: current.ledger.revision,
+  let created = false;
+  if (current === null) {
+    try {
+      const result = await selected.storage.write(
+        SETUP_SPEND_LEDGER_KEY,
+        initial,
+        { onlyIfNew: true },
+        { budget: selected.budget },
+      );
+      if (result?.modified === true && validEtag(result.etag)) created = true;
+      else if (result?.modified !== false) throw unavailable();
+    } catch {}
+    current = await readLedger(selected);
+    if (current === null) throw unavailable();
+  }
+  for (
+    let conflict = 0;
+    conflict < SPEND_STORE_LIMITS.conflicts;
+    conflict += 1
+  ) {
+    const activated = activateSetupPolicy(current.ledger, {
+      policyId,
+      policy,
+      at: input.at,
+      expectedRevision: current.ledger.revision,
     });
-  let acknowledged = false;
-  try {
-    const result = await selected.storage.write(
-      SETUP_SPEND_LEDGER_KEY,
-      expected,
-      { onlyIfNew: true },
-      { budget: selected.budget },
-    );
-    if (result?.modified === true && validEtag(result.etag))
-      acknowledged = true;
-    else if (result?.modified !== false) throw unavailable();
-  } catch {}
-  current = await readLedger(selected);
-  if (current === null || !same(current.ledger, expected)) throw unavailable();
-  return Object.freeze({
-    status: acknowledged ? 'created' : 'existing',
-    revision: current.ledger.revision,
-  });
+    if (same(activated, current.ledger))
+      return Object.freeze({
+        status: created ? 'created' : 'existing',
+        revision: current.ledger.revision,
+      });
+    const written = await writeLedger(selected, current, activated);
+    if (written.status === 'written')
+      return Object.freeze({
+        status: 'existing',
+        revision: written.current.ledger.revision,
+      });
+    current = written.current;
+  }
+  throw unavailable();
 }
 
 /** Strong-read a browser-safe setup-mode summary without coordination facts. */
@@ -260,7 +286,7 @@ export async function readSetupSpendSummary(input) {
   const selected = select(input);
   const current = await readLedger(selected);
   if (current === null) throw unavailable();
-  return safeSummary(current.ledger, input.at);
+  return safeSummary(bindCurrentLedger(current.ledger, selected), input.at);
 }
 
 /** Strong-read one exact worker reservation without creating or changing it. */
@@ -273,6 +299,7 @@ export async function readSetupSpendReservation(input) {
   if (!entry) return null;
   return Object.freeze({
     policyId: entry.policyId,
+    pricingReviewRequired: current.ledger.pricingReviewRequired,
     reservationMicrousd: Object.freeze(
       entry.attempts.map((attempt) => attempt.ceilingMicrousd),
     ),
@@ -342,6 +369,7 @@ export async function reserveSetupSpend(input) {
     conflict < SPEND_STORE_LIMITS.conflicts;
     conflict += 1
   ) {
+    bindCurrentLedger(current.ledger, selected);
     if (Object.hasOwn(current.ledger.active, input.jobId)) {
       await revalidate(input, {
         kind: 'existing-reservation',
@@ -461,11 +489,18 @@ export async function fenceSetupReservation(input) {
   throw unavailable();
 }
 
-function attemptMatches(attempt, requested) {
+function attemptMatches(ledger, attempt, requested) {
+  if (attempt.state === 'unknown' && requested.state === 'unknown')
+    return (
+      attempt.actualCostMicrousd >= requested.actualCostMicrousd &&
+      attempt.unknownExposureMicrousd >= requested.unknownExposureMicrousd &&
+      (!requested.pricingReviewRequired || ledger.pricingReviewRequired)
+    );
   return (
     attempt.state === requested.state &&
     attempt.actualCostMicrousd === requested.actualCostMicrousd &&
-    attempt.unknownExposureMicrousd === requested.unknownExposureMicrousd
+    attempt.unknownExposureMicrousd === requested.unknownExposureMicrousd &&
+    (!requested.pricingReviewRequired || ledger.pricingReviewRequired)
   );
 }
 
@@ -476,7 +511,8 @@ async function recordAttempt(input, requested) {
     ![1, 2].includes(input.attemptNumber) ||
     typeof input.revalidate !== 'function' ||
     !integer(requested.actualCostMicrousd) ||
-    !integer(requested.unknownExposureMicrousd)
+    !integer(requested.unknownExposureMicrousd) ||
+    typeof requested.pricingReviewRequired !== 'boolean'
   )
     throw unavailable();
   iso(input.at);
@@ -490,29 +526,55 @@ async function recordAttempt(input, requested) {
     const entry = current.ledger.active[input.jobId];
     const attempt = entry?.attempts[input.attemptNumber - 1];
     if (!attempt) throw unavailable();
-    if (attemptMatches(attempt, requested))
+    if (attemptMatches(current.ledger, attempt, requested))
       return attemptResult(
         'existing',
         current.ledger,
         input.jobId,
         input.attemptNumber,
       );
-    if (attempt.state !== 'reserved') throw unavailable();
+    const upgradesUnknown =
+      attempt.state === 'unknown' && requested.state === 'unknown';
+    if (attempt.state !== 'reserved' && !upgradesUnknown) throw unavailable();
+    const recordedAt = upgradesUnknown
+      ? [input.at, attempt.recordedAt, current.ledger.updatedAt].reduce(
+          (latest, candidate) =>
+            Date.parse(candidate) > Date.parse(latest) ? candidate : latest,
+        )
+      : input.at;
+    const nextRequested = upgradesUnknown
+      ? {
+          ...requested,
+          actualCostMicrousd: Math.max(
+            attempt.actualCostMicrousd,
+            requested.actualCostMicrousd,
+          ),
+          unknownExposureMicrousd: Math.max(
+            attempt.unknownExposureMicrousd,
+            requested.unknownExposureMicrousd,
+            attempt.ceilingMicrousd,
+            attempt.actualCostMicrousd,
+            requested.actualCostMicrousd,
+          ),
+        }
+      : requested;
     await revalidate(input, {
       kind: 'attempt-accounting',
       jobId: input.jobId,
       attemptNumber: input.attemptNumber,
-      attemptState: requested.state,
+      attemptState: nextRequested.state,
+      pricingReviewRequired: nextRequested.pricingReviewRequired,
       ledgerRevision: current.ledger.revision,
       policyId: entry.policyId,
     });
     const result = updateSetupAttempt(current.ledger, {
       jobId: input.jobId,
       attemptNumber: input.attemptNumber,
-      state: requested.state,
-      actualCostMicrousd: requested.actualCostMicrousd,
-      unknownExposureMicrousd: requested.unknownExposureMicrousd,
-      at: input.at,
+      state: nextRequested.state,
+      actualCostMicrousd: nextRequested.actualCostMicrousd,
+      unknownExposureMicrousd: nextRequested.unknownExposureMicrousd,
+      pricingReviewRequired: nextRequested.pricingReviewRequired,
+      at: recordedAt,
       expectedRevision: current.ledger.revision,
     });
     const written = await writeLedger(selected, current, result.ledger);
@@ -533,6 +595,7 @@ export async function settleSetupAttempt(input) {
     state: 'settled',
     actualCostMicrousd: input.actualCostMicrousd,
     unknownExposureMicrousd: 0,
+    pricingReviewRequired: false,
   });
 }
 
@@ -541,6 +604,7 @@ export async function releaseSetupAttempt(input) {
     state: 'released',
     actualCostMicrousd: 0,
     unknownExposureMicrousd: 0,
+    pricingReviewRequired: false,
   });
 }
 
@@ -549,6 +613,7 @@ export async function markSetupAttemptUnknown(input) {
     state: 'unknown',
     actualCostMicrousd: input.actualCostMicrousd,
     unknownExposureMicrousd: input.unknownExposureMicrousd,
+    pricingReviewRequired: input.pricingReviewRequired ?? false,
   });
 }
 
@@ -644,7 +709,7 @@ function currentDecisionMatches(found, input, decision) {
 
 function validateDecisionInput(input) {
   if (
-    input.policyId !== SETUP_POLICY_ID ||
+    !POLICY_ID.test(input.policyId) ||
     !Number.isSafeInteger(input.triggerRevision) ||
     input.triggerRevision < 1 ||
     !HEX_64.test(input.decisionId) ||
@@ -670,6 +735,7 @@ export async function applySetupDiscussionDecision(input) {
   validateDecisionInput(input);
   let current = await readLedger(selected);
   if (current === null) throw unavailable();
+  bindCurrentLedger(current.ledger, selected);
   const existing = findDecision(current.ledger, input.decisionId);
   if (existing) {
     if (!decisionMatches(existing, input)) throw unavailable();
@@ -723,7 +789,7 @@ export async function applyCurrentSetupDiscussionDecision(input) {
         ? 'stopped'
         : null;
   if (
-    input.policyId !== SETUP_POLICY_ID ||
+    !POLICY_ID.test(input.policyId) ||
     !Number.isSafeInteger(input.discussionRevision) ||
     input.discussionRevision < 1 ||
     !HEX_64.test(input.decisionId) ||
@@ -739,6 +805,8 @@ export async function applyCurrentSetupDiscussionDecision(input) {
   iso(input.at);
   const current = await readLedger(selected);
   if (current === null) throw unavailable();
+  bindCurrentLedger(current.ledger, selected);
+  if (input.policyId !== current.ledger.activePolicyId) throw unavailable();
   const existing = findDecision(current.ledger, input.decisionId);
   if (existing) {
     if (!currentDecisionMatches(existing, input, decision)) throw unavailable();

@@ -585,6 +585,7 @@ export function createReportOperations({
       deadlineAt: new Date(
         Date.parse(admittedAt) + admissionDeadlineMs,
       ).toISOString(),
+      ...(input.budget.signal ? { signal: input.budget.signal } : {}),
       budget: input.budget,
     });
     return { job };

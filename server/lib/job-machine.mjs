@@ -802,27 +802,36 @@ function recoveredVersionConfirmed(job, event) {
   return result;
 }
 
-function reportPublished(job, event) {
-  exact(event, [
-    'type',
-    'at',
-    'deadlineAt',
-    'pointerRevision',
-    'cleanupCandidateKey',
-  ]);
+function cleanupCandidateRecorded(job, event) {
+  exact(event, ['type', 'at', 'deadlineAt', 'cleanupCandidateKey']);
+  const prefix = `owners/99961/repositories/${job.repositoryId}/versions/`;
+  const basisKey =
+    job.publication.basisReportId === null
+      ? null
+      : `${prefix}${job.publication.basisReportId}`;
   if (
     job.state !== 'version-written' ||
-    !integer(event.pointerRevision) ||
-    (event.cleanupCandidateKey !== null &&
-      !/^owners\/99961\/repositories\/[1-9]\d*\/versions\/[a-f0-9]{64}$/u.test(
-        event.cleanupCandidateKey,
-      ))
+    job.publication.cleanupCandidateKey !== null ||
+    typeof event.cleanupCandidateKey !== 'string' ||
+    !new RegExp(`^${prefix}[a-f0-9]{64}$`, 'u').test(
+      event.cleanupCandidateKey,
+    ) ||
+    event.cleanupCandidateKey === job.publication.versionKey ||
+    event.cleanupCandidateKey === basisKey
   )
+    fail();
+  const result = updated(job, 'version-written', event.at, event.deadlineAt);
+  result.publication.cleanupCandidateKey = event.cleanupCandidateKey;
+  return result;
+}
+
+function reportPublished(job, event) {
+  exact(event, ['type', 'at', 'deadlineAt', 'pointerRevision']);
+  if (job.state !== 'version-written' || !integer(event.pointerRevision))
     fail();
   const result = updated(job, 'published', event.at, event.deadlineAt);
   result.publication.pointerRevision = event.pointerRevision;
   result.publication.publishedAt = event.at;
-  result.publication.cleanupCandidateKey = event.cleanupCandidateKey;
   return result;
 }
 
@@ -928,6 +937,7 @@ function terminated(job, event) {
   result.freeLease = null;
   result.finalizationLease = null;
   result.publication.candidateDigest = null;
+  result.publication.cleanupCandidateKey = null;
   result.terminal = {
     status: event.status,
     completedAt: event.at,
@@ -980,6 +990,9 @@ export function transitionJob(jobValue, event) {
       break;
     case 'recovered-version-confirmed':
       candidate = recoveredVersionConfirmed(job, event);
+      break;
+    case 'cleanup-candidate-recorded':
+      candidate = cleanupCandidateRecorded(job, event);
       break;
     case 'report-published':
       candidate = reportPublished(job, event);

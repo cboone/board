@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createAnalysisAdmission } from '../lib/analysis-admission.mjs';
 import { ANALYSIS_INPUT_LIMITS } from '../lib/analysis-input.mjs';
+import { createAnalysisReconciler } from '../lib/analysis-reconciler.mjs';
 import { BoardError } from '../lib/errors.mjs';
+import { transitionJob } from '../lib/job-machine.mjs';
 import { createAnalysisJob, deriveAnalysisJobIdentity } from '../lib/jobs.mjs';
 import {
   REPORT_OPERATION_LIMITS,
@@ -9,7 +12,10 @@ import {
 } from '../lib/report-operations.mjs';
 import {
   REPORT_CATALOG_KEY,
+  claimRepositoryJob,
   ensureCatalogRepository,
+  readOrCreateRepositoryState,
+  readRepositoryState,
   repairCatalogRepository,
   repositoryStateKey,
 } from '../lib/report-store.mjs';
@@ -27,6 +33,9 @@ import {
 import {
   SETUP_SPEND_LEDGER_KEY,
   ensureSetupSpendLedger,
+  listSetupSpendReservations,
+  readSetupSpendReservation,
+  reserveSetupSpend,
 } from '../lib/spend-store.mjs';
 import { createInitialComparison } from '../../src/domain/report-comparison.js';
 
@@ -86,6 +95,24 @@ function memoryStorage() {
         return { modified: false };
       put(key, value);
       return { modified: true, etag: records.get(key).etag };
+    },
+  };
+}
+
+function traceStorageWrites(storage, store, writes) {
+  return {
+    ...storage,
+    async write(key, value, condition, options) {
+      const before = storage.value(key);
+      const result = await storage.write(key, value, condition, options);
+      if (result.modified)
+        writes.push({
+          store,
+          key,
+          before,
+          after: structuredClone(value),
+        });
+      return result;
     },
   };
 }
@@ -558,9 +585,10 @@ test('keeps a historical source-unavailable report readable without a spend ledg
   assert.equal(board.spendStorage.value(SETUP_SPEND_LEDGER_KEY), null);
 });
 
-test('keeps a saved report readable when the setup policy belongs to an older deploy', async () => {
+test('keeps a saved report readable and rotates an older deploy policy', async () => {
   const board = await fixture();
   const seeded = await seedSavedReport(board, { active: false });
+  const priorLedger = board.spendStorage.value(SETUP_SPEND_LEDGER_KEY);
   const operations = createReportOperations({
     reportStorage: board.reportStorage,
     jobStorage: board.jobStorage,
@@ -584,10 +612,21 @@ test('keeps a saved report readable when the setup policy belongs to an older de
   });
   assert.deepEqual(direct.report, seeded.version.report);
   assert.deepEqual(direct.spendMode, {
-    available: false,
-    mode: 'disabled',
-    reason: 'analysis_unavailable',
+    available: true,
+    mode: 'setup',
+    reason: null,
   });
+  const currentLedger = board.spendStorage.value(SETUP_SPEND_LEDGER_KEY);
+  assert.notEqual(currentLedger.activePolicyId, priorLedger.activePolicyId);
+  assert.deepEqual(
+    currentLedger.policies[priorLedger.activePolicyId],
+    priorLedger.policies[priorLedger.activePolicyId],
+  );
+  assert.equal(currentLedger.accountingDigest, priorLedger.accountingDigest);
+  assert.equal(
+    currentLedger.accountingSequence,
+    priorLedger.accountingSequence,
+  );
 });
 
 test('keeps a saved report readable when nonpaid reconciliation is unavailable', async () => {
@@ -931,6 +970,309 @@ test('delegates admission after reconciliation with a bounded fixed deadline', a
     ).toISOString(),
     budget,
   });
+});
+
+test('global admission sweep completes another repository before reserving and dispatching', async () => {
+  const writes = [];
+  const reportStorage = traceStorageWrites(memoryStorage(), 'reports', writes);
+  const jobStorage = traceStorageWrites(memoryStorage(), 'jobs', writes);
+  const spendStorage = traceStorageWrites(memoryStorage(), 'spend', writes);
+  const repositoryB = {
+    id: 18,
+    fullName: 'cboone/gadgets',
+    name: 'gadgets',
+    private: true,
+    url: 'https://github.com/cboone/gadgets',
+    defaultBranch: 'main',
+    defaultTip: 'b'.repeat(40),
+  };
+  const repositoryAJob = createAnalysisJob({
+    ownerId: OWNER_ID,
+    repositoryId: repository.id,
+    idempotencyKey: '018f0f11-1111-7111-8111-111111111111',
+    operation: 'generate',
+    expectedCurrentReportId: null,
+    authorizationEpoch: 2,
+    admissionDeployId: 'deploy-1',
+    at: '2026-09-19T11:58:00.000Z',
+    deadlineAt: '2026-09-19T12:13:00.000Z',
+  });
+  await ensureSetupSpendLedger({
+    storage: spendStorage,
+    budget,
+    deployId: 'deploy-1',
+    at: '2026-09-19T11:57:00.000Z',
+  });
+  await ensureCatalogRepository({
+    storage: reportStorage,
+    budget,
+    repository,
+    at: '2026-09-19T11:57:01.000Z',
+  });
+  await readOrCreateRepositoryState({
+    storage: reportStorage,
+    budget,
+    repository,
+  });
+  await claimRepositoryJob({
+    storage: reportStorage,
+    budget,
+    repositoryId: repository.id,
+    jobId: repositoryAJob.jobId,
+    operation: repositoryAJob.operation,
+    expectedCurrentReportId: repositoryAJob.expectedCurrentReportId,
+    admittedAt: repositoryAJob.createdAt,
+  });
+  const reservation = await reserveSetupSpend({
+    storage: spendStorage,
+    budget,
+    deployId: 'deploy-1',
+    jobId: repositoryAJob.jobId,
+    operation: repositoryAJob.operation,
+    at: '2026-09-19T11:58:01.000Z',
+    revalidate: async () => true,
+  });
+  assert.equal(reservation.status, 'reserved');
+
+  let terminalJob = transitionJob(repositoryAJob, {
+    type: 'reservation-committed',
+    at: '2026-09-19T11:58:01.000Z',
+    deadlineAt: '2026-09-19T12:13:00.000Z',
+    pricePolicyId: reservation.policyId,
+    reservationMicrousd: reservation.reservationMicrousd,
+    accounting: reservation.accounting,
+  });
+  terminalJob = transitionJob(terminalJob, {
+    type: 'dispatch-installed',
+    at: '2026-09-19T11:58:02.000Z',
+    deadlineAt: '2026-09-19T12:13:00.000Z',
+    capabilityHash: '1'.repeat(64),
+  });
+  terminalJob = transitionJob(terminalJob, {
+    type: 'free-lease-claimed',
+    at: '2026-09-19T11:58:03.000Z',
+    phase: 'collecting',
+    tokenHash: '2'.repeat(64),
+    expiresAt: '2026-09-19T12:03:00.000Z',
+  });
+  terminalJob = transitionJob(terminalJob, {
+    type: 'free-lease-claimed',
+    at: '2026-09-19T11:58:04.000Z',
+    phase: 'counting',
+    tokenHash: '2'.repeat(64),
+    expiresAt: '2026-09-19T12:03:00.000Z',
+  });
+  terminalJob = transitionJob(terminalJob, {
+    type: 'primary-started',
+    at: '2026-09-19T11:58:05.000Z',
+    freeTokenHash: '2'.repeat(64),
+    attemptTokenHash: '3'.repeat(64),
+    deadlineAt: '2026-09-19T12:08:00.000Z',
+    sourceFingerprint: '4'.repeat(64),
+  });
+  terminalJob = transitionJob(terminalJob, {
+    type: 'response-completed',
+    at: '2026-09-19T11:58:06.000Z',
+    number: 1,
+    attemptTokenHash: '3'.repeat(64),
+    deadlineAt: '2026-09-19T12:03:00.000Z',
+    usage: {
+      terminalClass: 'complete-response',
+      terminalStopReason: 'end_turn',
+      inputTokens: 1000,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 0,
+      outputTokens: 100,
+      costMicrousd: 7500,
+    },
+  });
+  terminalJob = transitionJob(terminalJob, {
+    type: 'terminated',
+    at: '2026-09-19T11:58:07.000Z',
+    status: 'failed',
+    errorCode: 'analysis_output_invalid',
+    attemptTokenHash: '3'.repeat(64),
+    finalizationTokenHash: null,
+    freeTokenHash: null,
+    recovery: false,
+  });
+  jobStorage.seed(`jobs/${terminalJob.jobId}`, terminalJob);
+
+  const pendingState = await readRepositoryState({
+    storage: reportStorage,
+    budget,
+    repositoryId: repository.id,
+  });
+  const pendingReservation = await readSetupSpendReservation({
+    storage: spendStorage,
+    budget,
+    deployId: 'deploy-1',
+    jobId: terminalJob.jobId,
+  });
+  assert.equal(pendingState.state.activeJob.jobId, terminalJob.jobId);
+  assert.equal(terminalJob.accounting.status, 'pending');
+  assert.deepEqual(
+    pendingReservation.attempts.map(({ state }) => state),
+    ['reserved', 'reserved'],
+  );
+
+  writes.length = 0;
+  const dispatches = [];
+  let randomCalls = 0;
+  let sourceCalls = 0;
+  const admission = createAnalysisAdmission({
+    reportStorage,
+    jobStorage,
+    spendStorage,
+    deployId: 'deploy-1',
+    origin: 'https://tracker-boards.example',
+    fetchImpl: async (_url, init) => {
+      const body = JSON.parse(init.body);
+      assert.notEqual(body.jobId, terminalJob.jobId);
+      dispatches.push(body);
+      writes.push({ store: 'dispatch', key: body.jobId });
+      return new Response(null, { status: 202 });
+    },
+    randomBytes: (size) => {
+      randomCalls += 1;
+      return Buffer.alloc(size, randomCalls);
+    },
+    now: () => NOW,
+  });
+  const reconciler = createAnalysisReconciler({
+    reportStorage,
+    jobStorage,
+    spendStorage,
+    deployId: 'deploy-1',
+    now: () => NOW,
+  });
+  const operations = createReportOperations({
+    reportStorage,
+    jobStorage,
+    spendStorage,
+    sourceOperations: {
+      async checkRepository() {
+        sourceCalls += 1;
+        throw new Error('source work must not run during admission');
+      },
+    },
+    admission,
+    reconcile: reconciler.reconcile,
+    deployId: 'deploy-1',
+    now: () => NOW,
+  });
+  const admitted = await operations.admitJob({
+    ownerId: OWNER_ID,
+    authorizationEpoch: 2,
+    repository: repositoryB,
+    request: {
+      idempotencyKey: '018f0f11-2222-7222-8222-222222222222',
+      operation: 'generate',
+      expectedCurrentReportId: null,
+    },
+    budget,
+  });
+
+  const spendWrites = writes.filter(
+    ({ store, key }) => store === 'spend' && key === SETUP_SPEND_LEDGER_KEY,
+  );
+  const changedAttempt = (write, jobId, attemptIndex, from, to) =>
+    write.before?.active?.[jobId]?.attempts?.[attemptIndex]?.state === from &&
+    write.after?.active?.[jobId]?.attempts?.[attemptIndex]?.state === to;
+  const primarySettlements = spendWrites.filter((write) =>
+    changedAttempt(write, terminalJob.jobId, 0, 'reserved', 'settled'),
+  );
+  const correctiveReleases = spendWrites.filter((write) =>
+    changedAttempt(write, terminalJob.jobId, 1, 'reserved', 'released'),
+  );
+  const repositoryARemovals = spendWrites.filter(
+    (write) =>
+      write.before?.active?.[terminalJob.jobId] !== undefined &&
+      write.after?.active?.[terminalJob.jobId] === undefined,
+  );
+  const repositoryBReservations = spendWrites.filter(
+    (write) =>
+      write.before?.active?.[admitted.job.id] === undefined &&
+      write.after?.active?.[admitted.job.id] !== undefined,
+  );
+  const accountingWrites = writes.filter(
+    (write) =>
+      write.store === 'jobs' &&
+      write.key === `jobs/${terminalJob.jobId}` &&
+      write.before?.accounting?.status === 'pending' &&
+      write.after?.accounting?.status === 'complete',
+  );
+  const claimClears = writes.filter(
+    (write) =>
+      write.store === 'reports' &&
+      write.key === repositoryStateKey(repository.id) &&
+      write.before?.activeJob?.jobId === terminalJob.jobId &&
+      write.after?.activeJob === null,
+  );
+  assert.equal(primarySettlements.length, 1);
+  assert.equal(
+    primarySettlements[0].after.active[terminalJob.jobId].attempts[0]
+      .actualCostMicrousd,
+    7500,
+  );
+  assert.equal(correctiveReleases.length, 1);
+  assert.equal(accountingWrites.length, 1);
+  assert.equal(repositoryARemovals.length, 1);
+  assert.equal(claimClears.length, 1);
+  assert.equal(repositoryBReservations.length, 1);
+
+  const writeIndex = (target) => writes.indexOf(target);
+  assert.ok(
+    writeIndex(primarySettlements[0]) < writeIndex(correctiveReleases[0]),
+  );
+  assert.ok(
+    writeIndex(correctiveReleases[0]) < writeIndex(accountingWrites[0]),
+  );
+  assert.ok(
+    writeIndex(accountingWrites[0]) < writeIndex(repositoryARemovals[0]),
+  );
+  assert.ok(writeIndex(repositoryARemovals[0]) < writeIndex(claimClears[0]));
+  assert.ok(
+    writeIndex(claimClears[0]) < writeIndex(repositoryBReservations[0]),
+  );
+  assert.ok(
+    writeIndex(repositoryBReservations[0]) <
+      writes.findIndex(
+        ({ store, key }) => store === 'dispatch' && key === admitted.job.id,
+      ),
+  );
+
+  const completedJob = jobStorage.value(`jobs/${terminalJob.jobId}`);
+  const completedState = await readRepositoryState({
+    storage: reportStorage,
+    budget,
+    repositoryId: repository.id,
+  });
+  const activeReservations = await listSetupSpendReservations({
+    storage: spendStorage,
+    budget,
+    deployId: 'deploy-1',
+  });
+  assert.equal(completedJob.accounting.status, 'complete');
+  assert.deepEqual(
+    completedJob.attempts.map(({ state }) => state),
+    ['settled', 'released'],
+  );
+  assert.equal(completedState.state.activeJob, null);
+  assert.equal(
+    completedState.state.lastAnalysisAttempt.jobId,
+    terminalJob.jobId,
+  );
+  assert.deepEqual(
+    activeReservations.map(({ jobId }) => jobId),
+    [admitted.job.id],
+  );
+  assert.equal(admitted.job.state, 'queued');
+  assert.deepEqual(
+    dispatches.map(({ jobId }) => jobId),
+    [admitted.job.id],
+  );
+  assert.equal(sourceCalls, 0);
 });
 
 test('binds the owner decision to the server-side spend transition and returns a minimal projection', async () => {

@@ -11,8 +11,8 @@ import {
   markSetupAttemptUnknown,
 } from '../lib/spend-store.mjs';
 
-const NOW = '2026-09-19T04:30:00.000Z';
-const DEADLINE = '2026-09-19T05:30:00.000Z';
+const NOW = '2026-09-19T06:30:00.000Z';
+const DEADLINE = '2026-09-19T07:30:00.000Z';
 const OWNER_ID = 99961;
 const budget = Object.freeze({ name: 'admission-test-budget' });
 const repository = (id) => ({
@@ -361,8 +361,7 @@ test('dispatch uncertainty rotates the capability and redispatches without anoth
   const board = fixture({
     fetchImpl: async (_url, init) => {
       calls.push(JSON.parse(init.body));
-      if (calls.length <= 2)
-        throw new Error('synthetic uncertain dispatch');
+      if (calls.length <= 2) throw new Error('synthetic uncertain dispatch');
       return new Response(null, { status: 202 });
     },
   });
@@ -440,7 +439,7 @@ test('an old worker claim wins the dispatch rotation race and prevents redispatc
         at: NOW,
         phase: 'collecting',
         tokenHash: 'f'.repeat(64),
-        expiresAt: '2026-09-19T04:40:00.000Z',
+        expiresAt: '2026-09-19T06:40:00.000Z',
       },
     });
     assert.equal(claimed.status, 'updated');
@@ -500,29 +499,29 @@ test('repeated admission clears an ambiguous claim without releasing unknown exp
   let job = board.jobStorage.value(key);
   job = transitionJob(job, {
     type: 'free-lease-claimed',
-    at: '2026-09-19T04:31:00.000Z',
+    at: '2026-09-19T06:31:00.000Z',
     phase: 'collecting',
     tokenHash: '1'.repeat(64),
-    expiresAt: '2026-09-19T04:40:00.000Z',
+    expiresAt: '2026-09-19T06:40:00.000Z',
   });
   job = transitionJob(job, {
     type: 'free-lease-claimed',
-    at: '2026-09-19T04:32:00.000Z',
+    at: '2026-09-19T06:32:00.000Z',
     phase: 'counting',
     tokenHash: '1'.repeat(64),
-    expiresAt: '2026-09-19T04:40:00.000Z',
+    expiresAt: '2026-09-19T06:40:00.000Z',
   });
   job = transitionJob(job, {
     type: 'primary-started',
-    at: '2026-09-19T04:33:00.000Z',
+    at: '2026-09-19T06:33:00.000Z',
     freeTokenHash: '1'.repeat(64),
     attemptTokenHash: '2'.repeat(64),
-    deadlineAt: '2026-09-19T04:40:00.000Z',
+    deadlineAt: '2026-09-19T06:40:00.000Z',
     sourceFingerprint: '3'.repeat(64),
   });
   job = transitionJob(job, {
     type: 'terminated',
-    at: '2026-09-19T04:41:00.000Z',
+    at: '2026-09-19T06:41:00.000Z',
     status: 'ambiguous',
     errorCode: 'analysis_ambiguous',
     attemptTokenHash: null,
@@ -538,12 +537,12 @@ test('repeated admission clears an ambiguous claim without releasing unknown exp
     attemptNumber: 1,
     actualCostMicrousd: 0,
     unknownExposureMicrousd: job.attempts[0].reservationMicrousd,
-    at: '2026-09-19T04:41:00.000Z',
+    at: '2026-09-19T06:41:00.000Z',
     revalidate: async () => true,
   });
   job = transitionJob(job, {
     type: 'accounting-recorded',
-    at: '2026-09-19T04:41:00.000Z',
+    at: '2026-09-19T06:41:00.000Z',
     deadlineAt: null,
     attemptTokenHash: null,
     finalizationTokenHash: null,

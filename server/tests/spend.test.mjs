@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   REVIEWED_SETUP_PRICING_ATTESTATION,
+  REVIEWED_SETUP_PRICING_ATTESTATIONS,
   SETUP_FEATURE_POLICY_HASH,
   SETUP_PRICING_SOURCE,
   SETUP_SPEND_LIMITS,
+  activateSetupPolicy,
   createSetupLedger,
   createSetupPolicy,
   createSetupPricingAttestation,
@@ -18,7 +20,7 @@ import {
 } from '../lib/spend.mjs';
 
 const at = (hour = 0) =>
-  `2026-09-19T${String(hour + 4).padStart(2, '0')}:30:00.000Z`;
+  `2026-09-19T${String(hour + 6).padStart(2, '0')}:30:00.000Z`;
 const id = (character) => character.repeat(64);
 const pricingAttestation = REVIEWED_SETUP_PRICING_ATTESTATION;
 const reserveSetupJob = (ledger, options) =>
@@ -48,13 +50,95 @@ test('setup policy fixes Opus 5 high-effort global standard pricing and cap', ()
   assert.equal(policy.featurePolicyHash, SETUP_FEATURE_POLICY_HASH);
   assert.equal(policy.pricingSource, SETUP_PRICING_SOURCE);
   assert.equal(Object.isFrozen(pricingAttestation), true);
+  assert.equal(Object.isFrozen(REVIEWED_SETUP_PRICING_ATTESTATIONS), true);
+  assert.equal(REVIEWED_SETUP_PRICING_ATTESTATIONS.at(-1), pricingAttestation);
   assert.equal(exposureMicrousd(ledger), 0);
+  assert.equal(
+    createSetupPolicy({ deployId: 'deploy-1', pricingAttestation }).policyId,
+    ledger.activePolicyId,
+  );
+  assert.notEqual(
+    createSetupPolicy({ deployId: 'deploy-2', pricingAttestation }).policyId,
+    ledger.activePolicyId,
+  );
+});
+
+test('deploy policy activation preserves lifetime accounting and old immutable policy state', () => {
+  const first = reserveSetupJob(setup(), {
+    jobId: id('a'),
+    operation: 'generate',
+    at: at(1),
+    expectedRevision: 0,
+  }).ledger;
+  const before = updateSetupAttempt(first, {
+    jobId: id('a'),
+    attemptNumber: 1,
+    state: 'settled',
+    actualCostMicrousd: 123_456,
+    at: at(2),
+    expectedRevision: first.revision,
+  }).ledger;
+  const priorPolicyId = before.activePolicyId;
+  const priorPolicy = before.policies[priorPolicyId];
+  const nextPolicy = createSetupPolicy({
+    deployId: 'deploy-2',
+    pricingAttestation,
+  });
+  const activated = activateSetupPolicy(before, {
+    ...nextPolicy,
+    at: at(3),
+    expectedRevision: before.revision,
+  });
+
+  assert.equal(activated.activePolicyId, nextPolicy.policyId);
+  assert.deepEqual(activated.policies[priorPolicyId], priorPolicy);
+  assert.deepEqual(activated.active, before.active);
+  assert.deepEqual(activated.discussions, before.discussions);
+  assert.equal(activated.settledMicrousd, before.settledMicrousd);
+  assert.equal(activated.accountingSequence, before.accountingSequence);
+  assert.equal(activated.accountingDigest, before.accountingDigest);
+  assert.equal(activated.revision, before.revision + 1);
+  assert.deepEqual(
+    activateSetupPolicy(activated, {
+      ...nextPolicy,
+      at: at(4),
+      expectedRevision: activated.revision,
+    }),
+    activated,
+  );
+});
+
+test('deploy policy activation fails closed at the immutable policy bound', () => {
+  let ledger = setup();
+  for (let index = 2; index <= SETUP_SPEND_LIMITS.maxPolicies; index += 1) {
+    const policy = createSetupPolicy({
+      deployId: `deploy-${index}`,
+      pricingAttestation,
+    });
+    ledger = activateSetupPolicy(ledger, {
+      ...policy,
+      at: `2026-09-19T06:30:${String(index).padStart(2, '0')}.000Z`,
+      expectedRevision: ledger.revision,
+    });
+  }
+  const overflow = createSetupPolicy({
+    deployId: 'deploy-overflow',
+    pricingAttestation,
+  });
+  assert.throws(
+    () =>
+      activateSetupPolicy(ledger, {
+        ...overflow,
+        at: '2026-09-19T06:31:00.000Z',
+        expectedRevision: ledger.revision,
+      }),
+    { code: 'service_unavailable' },
+  );
 });
 
 test('reviewed pricing attestation and deploy bind every active policy fact', () => {
   const ledger = setup();
   const policyId = ledger.activePolicyId;
-  const policy = ledger.policies[policyId];
   for (const [field, replacement] of [
     ['featurePolicyHash', id('f')],
     ['pricingSource', 'https://example.invalid/pricing'],
@@ -77,19 +161,15 @@ test('reviewed pricing attestation and deploy bind every active policy fact', ()
 
   const substitutedValidity = structuredClone(ledger);
   substitutedValidity.policies[policyId].pricingValidThrough =
-    '2026-09-27T03:18:41.000Z';
+    '2026-09-27T05:35:41.000Z';
   assert.throws(() => projectSpendLedger(substitutedValidity), {
     code: 'service_unavailable',
   });
-  const substitutedAttestation = createSetupPricingAttestation({
-    pricingVerifiedAt: pricingAttestation.pricingVerifiedAt,
-    pricingValidThrough: '2026-09-27T03:18:41.000Z',
-  });
   assert.throws(
     () =>
-      createSetupPolicy({
-        deployId: policy.deployId,
-        pricingAttestation: substitutedAttestation,
+      createSetupPricingAttestation({
+        pricingVerifiedAt: pricingAttestation.pricingVerifiedAt,
+        pricingValidThrough: '2026-09-27T05:35:41.000Z',
       }),
     { code: 'service_unavailable' },
   );
@@ -222,6 +302,91 @@ test('unknown exposure is conservative, retained, and cannot be removed', () => 
         expectedRevision: unknown.revision,
       }),
     { code: 'service_unavailable' },
+  );
+});
+
+test('unknown attempt evidence can only raise its known cost and retained exposure', () => {
+  const reserved = reserveSetupJob(setup(), {
+    jobId: id('a'),
+    operation: 'generate',
+    at: at(1),
+    expectedRevision: 0,
+  }).ledger;
+  const unknown = updateSetupAttempt(reserved, {
+    jobId: id('a'),
+    attemptNumber: 1,
+    state: 'unknown',
+    actualCostMicrousd: 0,
+    unknownExposureMicrousd: SETUP_SPEND_LIMITS.attemptCostMicrousd,
+    at: at(2),
+    expectedRevision: 1,
+  }).ledger;
+  const upgraded = updateSetupAttempt(unknown, {
+    jobId: id('a'),
+    attemptNumber: 1,
+    state: 'unknown',
+    actualCostMicrousd: 7_000_000,
+    unknownExposureMicrousd: 7_000_000,
+    pricingReviewRequired: true,
+    at: at(3),
+    expectedRevision: 2,
+  }).ledger;
+  assert.equal(
+    upgraded.active[id('a')].attempts[0].actualCostMicrousd,
+    7_000_000,
+  );
+  assert.equal(
+    upgraded.active[id('a')].attempts[0].unknownExposureMicrousd,
+    7_000_000,
+  );
+  assert.equal(upgraded.pricingReviewRequired, true);
+  assert.throws(
+    () =>
+      updateSetupAttempt(upgraded, {
+        jobId: id('a'),
+        attemptNumber: 1,
+        state: 'unknown',
+        actualCostMicrousd: SETUP_SPEND_LIMITS.attemptCostMicrousd,
+        unknownExposureMicrousd: SETUP_SPEND_LIMITS.attemptCostMicrousd,
+        at: at(4),
+        expectedRevision: 3,
+      }),
+    { code: 'service_unavailable' },
+  );
+});
+
+test('explicit pricing review is atomic and changes the accounting digest', () => {
+  const reserved = reserveSetupJob(setup(), {
+    jobId: id('a'),
+    operation: 'generate',
+    at: at(1),
+    expectedRevision: 0,
+  }).ledger;
+  const ordinary = updateSetupAttempt(reserved, {
+    jobId: id('a'),
+    attemptNumber: 1,
+    state: 'unknown',
+    actualCostMicrousd: SETUP_SPEND_LIMITS.attemptCostMicrousd,
+    unknownExposureMicrousd: SETUP_SPEND_LIMITS.attemptCostMicrousd,
+    at: at(2),
+    expectedRevision: 1,
+  }).ledger;
+  const reviewed = updateSetupAttempt(reserved, {
+    jobId: id('a'),
+    attemptNumber: 1,
+    state: 'unknown',
+    actualCostMicrousd: SETUP_SPEND_LIMITS.attemptCostMicrousd,
+    unknownExposureMicrousd: SETUP_SPEND_LIMITS.attemptCostMicrousd,
+    pricingReviewRequired: true,
+    at: at(2),
+    expectedRevision: 1,
+  }).ledger;
+  assert.equal(ordinary.pricingReviewRequired, false);
+  assert.equal(reviewed.pricingReviewRequired, true);
+  assert.notEqual(reviewed.accountingDigest, ordinary.accountingDigest);
+  assert.notEqual(
+    reviewed.active[id('a')].lastTransitionId,
+    ordinary.active[id('a')].lastTransitionId,
   );
 });
 

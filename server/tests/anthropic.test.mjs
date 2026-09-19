@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   ANTHROPIC_POLICY,
+  AnthropicAttemptError,
+  AnthropicRefusalError,
   buildCountRequest,
   buildCorrectiveAnalysisInput,
   buildMessageRequest,
@@ -251,6 +253,25 @@ test('missing billing facts, cache use, tools, decreasing usage, malformed event
     });
 });
 
+test('a dispatched response model mismatch requires pricing review without exposing the model', async () => {
+  const privateModel = 'claude-opus-5-private-unreviewed';
+  const body = successfulEvents().replace('claude-opus-5', privateModel);
+  const client = createAnthropicClient({
+    apiKey: 'synthetic-key',
+    fetchImpl: async () => new Response(stream([body])),
+  });
+  await assert.rejects(
+    client.createMessage({ analysisInput: input, schema }),
+    (error) => {
+      assert.ok(error instanceof AnthropicAttemptError);
+      assert.equal(error.code, 'pricing_review_required');
+      assert.equal(error.pricingReviewRequired, true);
+      assert.equal(String(error).includes(privateModel), false);
+      return true;
+    },
+  );
+});
+
 test('invalid JSON and max-token completion remain known billed responses eligible only for caller validation handling', async () => {
   const invalid = successfulEvents({ stopReason: 'max_tokens' }).replace(
     '{"ok":',
@@ -280,11 +301,35 @@ test('HTTP errors are sanitized and no automatic retry occurs', async () => {
         return new Response('provider secret detail', { status });
       },
     });
-    await assert.rejects(client.countTokens({ analysisInput: input, schema }), {
-      code,
-    });
+    await assert.rejects(
+      client.createMessage({ analysisInput: input, schema }),
+      (error) => {
+        assert.ok(error instanceof AnthropicRefusalError);
+        assert.equal(error.code, code);
+        assert.equal(error.zeroBilled, true);
+        assert.equal(String(error).includes('provider secret detail'), false);
+        return true;
+      },
+    );
     assert.equal(calls, 1);
   }
+});
+
+test('a successful HTTP response without a readable stream remains billing-unknown', async () => {
+  const client = createAnthropicClient({
+    apiKey: 'synthetic-key',
+    fetchImpl: async () => new Response(null, { status: 200 }),
+  });
+  await assert.rejects(
+    client.createMessage({ analysisInput: input, schema }),
+    (error) => {
+      assert.ok(error instanceof AnthropicAttemptError);
+      assert.equal(error instanceof AnthropicRefusalError, false);
+      assert.equal(error.code, 'analysis_ambiguous');
+      assert.equal(error.billingUnknown, true);
+      return true;
+    },
+  );
 });
 
 test('an uncertain paid transport failure is retained as unknown billing exposure', async () => {
