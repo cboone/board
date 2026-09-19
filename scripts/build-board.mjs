@@ -95,9 +95,10 @@ export async function composeBuild({
           resolve(generated, directory),
         );
       }
-      assert(
-        (await readdir(functionsDirectory)).includes('api.mjs'),
-        'Production composition requires the authored API entry.',
+      assert.deepEqual(
+        (await readdir(functionsDirectory)).sort(),
+        ['api.mjs', 'report-job.mjs'],
+        'Production composition requires the complete authored function set.',
       );
     }
     await build({ projectDirectory: project, mode });

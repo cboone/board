@@ -80,6 +80,10 @@ async function fakeRuntime(directory) {
     resolve(directory, 'server/functions/api.mjs'),
     "import { REPORT_LIMITS } from '../lib/shared.mjs'; export default function() { return Response.json({limit:REPORT_LIMITS.issues}); }\n",
   );
+  await writeFile(
+    resolve(directory, 'server/functions/report-job.mjs'),
+    'export const config={background:true}; export default function() { return new Response(null,{status:204}); }\n',
+  );
 }
 
 function childRun(directory, source, context = 'production') {
@@ -174,7 +178,7 @@ test('actual Vite builds ignore env files and external mode flags and remove the
   );
 });
 
-test('staged authored API resolves shared domain and locked SDK and rejects preview before provider/store access', async (t) => {
+test('staged authored functions resolve dependencies and reject preview before provider or store access', async (t) => {
   const directory = await fixture(t);
   for (const path of ['server/functions', 'server/lib', 'src/domain']) {
     await cp(resolve(project, path), resolve(directory, path), {
@@ -203,6 +207,7 @@ test('staged authored API resolves shared domain and locked SDK and rejects prev
     import assert from 'node:assert/strict';
     import {createRequire} from 'node:module';
     const entry=${JSON.stringify(pathToFileURL(resolve(result.functionsDirectory, 'api.mjs')).href)};
+    const workerEntry=${JSON.stringify(pathToFileURL(resolve(result.functionsDirectory, 'report-job.mjs')).href)};
     assert(createRequire(entry).resolve('@netlify/blobs'));
     let providerCalls=0;
     globalThis.fetch=()=>{providerCalls++;throw new Error('Unexpected provider access.');};
@@ -210,6 +215,11 @@ test('staged authored API resolves shared domain and locked SDK and rejects prev
     const response=await handler(new Request('https://tracker-boards.netlify.app/api/session'),{deploy:{context:'deploy-preview'}});
     assert.equal(response.status,403);
     assert.equal((await response.json()).error.code,'forbidden');
+    const workerModule=await import(workerEntry);
+    assert.deepEqual(workerModule.config,{background:true});
+    const workerResponse=await workerModule.default(new Request('https://tracker-boards.netlify.app/.netlify/functions/report-job',{method:'POST'}),{deploy:{context:'deploy-preview'}});
+    assert.equal(workerResponse.status,403);
+    assert.equal((await workerResponse.json()).error.code,'forbidden');
     assert.equal(providerCalls,0);
     const {REPORT_LIMITS}=await import(${JSON.stringify(pathToFileURL(resolve(directory, 'server/.generated/src/domain/report-contract.js')).href)});
     assert.equal(REPORT_LIMITS.issues,1000);

@@ -905,11 +905,11 @@ test('native entry guards the published production deploy and canonical origin b
 });
 
 test('production bootstrap uses validated configuration and injected storage without a provider call', async () => {
-  let opens = 0;
+  const opens = [];
   const handler = createHandler({
     env: environment(),
-    storageFactory: async () => {
-      opens++;
+    storageFactory: async ({ storeName }) => {
+      opens.push(storeName);
       return memoryStorage();
     },
     fetchImpl: async () => {
@@ -921,5 +921,10 @@ test('production bootstrap uses validated configuration and injected storage wit
   });
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { auth: false });
-  assert.equal(opens, 1);
+  assert.deepEqual(opens.sort(), [
+    'board-auth',
+    'board-jobs',
+    'board-reports',
+    'board-spend',
+  ]);
 });
