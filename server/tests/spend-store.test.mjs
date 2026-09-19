@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   SETUP_SPEND_LEDGER_KEY,
+  applyCurrentSetupDiscussionDecision,
   applySetupDiscussionDecision,
   ensureSetupSpendLedger,
+  fenceSetupReservation,
   markSetupAttemptUnknown,
   readSetupSpendSummary,
   releaseSetupAttempt,
@@ -275,6 +277,113 @@ test('reservation and attempt accounting are idempotent across lost acknowledgem
   assert.equal(storage.value().revision, 4);
 });
 
+test('reservation fencing advances only logical revision and resolves a lost acknowledgement', async () => {
+  const storage = memoryStorage();
+  await setup(storage);
+  const before = storage.value();
+  storage.loseNextAcknowledgement();
+  assert.deepEqual(
+    await fenceSetupReservation({
+      ...context(storage),
+      jobId: id('f'),
+      operation: 'generate',
+      at: at(5),
+      revalidate: authorize,
+    }),
+    { status: 'fenced', revision: before.revision + 1 },
+  );
+  const after = storage.value();
+  assert.deepEqual(after, { ...before, revision: before.revision + 1 });
+});
+
+test('reservation fencing prevents a delayed reservation from committing', async () => {
+  const storage = memoryStorage();
+  await setup(storage);
+  let entered;
+  const waiting = new Promise((resolve) => {
+    entered = resolve;
+  });
+  let resume;
+  const paused = new Promise((resolve) => {
+    resume = resolve;
+  });
+  let first = true;
+  const reservation = reserveSetupSpend({
+    ...context(storage),
+    jobId: id('a'),
+    operation: 'generate',
+    at: at(5),
+    revalidate: async ({ kind }) => {
+      if (kind === 'reservation' && first) {
+        first = false;
+        entered();
+        await paused;
+        return true;
+      }
+      return false;
+    },
+  });
+  await waiting;
+  assert.equal(
+    (
+      await fenceSetupReservation({
+        ...context(storage),
+        jobId: id('a'),
+        operation: 'generate',
+        at: at(6),
+        revalidate: authorize,
+      })
+    ).status,
+    'fenced',
+  );
+  resume();
+  await assert.rejects(reservation, { code: 'service_unavailable' });
+  assert.equal(Object.hasOwn(storage.value().active, id('a')), false);
+});
+
+test('reservation fencing returns exact facts when a delayed reservation wins', async () => {
+  const storage = memoryStorage();
+  await setup(storage);
+  let entered;
+  const waiting = new Promise((resolve) => {
+    entered = resolve;
+  });
+  let resume;
+  const paused = new Promise((resolve) => {
+    resume = resolve;
+  });
+  let first = true;
+  const fencing = fenceSetupReservation({
+    ...context(storage),
+    jobId: id('a'),
+    operation: 'generate',
+    at: at(5),
+    revalidate: async ({ kind }) => {
+      if (kind === 'reservation-fence' && first) {
+        first = false;
+        entered();
+        await paused;
+      }
+      return true;
+    },
+  });
+  await waiting;
+  const reserved = await reserveSetupSpend({
+    ...context(storage),
+    jobId: id('a'),
+    operation: 'generate',
+    at: at(6),
+    revalidate: authorize,
+  });
+  assert.equal(reserved.status, 'reserved');
+  resume();
+  const observed = await fencing;
+  assert.equal(observed.status, 'existing');
+  assert.equal(observed.policyId, reserved.policyId);
+  assert.deepEqual(observed.reservationMicrousd, reserved.reservationMicrousd);
+  assert.deepEqual(observed.accounting, reserved.accounting);
+});
+
 test('unknown exposure is idempotent and prevents completed-entry removal', async () => {
   const storage = memoryStorage();
   await setup(storage);
@@ -471,4 +580,65 @@ test('discussion decisions are revision-bound and a stop remains permanent', asy
     ).status,
     'stopped',
   );
+});
+
+test('current discussion decisions bind private revision and exposure internally', async () => {
+  const storage = memoryStorage();
+  await setup(storage);
+  await reserveSetupSpend({
+    ...context(storage),
+    jobId: id('a'),
+    operation: 'generate',
+    at: at(5),
+    revalidate: authorize,
+  });
+  await reserveSetupSpend({
+    ...context(storage),
+    jobId: id('b'),
+    operation: 'refresh',
+    at: at(6),
+    revalidate: authorize,
+  });
+  const ledger = storage.value();
+  const discussion = ledger.discussions[ledger.activePolicyId];
+  const decision = {
+    ...context(storage),
+    policyId: ledger.activePolicyId,
+    discussionRevision: discussion.currentRevision,
+    decisionId: id('f'),
+    decision: 'acknowledge',
+    authorizedThroughMicrousd: 25_000_000,
+    authorizedOperations: ['refresh'],
+    at: at(7),
+  };
+  storage.loseNextAcknowledgement();
+  const applied = await applyCurrentSetupDiscussionDecision(decision);
+  assert.equal(applied.status, 'updated');
+  assert.equal(applied.spend.status, 'available');
+  assert.equal(
+    (
+      await applyCurrentSetupDiscussionDecision({
+        ...decision,
+        at: at(8),
+      })
+    ).status,
+    'existing',
+  );
+  await assert.rejects(
+    applyCurrentSetupDiscussionDecision({
+      ...decision,
+      authorizedOperations: ['generate'],
+      at: at(8),
+    }),
+    { code: 'service_unavailable' },
+  );
+  const stale = await applyCurrentSetupDiscussionDecision({
+    ...decision,
+    discussionRevision: decision.discussionRevision + 1,
+    decisionId: id('1'),
+    at: at(8),
+  });
+  assert.equal(stale.status, 'conflict');
+  assert.ok(!Object.hasOwn(stale.spend, 'revision'));
+  assert.ok(!Object.hasOwn(stale.spend, 'observedExposureMicrousd'));
 });

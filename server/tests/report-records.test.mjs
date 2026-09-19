@@ -154,6 +154,17 @@ test('repository completion binds the active job, operation, and publication sta
       .lastAnalysisAttempt.errorCode,
     'analysis_provider_unavailable',
   );
+  assert.equal(
+    clearRepositoryJob(claimed, {
+      jobId,
+      lastAnalysisAttempt: {
+        ...attempt,
+        status: 'budget-blocked',
+        errorCode: 'analysis_unavailable',
+      },
+    }).lastAnalysisAttempt.errorCode,
+    'analysis_unavailable',
+  );
 });
 
 test('source check sequence prevents stale completions and preserves the saved report', () => {
@@ -183,6 +194,17 @@ test('source check sequence prevents stale completions and preserves the saved r
   });
   assert.equal(unavailable.current.reportId, reportId);
   assert.equal(unavailable.sourceCheck.status, 'source-unavailable');
+
+  const rateLimited = finishSourceCheck(
+    beginSourceCheck(projectRepositoryState(initial), { startedAt: at(1) }),
+    {
+      sequence: 1,
+      completedAt: at(2),
+      status: 'failed',
+      errorCode: 'provider_rate_limited',
+    },
+  );
+  assert.equal(rateLimited.sourceCheck.errorCode, 'provider_rate_limited');
 });
 
 test('catalog membership is sorted, bounded, digest-stable across summary repair and paged by validated cursor', () => {

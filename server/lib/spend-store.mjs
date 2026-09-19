@@ -139,6 +139,13 @@ function reservationResult(status, ledger, jobId) {
   });
 }
 
+function reservationFence(ledger) {
+  if (ledger.revision === Number.MAX_SAFE_INTEGER) throw unavailable();
+  const next = clone(ledger);
+  next.revision += 1;
+  return projectSpendLedger(next);
+}
+
 function attemptResult(status, ledger, jobId, attemptNumber) {
   const entry = ledger.active[jobId];
   const attempt = entry?.attempts[attemptNumber - 1];
@@ -340,6 +347,56 @@ export async function reserveSetupSpend(input) {
   });
 }
 
+/** Fence a still-absent reservation, or return the reservation that won first. */
+export async function fenceSetupReservation(input) {
+  const selected = select(input);
+  if (
+    !HEX_64.test(input.jobId) ||
+    !OPERATIONS.has(input.operation) ||
+    typeof input.revalidate !== 'function'
+  )
+    throw unavailable();
+  iso(input.at);
+  let current = await readLedger(selected);
+  if (current === null) throw unavailable();
+  for (
+    let conflict = 0;
+    conflict < SPEND_STORE_LIMITS.conflicts;
+    conflict += 1
+  ) {
+    if (Object.hasOwn(current.ledger.active, input.jobId)) {
+      const entry = current.ledger.active[input.jobId];
+      await revalidate(input, {
+        kind: 'existing-reservation',
+        jobId: input.jobId,
+        operation: input.operation,
+        ledgerRevision: current.ledger.revision,
+        policyId: entry.policyId,
+      });
+      return reservationResult('existing', current.ledger, input.jobId);
+    }
+    await revalidate(input, {
+      kind: 'reservation-fence',
+      jobId: input.jobId,
+      operation: input.operation,
+      ledgerRevision: current.ledger.revision,
+      policyId: current.ledger.activePolicyId,
+    });
+    const written = await writeLedger(
+      selected,
+      current,
+      reservationFence(current.ledger),
+    );
+    if (written.status === 'written')
+      return Object.freeze({
+        status: 'fenced',
+        revision: written.current.ledger.revision,
+      });
+    current = written.current;
+  }
+  throw unavailable();
+}
+
 function attemptMatches(attempt, requested) {
   return (
     attempt.state === requested.state &&
@@ -510,6 +567,17 @@ function decisionMatches(found, input) {
   );
 }
 
+function currentDecisionMatches(found, input, decision) {
+  return (
+    found.policyId === input.policyId &&
+    found.decision.triggerRevision === input.discussionRevision &&
+    found.decision.decision === decision &&
+    found.decision.authorizedThroughMicrousd ===
+      input.authorizedThroughMicrousd &&
+    same(found.decision.authorizedOperations, input.authorizedOperations)
+  );
+}
+
 function validateDecisionInput(input) {
   if (
     input.policyId !== SETUP_POLICY_ID ||
@@ -578,5 +646,78 @@ export async function applySetupDiscussionDecision(input) {
   return Object.freeze({
     status: 'conflict',
     spend: safeSummary(current.ledger, input.at),
+  });
+}
+
+/** Bind a browser decision to the current private revision and exposure. */
+export async function applyCurrentSetupDiscussionDecision(input) {
+  const selected = select(input);
+  const decision =
+    input.decision === 'acknowledge'
+      ? 'acknowledged'
+      : input.decision === 'stop'
+        ? 'stopped'
+        : null;
+  if (
+    input.policyId !== SETUP_POLICY_ID ||
+    !Number.isSafeInteger(input.discussionRevision) ||
+    input.discussionRevision < 1 ||
+    !HEX_64.test(input.decisionId) ||
+    decision === null ||
+    !integer(input.authorizedThroughMicrousd) ||
+    input.authorizedThroughMicrousd > SETUP_SPEND_LIMITS.capMicrousd ||
+    !Array.isArray(input.authorizedOperations) ||
+    new Set(input.authorizedOperations).size !==
+      input.authorizedOperations.length ||
+    input.authorizedOperations.some((operation) => !OPERATIONS.has(operation))
+  )
+    throw unavailable();
+  iso(input.at);
+  const current = await readLedger(selected);
+  if (current === null) throw unavailable();
+  const existing = findDecision(current.ledger, input.decisionId);
+  if (existing) {
+    if (!currentDecisionMatches(existing, input, decision)) throw unavailable();
+    return Object.freeze({
+      status: 'existing',
+      spend: safeSummary(current.ledger, input.at),
+    });
+  }
+  const discussion = current.ledger.discussions[input.policyId];
+  if (
+    discussion?.status !== 'required' ||
+    discussion.currentRevision !== input.discussionRevision
+  )
+    return Object.freeze({
+      status: 'conflict',
+      spend: safeSummary(current.ledger, input.at),
+    });
+  const observedExposureMicrousd = exposureMicrousd(current.ledger);
+  const ledger = decideSetupDiscussion(current.ledger, {
+    policyId: input.policyId,
+    triggerRevision: input.discussionRevision,
+    decisionId: input.decisionId,
+    decision,
+    authorizedThroughMicrousd: input.authorizedThroughMicrousd,
+    authorizedOperations: input.authorizedOperations,
+    observedExposureMicrousd,
+    at: input.at,
+    expectedRevision: current.ledger.revision,
+  });
+  const written = await writeLedger(selected, current, ledger);
+  if (written.status === 'written')
+    return Object.freeze({
+      status: 'updated',
+      spend: safeSummary(written.current.ledger, input.at),
+    });
+  const observed = findDecision(written.current.ledger, input.decisionId);
+  if (observed && currentDecisionMatches(observed, input, decision))
+    return Object.freeze({
+      status: 'existing',
+      spend: safeSummary(written.current.ledger, input.at),
+    });
+  return Object.freeze({
+    status: 'conflict',
+    spend: safeSummary(written.current.ledger, input.at),
   });
 }
