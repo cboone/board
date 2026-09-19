@@ -963,7 +963,9 @@ discussions
   <policy-id>
     status, currentRevision, triggeredAt, triggerExposureMicrousd
     decisions[]
-      triggerRevision, decidedAt, observedExposureMicrousd
+      triggerRevision, decidedAt
+      observed
+        settledMicrousd, reservedMicrousd, unknownMicrousd
       decisionId, decision, authorizedThroughMicrousd, authorizedOperations
 pricingReviewRequired
 updatedAt
@@ -985,12 +987,12 @@ release, or unknown classification never adds a field, array item, or unreserved
 byte. Reject admission or policy mutation before a provider call when either
 exact entry or serialized-byte ceiling would be exceeded.
 
-The strict current schema reaches a 193,412-byte maximum-width projection with
+The strict current schema reaches a 231,812-byte maximum-width projection with
 four active jobs, 16 policies, 32 decisions per policy, maximum-byte deploy
 identifiers, and every mutable numeric/timestamp field at terminal width. Test
 that exact legal maximum against the 262,144-byte outer ceiling. The remaining
-headroom is deliberate corruption and schema-change defense; no valid current
-record can be padded to the outer ceiling.
+30,332 bytes of headroom are deliberate corruption and schema-change defense;
+no valid current record can be padded to the outer ceiling.
 
 The initial per-attempt reservation is 5,409,600 microdollars:
 
@@ -1011,6 +1013,11 @@ loop; it never retries only the ledger operation. Admission requires
 dispatch would make the same exposure reach or exceed 20,000,000, set the
 versioned discussion gate, reject paid dispatch with
 `budget_discussion_required`, and present the measured ledger state to the user.
+Once that gate is `required`, every repeated blocked proposal returns the same
+discussion revision without another ledger write, even if later accounting
+reduces current exposure below the threshold. Only a proposal outside a
+completed acknowledgement's authorized operations or ceiling opens a later
+revision, regardless of current exposure.
 Paid admission remains blocked until an explicit owner decision is recorded by
 an authenticated, CSRF-protected acknowledgement transition against the exact
 trigger revision. The acknowledgement records the observed exposure, concrete
@@ -1023,7 +1030,8 @@ paid setup admission under that immutable price policy. An acknowledged decision
 admits only an operation listed in `authorizedOperations` and only when exposure
 including the proposal is at or below `authorizedThroughMicrousd` and the
 lifetime $25 cap. Validate the exact policy ID, trigger revision, current ledger
-revision, operation enum, ceiling, and aggregate exposure in the same
+revision, operation enum, ceiling, and displayed settled, reserved, and unknown
+exposure in the same
 conditional ledger write that reserves spend. An acknowledgement for one policy
 never authorizes a later policy; each new policy has its own discussion state
 while all policies share the lifetime cap. Keep `decisions[]` append-only,
@@ -1325,6 +1333,8 @@ JSON envelope with fixed messages.
 
 Add these owner-authenticated routes:
 
+<!-- markdownlint-disable MD013 -->
+
 | Method | Route                                      | Purpose                      |
 | ------ | ------------------------------------------ | ---------------------------- |
 | GET    | `/api/reports`                             | List saved report identities |
@@ -1333,6 +1343,8 @@ Add these owner-authenticated routes:
 | POST   | `/api/repositories/:id/report-jobs`        | Admit Generate or Refresh    |
 | GET    | `/api/report-jobs/:jobId`                  | Poll one authorized job      |
 | POST   | `/api/setup-budget-decision`               | Record an explicit decision  |
+
+<!-- markdownlint-enable MD013 -->
 
 The separate `POST /.netlify/functions/report-job` background endpoint is not
 session-authenticated and never receives cookies, a GitHub token, or a CSRF
@@ -1421,8 +1433,43 @@ private counts, internal CAS state, cost reservations, or capability hashes.
 `POST /api/setup-budget-decision` has no ordinary automatic caller. It requires
 the owner session and CSRF token plus exact policy ID, discussion revision,
 `acknowledge` or `stop`, a bounded decision ID, approved setup-operation enum
-list, and, for acknowledgement, a ceiling at or below $25. It is used only after
-the required user discussion and performs no dispatch or reservation.
+list, the displayed settled, reserved, and unknown exposure, and, for
+acknowledgement, a ceiling at or below $25. It is used only after the required
+user discussion and performs no dispatch or reservation. The exact request is:
+
+```json
+{
+  "policyId": "immutable setup policy ID",
+  "discussionRevision": 1,
+  "decisionId": "32-byte lowercase hexadecimal ID",
+  "decision": "acknowledge or stop",
+  "authorizedThroughMicrousd": 25000000,
+  "authorizedOperations": ["generate", "refresh"],
+  "observed": {
+    "settledMicrousd": 0,
+    "reservedMicrousd": 0,
+    "unknownMicrousd": 0
+  }
+}
+```
+
+For `stop`, the authorized ceiling is zero and the operation list is empty. If
+any displayed exposure component changed before the decision write, return a
+conflict with the new safe projection and require another review. A repeated
+request with the same decision ID and exact body returns the existing decision,
+which lets the browser retry after an uncertain response without duplicating the
+transition.
+
+`GET /api/analysis-availability` projects the exact top-level keys `spendMode`,
+`analysisReadiness`, and `setupBudget`. Every setup-decision response adds the
+exact top-level `status` key.
+`setupBudget` contains only the setup mode and status, USD currency, immutable
+policy ID, fixed model, settled, reserved, unknown, total, cap, discussion, and
+remaining microdollars, pricing-valid-through timestamp, and either `null` or
+the current discussion status, revision, and trigger exposure. It exposes no
+repository, job, attempt, deploy, ledger-revision, ETag, decision-history, or
+accounting-chain data. A future ordinary production mode may return a null setup
+projection.
 
 Add stable errors and status mapping for `report_state_changed`,
 `analysis_in_progress`, `analysis_preflight_required`, `analysis_unavailable`,
@@ -1619,7 +1666,7 @@ Before any paid call, verify in the deployed artifact:
   at absent, initial, maximum-width, and invalid boundaries. Prove nonmonetary
   ledger mutations change only the logical ledger revision.
 - Fill the setup ledger to each four-active-job, 16-policy, and 32-decision
-  boundary using worst-width projections. Prove the exact 193,412-byte maximum
+  boundary using worst-width projections. Prove the exact 231,812-byte maximum
   legal projection remains below the 262,144-byte outer ceiling. Repeat definitive
   zero-billed refusals and very small settlements beyond those counts and prove
   accounting-complete entries are removed, aggregate settled cost and the hash

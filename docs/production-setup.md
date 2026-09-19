@@ -182,6 +182,23 @@ least $20.
 Calibration and acceptance calls, including any authorized corrective attempt,
 share this setup budget.
 
+The authenticated dashboard loads a safe aggregate setup projection independent
+of repository selection. It shows settled cost, active reservations, unresolved
+exposure, total exposure, remaining cap, the fixed model, and the reviewed
+pricing-valid-through time. It does not expose job, attempt, repository, deploy,
+or ledger internals. Signing out clears this projection from browser memory.
+
+When the discussion gate is required, the dashboard presents the measured
+breakdown and the reservation that triggered the gate. **Continue setup through
+$25** records an acknowledgement for both Generate and Refresh under the current
+immutable policy. **Stop paid setup for this policy** requires a second inline
+confirmation and permanently stops later paid setup work under that policy.
+Neither decision starts, retries, reserves, nor dispatches analysis. If the
+projection changes before the decision is stored, the browser replaces it with
+the new projection and requires another review. An uncertain response may be
+retried with the same decision ID and exact body so the server can return the
+existing result safely.
+
 `REVIEWED_SETUP_PRICING_ATTESTATIONS` is an append-only registry of exact,
 code-reviewed setup pricing attestations. Only its last entry may admit new
 work. Each immutable policy ID hashes that exact attestation together with the
@@ -258,6 +275,8 @@ Complete this checklist against the exact proposed PR head:
       `ANTHROPIC_API_KEY` is documented only for production server use.
 - [ ] Setup limits and future production-policy decisions are clearly separate;
       no paid calibration or ordinary production authorization is implied.
+- [ ] The authenticated dashboard projects only aggregate setup exposure and
+      records a continue or confirmed-stop decision without starting analysis.
 - [ ] The explicit preflight calls only model metadata and token counting,
       persists no repository-derived identity or request hash, leaves monetary
       exposure at zero, and gates admission plus both paid worker boundaries.
@@ -273,14 +292,15 @@ Complete this checklist against the exact proposed PR head:
 
 ## Deployment dependencies and evidence
 
-The owner confirmed the actual shared balance in
+The owner confirmed the shared balance in
 [Netlify billing](https://app.netlify.com/teams/cboone/billing/general) on
 September 18, 2026: 863.7 of 1,000 credits remaining, expiring September
-23, 2026. This satisfies the initial deployment-balance check; it is dated
-evidence rather than a promise of the balance available at a later deployment.
-The account has 1,000 monthly credits with automatic top-up disabled, but the
-undocumented API counters do not establish its current spendable balance. No
-purchase, recharge, upgrade, migration, or automatic top-up change is implied.
+23, 2026. On September 19, the owner reported adding credits and authorized work
+to proceed. The exact later balance was not read or recorded. These are dated
+capacity facts rather than a promise of the balance available at deployment.
+The undocumented API counters do not establish the current spendable balance.
+No recharge, upgrade, migration, or automatic top-up setting is managed by
+Board.
 
 For the deployed Phase 2 merge, live verification passes for `/`, `/demo`, and a
 protected deep link with CSP and security headers; an anonymous no-store

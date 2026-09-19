@@ -52,6 +52,12 @@ sign-in, persist across browsers and devices, preserve the last successful
 result after a failure, and keep uncertain issues visible while withholding
 affected start recommendations.
 
+The authenticated dashboard shows aggregate setup spending against the $25 cap,
+including settled cost, active reservations, and unresolved exposure. If a new
+reservation would bring exposure to at least $20, Board pauses paid setup and
+requires an explicit continue or stop decision. Recording that decision does
+not start analysis.
+
 Production source checks use read-only GitHub App authorization. Repository
 selection makes no paid calls; **Check GitHub** gathers the approved inputs
 under bounded limits and shows source provenance. During setup verification and

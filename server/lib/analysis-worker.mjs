@@ -565,13 +565,13 @@ export function createAnalysisWorker(input) {
     if (!reservationMatches(fresh.value, reservation)) return null;
     if (clockMilliseconds(now) >= Date.parse(reservation.pricingValidThrough))
       throw new BoardError('pricing_review_required');
+    await spend.requirePreflight({ budget });
     await auth.recheckJobAuthorization({
       ownerId: fresh.value.ownerId,
       authorizationEpoch: fresh.value.authorizationEpoch,
       generation: lease.generation,
       budget,
     });
-    await spend.requirePreflight({ budget });
     return fresh;
   }
 
@@ -624,13 +624,13 @@ export function createAnalysisWorker(input) {
       throw unavailable();
     if (clockMilliseconds(now) >= Date.parse(reservation.pricingValidThrough))
       throw new BoardError('pricing_review_required');
+    await spend.requirePreflight({ budget });
     await auth.recheckJobAuthorization({
       ownerId: fresh.value.ownerId,
       authorizationEpoch: fresh.value.authorizationEpoch,
       generation: lease.generation,
       budget,
     });
-    await spend.requirePreflight({ budget });
     return fresh;
   }
 

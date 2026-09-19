@@ -94,7 +94,9 @@ archived, and not a fork.
   created. The owner confirmed installation for intended repositories.
   Production-only authentication configuration is installed; secret metadata
   confirms exactly one production context. On September 18 the owner confirmed
-  863.7 of 1,000 shared credits remaining, expiring September 23. See
+  863.7 of 1,000 shared credits remaining, expiring September 23. On September
+  19 the owner reported adding credits and authorized work to proceed; the exact
+  later balance was not recorded. See
   [production setup](../../production-setup.md). Repository linkage, reviewed
   production deployment, owner OAuth, eligible public and private source checks,
   sign-out, and the preview Edge Functions summary are now verified.
@@ -359,11 +361,20 @@ not a claim about the user's overall Anthropic account balance or prior usage.
 - Reconcile reported usage after a completed call. Retain conservative
   reservations for an interrupted call whose billed usage is unknown rather than
   assuming it was free. Bound SDK and application retries explicitly.
+- Project only aggregate settled, reserved, unresolved, total, cap, threshold,
+  and remaining setup amounts to the authenticated dashboard. Keep repository,
+  job, attempt, deployment, ledger-version, and accounting-chain details on the
+  server.
 - Notify the user when recorded plus reserved spend reaches
   $20 and discuss the
   remaining scope. No further paid call may exceed the $25
   total without new authorization. Continue fixture, implementation, and
   documentation work while a spending question is pending.
+- Bind an acknowledgement or stop decision to the displayed aggregate
+  breakdown and current discussion revision. A changed breakdown requires
+  another review. The decision transition itself never starts or retries
+  analysis, and an uncertain response is retried with the same exact decision
+  ID and body.
 - Use fixtures and mocked provider responses for routine test suites. Reserve
   paid calls for representative calibration and live acceptance checks. Effort
   controls reasoning behavior, not the hard budget; enforce token and spending

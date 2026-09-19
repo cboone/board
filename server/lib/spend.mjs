@@ -111,7 +111,9 @@ function maximumWidthLedger(value) {
     discussion.triggerExposureMicrousd = MAXIMUM_WIDTH_INTEGER;
     for (const decision of discussion.decisions) {
       decision.triggerRevision = MAXIMUM_WIDTH_INTEGER;
-      decision.observedExposureMicrousd = MAXIMUM_WIDTH_INTEGER;
+      decision.observed.settledMicrousd = MAXIMUM_WIDTH_INTEGER;
+      decision.observed.reservedMicrousd = MAXIMUM_WIDTH_INTEGER;
+      decision.observed.unknownMicrousd = MAXIMUM_WIDTH_INTEGER;
       decision.authorizedThroughMicrousd = MAXIMUM_WIDTH_INTEGER;
       decision.decision = 'acknowledged';
     }
@@ -402,25 +404,37 @@ function projectDiscussion(value, policyId) {
     !['required', 'acknowledged', 'stopped'].includes(value.status) ||
     !positive(value.currentRevision) ||
     !integer(value.triggerExposureMicrousd) ||
+    value.triggerExposureMicrousd > SETUP_SPEND_LIMITS.capMicrousd ||
     !Array.isArray(value.decisions) ||
     value.decisions.length > SETUP_SPEND_LIMITS.maxDecisionsPerPolicy
   )
     fail();
   iso(value.triggeredAt);
-  const decisions = value.decisions.map((decision) => {
+  const decisions = value.decisions.map((decision, index) => {
     exact(decision, [
       'triggerRevision',
       'decidedAt',
-      'observedExposureMicrousd',
+      'observed',
       'decisionId',
       'decision',
       'authorizedThroughMicrousd',
       'authorizedOperations',
     ]);
+    exact(decision.observed, [
+      'settledMicrousd',
+      'reservedMicrousd',
+      'unknownMicrousd',
+    ]);
+    const observedExposureMicrousd =
+      decision.observed.settledMicrousd +
+      decision.observed.reservedMicrousd +
+      decision.observed.unknownMicrousd;
     if (
-      !positive(decision.triggerRevision) ||
-      decision.triggerRevision > value.currentRevision ||
-      !integer(decision.observedExposureMicrousd) ||
+      decision.triggerRevision !== index + 1 ||
+      !integer(decision.observed.settledMicrousd) ||
+      !integer(decision.observed.reservedMicrousd) ||
+      !integer(decision.observed.unknownMicrousd) ||
+      !Number.isSafeInteger(observedExposureMicrousd) ||
       !HEX_64.test(decision.decisionId) ||
       !DECISIONS.has(decision.decision) ||
       !integer(decision.authorizedThroughMicrousd) ||
@@ -428,19 +442,41 @@ function projectDiscussion(value, policyId) {
       !Array.isArray(decision.authorizedOperations) ||
       new Set(decision.authorizedOperations).size !==
         decision.authorizedOperations.length ||
-      decision.authorizedOperations.some((item) => !OPERATIONS.has(item))
+      decision.authorizedOperations.some((item) => !OPERATIONS.has(item)) ||
+      (decision.decision === 'acknowledged' &&
+        decision.authorizedThroughMicrousd < observedExposureMicrousd) ||
+      (decision.decision === 'stopped' &&
+        (decision.authorizedThroughMicrousd !== 0 ||
+          decision.authorizedOperations.length !== 0))
     )
       fail();
     iso(decision.decidedAt);
     return clone(decision);
   });
   if (
+    decisions.length !==
+      (value.status === 'required'
+        ? value.currentRevision - 1
+        : value.currentRevision) ||
+    decisions.some(
+      (decision, index) =>
+        decision.decision === 'stopped' &&
+        (value.status !== 'stopped' || index !== decisions.length - 1),
+    ) ||
     decisions.some(
       (decision, index) =>
         decisions.findIndex(
           (item) => item.decisionId === decision.decisionId,
         ) !== index,
     )
+  )
+    fail();
+  const current = decisions.findLast(
+    (decision) => decision.triggerRevision === value.currentRevision,
+  );
+  if (
+    (value.status === 'required' && current !== undefined) ||
+    (value.status !== 'required' && current?.decision !== value.status)
   )
     fail();
   if (!POLICY_ID.test(policyId)) fail();
@@ -508,6 +544,10 @@ export function projectSpendLedger(value) {
       return [id, projectDiscussion(discussion, id)];
     }),
   );
+  const decisionIds = Object.values(discussions).flatMap(({ decisions }) =>
+    decisions.map(({ decisionId }) => decisionId),
+  );
+  if (new Set(decisionIds).size !== decisionIds.length) fail();
   const projected = {
     ...clone(value),
     policies,
@@ -648,20 +688,37 @@ export function activateSetupPolicy(
   return projectSpendLedger(next);
 }
 
-export function exposureMicrousd(ledger) {
-  let exposure = ledger.settledMicrousd;
+export function spendBreakdownMicrousd(ledger) {
+  let reservedMicrousd = 0;
+  let unknownMicrousd = 0;
   for (const entry of Object.values(ledger.active)) {
     for (const attempt of entry.attempts) {
-      const amount =
-        attempt.state === 'reserved'
-          ? attempt.ceilingMicrousd
-          : attempt.state === 'unknown'
-            ? attempt.unknownExposureMicrousd
-            : 0;
-      exposure = checkedAdd(exposure, amount);
+      if (attempt.state === 'reserved')
+        reservedMicrousd = checkedAdd(
+          reservedMicrousd,
+          attempt.ceilingMicrousd,
+        );
+      else if (attempt.state === 'unknown')
+        unknownMicrousd = checkedAdd(
+          unknownMicrousd,
+          attempt.unknownExposureMicrousd,
+        );
     }
   }
-  return exposure;
+  return Object.freeze({
+    settledMicrousd: ledger.settledMicrousd,
+    reservedMicrousd,
+    unknownMicrousd,
+  });
+}
+
+export function exposureMicrousd(ledger) {
+  const observed = spendBreakdownMicrousd(ledger);
+  return checkedAdd(
+    observed.settledMicrousd,
+    observed.reservedMicrousd,
+    observed.unknownMicrousd,
+  );
 }
 
 function accountingTransition(ledger, jobId, transition, mutate) {
@@ -745,8 +802,10 @@ export function reserveSetupJob(
   if (Object.keys(ledger.active).length >= SETUP_SPEND_LIMITS.maxActiveJobs)
     return { status: 'capacity', ledger };
   const policyId = ledger.activePolicyId;
-  if (ledger.discussions[policyId]?.status === 'stopped')
-    return { status: 'stopped', ledger };
+  const discussion = ledger.discussions[policyId];
+  if (discussion?.status === 'stopped') return { status: 'stopped', ledger };
+  if (discussion?.status === 'required')
+    return { status: 'discussion-required', ledger };
   const proposed = checkedAdd(
     ...Array.from(
       { length: policy.maximumAttempts },
@@ -756,31 +815,29 @@ export function reserveSetupJob(
   const proposedExposure = checkedAdd(exposureMicrousd(ledger), proposed);
   if (proposedExposure > SETUP_SPEND_LIMITS.capMicrousd)
     return { status: 'budget-exhausted', ledger };
-  if (proposedExposure >= SETUP_SPEND_LIMITS.discussionMicrousd) {
-    const decision = currentDecision(ledger, policyId);
-    if (
-      !decision ||
-      decision.decision !== 'acknowledged' ||
-      decision.authorizedThroughMicrousd < proposedExposure ||
-      !decision.authorizedOperations.includes(operation)
-    ) {
-      const next = clone(ledger);
-      const prior = next.discussions[policyId];
-      if (prior?.status === 'stopped') return { status: 'stopped', ledger };
-      next.revision = checkedAdd(next.revision, 1);
-      next.discussions[policyId] = {
-        status: 'required',
-        currentRevision: (prior?.currentRevision ?? 0) + 1,
-        triggeredAt: iso(at),
-        triggerExposureMicrousd: proposedExposure,
-        decisions: prior?.decisions ?? [],
-      };
-      next.updatedAt = at;
-      return {
-        status: 'discussion-required',
-        ledger: projectSpendLedger(next),
-      };
-    }
+  const decision = currentDecision(ledger, policyId);
+  if (
+    (proposedExposure >= SETUP_SPEND_LIMITS.discussionMicrousd && !decision) ||
+    (decision &&
+      (decision.authorizedThroughMicrousd < proposedExposure ||
+        !decision.authorizedOperations.includes(operation)))
+  ) {
+    const next = clone(ledger);
+    const prior = next.discussions[policyId];
+    if (prior?.status === 'stopped') return { status: 'stopped', ledger };
+    next.revision = checkedAdd(next.revision, 1);
+    next.discussions[policyId] = {
+      status: 'required',
+      currentRevision: (prior?.currentRevision ?? 0) + 1,
+      triggeredAt: iso(at),
+      triggerExposureMicrousd: proposedExposure,
+      decisions: prior?.decisions ?? [],
+    };
+    next.updatedAt = at;
+    return {
+      status: 'discussion-required',
+      ledger: projectSpendLedger(next),
+    };
   }
   const createdAt = reservationAt;
   return {
@@ -968,7 +1025,7 @@ export function decideSetupDiscussion(
   target.decisions.push({
     triggerRevision,
     decidedAt: iso(at),
-    observedExposureMicrousd,
+    observed: spendBreakdownMicrousd(ledger),
     decisionId,
     decision,
     authorizedThroughMicrousd,

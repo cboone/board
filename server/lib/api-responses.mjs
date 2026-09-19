@@ -207,6 +207,131 @@ function analysisReadiness(value) {
   return { ready: value.ready, reason: value.reason };
 }
 
+function setupBudget(value) {
+  exact(value, [
+    'mode',
+    'status',
+    'currency',
+    'policyId',
+    'model',
+    'settledMicrousd',
+    'reservedMicrousd',
+    'unknownMicrousd',
+    'exposureMicrousd',
+    'capMicrousd',
+    'discussionMicrousd',
+    'remainingMicrousd',
+    'pricingValidThrough',
+    'discussion',
+  ]);
+  const statuses = new Set([
+    'available',
+    'budget-exhausted',
+    'discussion-required',
+    'pricing-expired',
+    'pricing-review-required',
+    'stopped',
+  ]);
+  const amounts = [
+    value.settledMicrousd,
+    value.reservedMicrousd,
+    value.unknownMicrousd,
+    value.exposureMicrousd,
+    value.capMicrousd,
+    value.discussionMicrousd,
+    value.remainingMicrousd,
+  ];
+  const computedExposure =
+    value.settledMicrousd + value.reservedMicrousd + value.unknownMicrousd;
+  if (
+    value.mode !== 'setup' ||
+    !statuses.has(value.status) ||
+    value.currency !== 'USD' ||
+    !/^[a-z0-9][a-z0-9._-]{0,127}$/u.test(value.policyId) ||
+    value.model !== 'claude-opus-5' ||
+    amounts.some((amount) => !Number.isSafeInteger(amount) || amount < 0) ||
+    !Number.isSafeInteger(computedExposure) ||
+    computedExposure !== value.exposureMicrousd ||
+    value.capMicrousd !== 25_000_000 ||
+    value.discussionMicrousd !== 20_000_000 ||
+    value.remainingMicrousd !==
+      Math.max(0, value.capMicrousd - value.exposureMicrousd)
+  )
+    fail();
+  iso(value.pricingValidThrough);
+  let projectedDiscussion = null;
+  if (value.discussion !== null) {
+    exact(value.discussion, [
+      'status',
+      'currentRevision',
+      'triggerExposureMicrousd',
+    ]);
+    if (
+      !['required', 'acknowledged', 'stopped'].includes(
+        value.discussion.status,
+      ) ||
+      !Number.isSafeInteger(value.discussion.currentRevision) ||
+      value.discussion.currentRevision < 1 ||
+      !Number.isSafeInteger(value.discussion.triggerExposureMicrousd) ||
+      value.discussion.triggerExposureMicrousd < 0 ||
+      value.discussion.triggerExposureMicrousd > value.capMicrousd ||
+      (value.status === 'discussion-required' &&
+        value.discussion.status !== 'required') ||
+      (value.status === 'stopped' && value.discussion.status !== 'stopped')
+    )
+      fail();
+    projectedDiscussion = {
+      status: value.discussion.status,
+      currentRevision: value.discussion.currentRevision,
+      triggerExposureMicrousd: value.discussion.triggerExposureMicrousd,
+    };
+  } else if (['discussion-required', 'stopped'].includes(value.status)) fail();
+  return {
+    mode: value.mode,
+    status: value.status,
+    currency: value.currency,
+    policyId: value.policyId,
+    model: value.model,
+    settledMicrousd: value.settledMicrousd,
+    reservedMicrousd: value.reservedMicrousd,
+    unknownMicrousd: value.unknownMicrousd,
+    exposureMicrousd: value.exposureMicrousd,
+    capMicrousd: value.capMicrousd,
+    discussionMicrousd: value.discussionMicrousd,
+    remainingMicrousd: value.remainingMicrousd,
+    pricingValidThrough: value.pricingValidThrough,
+    discussion: projectedDiscussion,
+  };
+}
+
+function setupBudgetSpendMode(value, budget) {
+  const expected =
+    budget.status === 'available'
+      ? { available: true, mode: 'setup', reason: null }
+      : budget.status === 'stopped'
+        ? {
+            available: false,
+            mode: 'disabled',
+            reason: 'analysis_unavailable',
+          }
+        : {
+            available: false,
+            mode: 'setup',
+            reason:
+              budget.status === 'discussion-required'
+                ? 'budget_discussion_required'
+                : budget.status === 'budget-exhausted'
+                  ? 'budget_exhausted'
+                  : 'pricing_review_required',
+          };
+  if (
+    value.available !== expected.available ||
+    value.mode !== expected.mode ||
+    value.reason !== expected.reason
+  )
+    fail();
+}
+
 function repositoryStateMetadata(value, projectedRepository) {
   const state = projectRepositoryState({
     schemaVersion: 1,
@@ -391,10 +516,14 @@ export function projectDirectReportResponse(value) {
 }
 
 export function projectAnalysisAvailabilityResponse(value) {
-  exact(value, ['spendMode', 'analysisReadiness']);
+  exact(value, ['spendMode', 'analysisReadiness', 'setupBudget']);
+  const projectedSpendMode = spendMode(value.spendMode);
+  const projectedSetupBudget = setupBudget(value.setupBudget);
+  setupBudgetSpendMode(projectedSpendMode, projectedSetupBudget);
   return {
-    spendMode: spendMode(value.spendMode),
+    spendMode: projectedSpendMode,
     analysisReadiness: analysisReadiness(value.analysisReadiness),
+    setupBudget: projectedSetupBudget,
   };
 }
 
@@ -471,9 +600,17 @@ export function projectJobResponse(value) {
 }
 
 export function projectSetupDecisionResponse(value) {
-  exact(value, ['status', 'spendMode']);
+  exact(value, ['status', 'spendMode', 'analysisReadiness', 'setupBudget']);
   if (!['updated', 'existing', 'conflict'].includes(value.status)) fail();
-  return { status: value.status, spendMode: spendMode(value.spendMode) };
+  const projectedSpendMode = spendMode(value.spendMode);
+  const projectedSetupBudget = setupBudget(value.setupBudget);
+  setupBudgetSpendMode(projectedSpendMode, projectedSetupBudget);
+  return {
+    status: value.status,
+    spendMode: projectedSpendMode,
+    analysisReadiness: analysisReadiness(value.analysisReadiness),
+    setupBudget: projectedSetupBudget,
+  };
 }
 
 export function serializeApiResponse(value) {

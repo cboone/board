@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import {
+  analysisAvailability,
   deferred,
   ignoreAbortForRace,
   jobId,
@@ -212,6 +213,28 @@ test('clears protected report data and withholds a late check after sign-out', a
   ).toBe('s'.repeat(43));
 });
 
+test('clears the dashboard setup spending projection on sign-out', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  await page.goto('/');
+  await expect(
+    page.getByRole('heading', { name: 'Setup analysis spending' }),
+  ).toBeVisible();
+  expect(
+    flow.calls.some(
+      ({ method, path }) =>
+        method === 'GET' && path === '/api/analysis-availability',
+    ),
+  ).toBe(true);
+
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.getByText('Signed out of Board.')).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Setup analysis spending' }),
+  ).toHaveCount(0);
+});
+
 test('withholds late repository and report catalog responses after sign-out', async ({
   page,
 }) => {
@@ -297,10 +320,7 @@ test('withholds a late analysis availability response after sign-out', async ({
     await pending.promise;
     return {
       status: 200,
-      data: {
-        spendMode: { available: true, mode: 'setup', reason: null },
-        analysisReadiness: { ready: true, reason: null },
-      },
+      data: analysisAvailability(),
     };
   };
   await page.goto('/repositories/202');

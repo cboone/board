@@ -26,3 +26,6 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Owner-only Generate and Refresh actions backed by fixed Opus 5 analysis,
   durable current and previous reports, authenticated cross-device access,
   source provenance, report comparisons, and persistent job and spending guards.
+- Deployment-bound no-spend analysis verification plus an authenticated setup
+  spending projection and explicit continue or confirmed-stop controls at the
+  $20 discussion gate.

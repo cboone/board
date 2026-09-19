@@ -441,6 +441,7 @@ export function createReportOperations({
       analysisReadiness: projectAnalysisReadiness(
         await preflight.read({ budget: input.budget }),
       ),
+      setupBudget: spend,
     };
   }
 
@@ -575,16 +576,26 @@ export function createReportOperations({
     operationInput(input);
     if (!input.decision || typeof input.decision !== 'object')
       throw new BoardError('invalid_request');
+    const at = clockTimestamp(now);
+    await ensureSetupSpendLedger({
+      ...spendContext(input.budget),
+      at,
+    });
     const result = await decide({
       ...spendContext(input.budget),
       ...input.decision,
-      at: clockTimestamp(now),
+      at,
     });
     if (!result || !['updated', 'existing', 'conflict'].includes(result.status))
       throw unavailable();
+    const analysisReadiness = projectAnalysisReadiness(
+      await preflight.read({ budget: input.budget }),
+    );
     return {
       status: result.status,
       spendMode: projectSpendMode(result.spend),
+      analysisReadiness,
+      setupBudget: result.spend,
     };
   }
 

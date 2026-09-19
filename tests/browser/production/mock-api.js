@@ -280,6 +280,44 @@ export function safePreflight(overrides = {}) {
   };
 }
 
+export function setupBudget(overrides = {}) {
+  const budget = {
+    mode: 'setup',
+    status: 'available',
+    currency: 'USD',
+    policyId: 'setup-policy-v1',
+    model: 'claude-opus-5',
+    settledMicrousd: 0,
+    reservedMicrousd: 0,
+    unknownMicrousd: 0,
+    exposureMicrousd: 0,
+    capMicrousd: 25_000_000,
+    discussionMicrousd: 20_000_000,
+    remainingMicrousd: 25_000_000,
+    pricingValidThrough: '2026-09-26T05:35:41.000Z',
+    discussion: null,
+    ...overrides,
+  };
+  if (!Object.hasOwn(overrides, 'exposureMicrousd'))
+    budget.exposureMicrousd =
+      budget.settledMicrousd + budget.reservedMicrousd + budget.unknownMicrousd;
+  if (!Object.hasOwn(overrides, 'remainingMicrousd'))
+    budget.remainingMicrousd = Math.max(
+      0,
+      budget.capMicrousd - budget.exposureMicrousd,
+    );
+  return budget;
+}
+
+export function analysisAvailability(overrides = {}) {
+  return {
+    spendMode: { available: true, mode: 'setup', reason: null },
+    analysisReadiness: { ready: true, reason: null },
+    setupBudget: setupBudget(),
+    ...overrides,
+  };
+}
+
 export function deferred() {
   let resolve;
   const promise = new Promise((complete) => {
@@ -314,6 +352,7 @@ export async function mockApi(page) {
     check: null,
     admission: null,
     job: null,
+    decision: null,
     logout: null,
   };
   await page.route('**/api/**', async (route) => {
@@ -356,9 +395,16 @@ export async function mockApi(page) {
         ? await flow.availability()
         : {
             status: 200,
+            data: analysisAvailability(),
+          };
+    } else if (path === '/api/setup-budget-decision') {
+      response = flow.decision
+        ? await flow.decision(call.body)
+        : {
+            status: 200,
             data: {
-              spendMode: { available: true, mode: 'setup', reason: null },
-              analysisReadiness: { ready: true, reason: null },
+              status: 'updated',
+              ...analysisAvailability(),
             },
           };
     } else if (/^\/api\/repositories\/[1-9]\d*\/report$/u.test(path)) {

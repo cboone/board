@@ -1042,6 +1042,127 @@ function validAnalysisReadiness(value) {
   );
 }
 
+const setupBudgetStatuses = new Set([
+  'available',
+  'discussion-required',
+  'budget-exhausted',
+  'stopped',
+  'pricing-review-required',
+  'pricing-expired',
+]);
+const setupDiscussionStatuses = new Set([
+  'required',
+  'acknowledged',
+  'stopped',
+]);
+
+function validSetupBudget(value) {
+  if (
+    !strictExact(value, [
+      'mode',
+      'status',
+      'currency',
+      'policyId',
+      'model',
+      'settledMicrousd',
+      'reservedMicrousd',
+      'unknownMicrousd',
+      'exposureMicrousd',
+      'capMicrousd',
+      'discussionMicrousd',
+      'remainingMicrousd',
+      'pricingValidThrough',
+      'discussion',
+    ]) ||
+    value.mode !== 'setup' ||
+    !setupBudgetStatuses.has(value.status) ||
+    value.currency !== 'USD' ||
+    !strictText(value.policyId, 128) ||
+    !/^[a-z0-9][a-z0-9._-]{0,127}$/u.test(value.policyId) ||
+    value.model !== 'claude-opus-5' ||
+    !isCount(value.settledMicrousd) ||
+    !isCount(value.reservedMicrousd) ||
+    !isCount(value.unknownMicrousd) ||
+    !isCount(value.exposureMicrousd) ||
+    !isCount(value.capMicrousd) ||
+    !isCount(value.discussionMicrousd) ||
+    !isCount(value.remainingMicrousd) ||
+    value.capMicrousd !== 25_000_000 ||
+    value.discussionMicrousd !== 20_000_000 ||
+    value.discussionMicrousd > value.capMicrousd ||
+    !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/u.test(
+      value.pricingValidThrough,
+    ) ||
+    !timestamp(value.pricingValidThrough)
+  )
+    return false;
+  const measured =
+    value.settledMicrousd + value.reservedMicrousd + value.unknownMicrousd;
+  if (
+    !Number.isSafeInteger(measured) ||
+    value.exposureMicrousd !== measured ||
+    value.remainingMicrousd !==
+      Math.max(0, value.capMicrousd - value.exposureMicrousd)
+  )
+    return false;
+  if (value.discussion !== null) {
+    if (
+      !strictExact(value.discussion, [
+        'status',
+        'currentRevision',
+        'triggerExposureMicrousd',
+      ]) ||
+      !setupDiscussionStatuses.has(value.discussion.status) ||
+      !isId(value.discussion.currentRevision) ||
+      !isCount(value.discussion.triggerExposureMicrousd) ||
+      value.discussion.triggerExposureMicrousd > value.capMicrousd
+    )
+      return false;
+  }
+  if (value.status === 'discussion-required')
+    return value.discussion?.status === 'required';
+  if (value.status === 'stopped') return value.discussion?.status === 'stopped';
+  if (['available', 'budget-exhausted'].includes(value.status))
+    return !['required', 'stopped'].includes(value.discussion?.status);
+  return true;
+}
+
+function setupBudgetMatchesSpendMode(setupBudget, spendMode) {
+  const expected = {
+    available: { available: true, mode: 'setup', reason: null },
+    'discussion-required': {
+      available: false,
+      mode: 'setup',
+      reason: 'budget_discussion_required',
+    },
+    'budget-exhausted': {
+      available: false,
+      mode: 'setup',
+      reason: 'budget_exhausted',
+    },
+    stopped: {
+      available: false,
+      mode: 'disabled',
+      reason: 'analysis_unavailable',
+    },
+    'pricing-review-required': {
+      available: false,
+      mode: 'setup',
+      reason: 'pricing_review_required',
+    },
+    'pricing-expired': {
+      available: false,
+      mode: 'setup',
+      reason: 'pricing_review_required',
+    },
+  }[setupBudget.status];
+  return (
+    spendMode.available === expected.available &&
+    spendMode.mode === expected.mode &&
+    spendMode.reason === expected.reason
+  );
+}
+
 function validAnalysisPreflight(value) {
   return (
     strictExact(value, [
@@ -1084,15 +1205,47 @@ function validAnalysisPreflight(value) {
 
 function parseAnalysisAvailability(value) {
   if (
-    !strictExact(value, ['spendMode', 'analysisReadiness']) ||
+    !strictExact(value, ['spendMode', 'analysisReadiness', 'setupBudget']) ||
     !validSpendMode(value.spendMode) ||
-    !validAnalysisReadiness(value.analysisReadiness)
+    !validAnalysisReadiness(value.analysisReadiness) ||
+    !validSetupBudget(value.setupBudget) ||
+    !setupBudgetMatchesSpendMode(value.setupBudget, value.spendMode)
   )
     throw new ApiError('invalid_response');
   return {
     spendMode: { ...value.spendMode },
     analysisReadiness: { ...value.analysisReadiness },
+    setupBudget: structuredClone(value.setupBudget),
   };
+}
+
+function parseSetupDecision(value) {
+  if (
+    !strictExact(value, [
+      'status',
+      'spendMode',
+      'analysisReadiness',
+      'setupBudget',
+    ]) ||
+    !['updated', 'existing', 'conflict'].includes(value.status)
+  )
+    throw new ApiError('invalid_response');
+  return {
+    status: value.status,
+    ...parseAnalysisAvailability({
+      spendMode: value.spendMode,
+      analysisReadiness: value.analysisReadiness,
+      setupBudget: value.setupBudget,
+    }),
+  };
+}
+
+function decisionId() {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join(
+    '',
+  );
 }
 
 function parseAnalysisPreflight(value) {
@@ -1223,6 +1376,15 @@ function formatDate(value) {
   }).format(new Date(value));
 }
 
+function formatMicrousd(value) {
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 6,
+  }).format(value / 1_000_000);
+}
+
 function comparisonDescription(entry) {
   const subject = entry.issueNumber
     ? `issue #${entry.issueNumber}`
@@ -1272,8 +1434,10 @@ export function mountProduction(mount) {
   let checkingSession = false;
   let pendingFocus = null;
   let disposeReport = () => {};
+  let analysisAvailabilitySequence = 0;
   const controllers = new Set();
   const viewControllers = new Set();
+  const pendingAnalysisAvailability = new Set();
   const state = {
     authenticated: false,
     user: null,
@@ -1293,6 +1457,18 @@ export function mountProduction(mount) {
       ready: false,
       reason: 'analysis_preflight_required',
     },
+    dashboardSpendMode: null,
+    setupBudget: null,
+    analysisAvailabilityError: null,
+    analysisAvailabilityPending: false,
+    analysisAvailabilityDeferred: false,
+    sourceCheckDeferred: false,
+    setupDecisionPending: false,
+    setupDecisionError: null,
+    setupDecisionRetry: null,
+    setupDecisionNotice: '',
+    setupDecisionConflict: false,
+    confirmSetupStop: false,
     preflight: null,
     preflightError: null,
     notice: '',
@@ -1305,6 +1481,26 @@ export function mountProduction(mount) {
     current(stamp.generation) &&
     stamp.view === viewGeneration &&
     state.selected?.id === repositoryId;
+
+  function beginAnalysisAvailabilityRequest() {
+    analysisAvailabilitySequence += 1;
+    pendingAnalysisAvailability.add(analysisAvailabilitySequence);
+    state.analysisAvailabilityPending = true;
+    return analysisAvailabilitySequence;
+  }
+
+  function finishAnalysisAvailabilityRequest(sequence) {
+    pendingAnalysisAvailability.delete(sequence);
+    state.analysisAvailabilityPending = pendingAnalysisAvailability.size > 0;
+    if (!state.analysisAvailabilityPending && !state.setupDecisionPending)
+      window.queueMicrotask(resumeIdleSourceCheck);
+    return sequence === analysisAvailabilitySequence;
+  }
+
+  function beginAnalysisAvailabilityUpdate() {
+    analysisAvailabilitySequence += 1;
+    return analysisAvailabilitySequence;
+  }
 
   function disposeRenderedReport() {
     disposeReport();
@@ -1331,11 +1527,15 @@ export function mountProduction(mount) {
     state.preflight = null;
     state.preflightError = null;
     state.admissionRetry = null;
+    state.analysisAvailabilityDeferred = false;
+    state.sourceCheckDeferred = false;
     pendingFocus = null;
   }
 
   function clearProtected() {
     generation += 1;
+    analysisAvailabilitySequence += 1;
+    pendingAnalysisAvailability.clear();
     clearView();
     for (const controller of controllers) controller.abort();
     controllers.clear();
@@ -1356,6 +1556,17 @@ export function mountProduction(mount) {
       ready: false,
       reason: 'analysis_preflight_required',
     };
+    state.dashboardSpendMode = null;
+    state.setupBudget = null;
+    state.analysisAvailabilityError = null;
+    state.analysisAvailabilityPending = false;
+    state.analysisAvailabilityDeferred = false;
+    state.setupDecisionPending = false;
+    state.setupDecisionError = null;
+    state.setupDecisionRetry = null;
+    state.setupDecisionNotice = '';
+    state.setupDecisionConflict = false;
+    state.confirmSetupStop = false;
     state.notice = '';
     state.signingOut = false;
     document.title = 'Board';
@@ -1529,15 +1740,20 @@ export function mountProduction(mount) {
   }
 
   async function loadDashboard() {
+    if (state.setupDecisionPending || state.analysisAvailabilityPending) return;
     const stamp = generation;
     state.pending = 'repositories';
     state.error = null;
     state.listError = null;
     paint();
-    const [repositories, catalog] = await Promise.allSettled([
+    const availabilitySequence = beginAnalysisAvailabilityRequest();
+    const [repositories, catalog, availability] = await Promise.allSettled([
       request('GET', '/api/repositories'),
       loadCatalog(),
+      readAnalysisAvailability(),
     ]);
+    const availabilityIsCurrent =
+      finishAnalysisAvailabilityRequest(availabilitySequence);
     if (!current(stamp)) return;
     if (repositories.status === 'fulfilled') {
       try {
@@ -1554,6 +1770,21 @@ export function mountProduction(mount) {
     else if (!(catalog.reason instanceof StaleRequest)) {
       state.listError = catalog.reason;
       state.savedBoards = [];
+    }
+    if (availabilityIsCurrent && availability.status === 'fulfilled') {
+      applyAnalysisAvailability(availability.value);
+      state.analysisAvailabilityError = null;
+    } else if (
+      availabilityIsCurrent &&
+      !(availability.reason instanceof StaleRequest)
+    ) {
+      state.dashboardSpendMode = closedSpendMode(availability.reason);
+      state.setupBudget = null;
+      state.analysisReadiness = {
+        ready: false,
+        reason: 'analysis_preflight_required',
+      };
+      state.analysisAvailabilityError = availability.reason;
     }
     state.pending = null;
     const id = selectedId();
@@ -1613,36 +1844,222 @@ export function mountProduction(mount) {
     return { available: false, mode: 'disabled', reason };
   }
 
-  async function readAnalysisAvailability() {
+  async function readAnalysisAvailability(scope = 'global') {
     return parseAnalysisAvailability(
-      await request('GET', '/api/analysis-availability', { scope: 'view' }),
+      await request('GET', '/api/analysis-availability', { scope }),
     );
   }
 
+  function applyAnalysisAvailability(availability) {
+    state.dashboardSpendMode = { ...availability.spendMode };
+    state.analysisReadiness = { ...availability.analysisReadiness };
+    state.setupBudget = structuredClone(availability.setupBudget);
+    state.analysisAvailabilityError = null;
+    state.confirmSetupStop = false;
+    if (
+      availability.spendMode.reason !== 'budget_discussion_required' &&
+      state.jobError?.code === 'budget_discussion_required'
+    )
+      state.jobError = null;
+    if (state.board && state.board.spendMode.reason !== 'source_unavailable')
+      state.board = {
+        ...state.board,
+        spendMode: { ...availability.spendMode },
+      };
+  }
+
   async function refreshAnalysisAvailability(stamp, repositoryId) {
+    if (state.setupDecisionPending) {
+      state.analysisAvailabilityDeferred = true;
+      return true;
+    }
     let availability;
+    let availabilityError = null;
+    const sequence = beginAnalysisAvailabilityRequest();
+    paint();
     try {
-      availability = await readAnalysisAvailability();
+      availability = await readAnalysisAvailability('view');
     } catch (error) {
-      if (error instanceof StaleRequest) throw error;
+      availabilityError = error;
+    }
+    const availabilityIsCurrent = finishAnalysisAvailabilityRequest(sequence);
+    if (availabilityError instanceof StaleRequest) throw availabilityError;
+    if (!currentView(stamp, repositoryId)) return false;
+    if (!availabilityIsCurrent) return true;
+    if (availabilityError !== null) {
+      state.analysisAvailabilityError = availabilityError;
+      state.setupBudget = null;
+      state.dashboardSpendMode = closedSpendMode(availabilityError);
       availability = {
-        spendMode: closedSpendMode(error),
+        spendMode: state.dashboardSpendMode,
         analysisReadiness: {
           ready: false,
           reason: 'analysis_preflight_required',
         },
       };
     }
-    if (!currentView(stamp, repositoryId)) return false;
     if (!state.board) throw new ApiError('invalid_response');
+    if (availability.setupBudget) applyAnalysisAvailability(availability);
+    else {
+      state.analysisReadiness = availability.analysisReadiness;
+    }
     state.board = { ...state.board, spendMode: availability.spendMode };
-    state.analysisReadiness = availability.analysisReadiness;
     return true;
+  }
+
+  async function resumeDeferredAnalysisAvailability() {
+    if (!state.analysisAvailabilityDeferred) return;
+    state.analysisAvailabilityDeferred = false;
+    if (!state.selected || !state.board) return;
+    const repositoryId = state.selected.id;
+    const stamp = { generation, view: viewGeneration };
+    try {
+      if (await refreshAnalysisAvailability(stamp, repositoryId)) paint();
+    } catch (error) {
+      if (!(error instanceof StaleRequest)) throw error;
+    }
+  }
+
+  function setupDecisionBody(decision) {
+    const budget = state.setupBudget;
+    if (
+      budget?.status !== 'discussion-required' ||
+      budget.discussion?.status !== 'required'
+    )
+      return null;
+    return {
+      policyId: budget.policyId,
+      discussionRevision: budget.discussion.currentRevision,
+      decisionId: decisionId(),
+      decision,
+      authorizedThroughMicrousd:
+        decision === 'acknowledge' ? budget.capMicrousd : 0,
+      authorizedOperations:
+        decision === 'acknowledge' ? ['generate', 'refresh'] : [],
+      observed: {
+        settledMicrousd: budget.settledMicrousd,
+        reservedMicrousd: budget.reservedMicrousd,
+        unknownMicrousd: budget.unknownMicrousd,
+      },
+    };
+  }
+
+  async function submitSetupDecision(decision, retryBody = null) {
+    if (
+      state.setupDecisionPending ||
+      state.analysisAvailabilityPending ||
+      state.pending !== null ||
+      state.freshness.status === 'checking'
+    )
+      return;
+    const body = retryBody ?? setupDecisionBody(decision);
+    if (!body) return;
+    const stamp = generation;
+    beginAnalysisAvailabilityUpdate();
+    state.setupDecisionPending = true;
+    state.setupDecisionError = null;
+    state.setupDecisionNotice = '';
+    state.setupDecisionConflict = false;
+    paint();
+    try {
+      const result = parseSetupDecision(
+        await request('POST', '/api/setup-budget-decision', { body }),
+      );
+      if (!current(stamp)) return;
+      beginAnalysisAvailabilityUpdate();
+      applyAnalysisAvailability(result);
+      state.setupDecisionPending = false;
+      state.setupDecisionRetry = null;
+      state.confirmSetupStop = false;
+      if (result.status === 'conflict') {
+        state.setupDecisionConflict = true;
+        state.setupDecisionNotice =
+          'Setup spending changed while the decision was being recorded. Review the current measured exposure before deciding again. No analysis was started.';
+      } else {
+        state.setupDecisionNotice =
+          result.status === 'existing'
+            ? 'The existing setup budget decision was confirmed. No analysis was started.'
+            : 'The setup budget decision was recorded. No analysis was started.';
+      }
+      pendingFocus = 'setup-budget-title';
+      paint();
+      await resumeDeferredAnalysisAvailability();
+      resumeIdleSourceCheck();
+    } catch (error) {
+      if (!current(stamp) || error instanceof StaleRequest) return;
+      const safeError =
+        error instanceof ApiError ? error : new ApiError('internal_error');
+      state.setupDecisionPending = false;
+      state.setupDecisionError = safeError;
+      state.setupDecisionRetry = structuredClone(body);
+      pendingFocus = 'setup-budget-title';
+      paint();
+      await resumeDeferredAnalysisAvailability();
+      resumeIdleSourceCheck();
+    }
+  }
+
+  async function reloadAnalysisAvailability() {
+    if (
+      state.setupDecisionPending ||
+      state.analysisAvailabilityPending ||
+      state.pending !== null ||
+      state.freshness.status === 'checking'
+    )
+      return;
+    const stamp = generation;
+    state.setupDecisionPending = true;
+    state.setupDecisionError = null;
+    paint();
+    const availabilitySequence = beginAnalysisAvailabilityRequest();
+    try {
+      const availability = await readAnalysisAvailability();
+      const availabilityIsCurrent =
+        finishAnalysisAvailabilityRequest(availabilitySequence);
+      if (!current(stamp)) return;
+      if (!availabilityIsCurrent) {
+        state.setupDecisionPending = false;
+        paint();
+        await resumeDeferredAnalysisAvailability();
+        resumeIdleSourceCheck();
+        return;
+      }
+      applyAnalysisAvailability(availability);
+      state.setupDecisionPending = false;
+      state.setupDecisionRetry = null;
+      state.setupDecisionConflict = false;
+      state.confirmSetupStop = false;
+      state.setupDecisionNotice =
+        'Setup spending was reloaded. No analysis was started.';
+      pendingFocus = 'setup-budget-title';
+      paint();
+      await resumeDeferredAnalysisAvailability();
+      resumeIdleSourceCheck();
+    } catch (error) {
+      const availabilityIsCurrent =
+        finishAnalysisAvailabilityRequest(availabilitySequence);
+      if (!current(stamp) || error instanceof StaleRequest) return;
+      if (!availabilityIsCurrent) {
+        state.setupDecisionPending = false;
+        paint();
+        await resumeDeferredAnalysisAvailability();
+        resumeIdleSourceCheck();
+        return;
+      }
+      state.setupDecisionPending = false;
+      state.setupDecisionError =
+        error instanceof ApiError ? error : new ApiError('internal_error');
+      pendingFocus = 'setup-budget-title';
+      paint();
+      await resumeDeferredAnalysisAvailability();
+      resumeIdleSourceCheck();
+    }
   }
 
   function openUnsavedRepository(repository, availability) {
     state.board = localEmptyBoard(repository, availability.spendMode);
-    state.analysisReadiness = availability.analysisReadiness;
+    if (availability.setupBudget) applyAnalysisAvailability(availability);
+    else state.analysisReadiness = availability.analysisReadiness;
     state.pending = null;
     state.job = null;
     state.jobError = null;
@@ -1652,6 +2069,7 @@ export function mountProduction(mount) {
   }
 
   function chooseRepository(event) {
+    if (state.setupDecisionPending || state.analysisAvailabilityPending) return;
     const id = Number(event.target.value);
     const repository = mergedRepositories().find((item) => item.id === id);
     clearView();
@@ -1688,7 +2106,11 @@ export function mountProduction(mount) {
       state.pending = null;
       state.job = board.activeJob;
       state.admissionRetry = null;
-      if (afterSuccess) pendingFocus = 'report-details-title';
+      if (afterSuccess) {
+        pendingFocus = 'report-details-title';
+        if (state.freshness.status === 'checking')
+          state.sourceCheckDeferred = true;
+      }
       paint();
       if (board.activeJob && !terminalJobStates.has(board.activeJob.state))
         startPolling(board.activeJob);
@@ -1701,19 +2123,15 @@ export function mountProduction(mount) {
         state.repositories.some(({ id }) => id === repositoryId)
       ) {
         state.error = null;
-        let availability;
-        try {
-          availability = await readAnalysisAvailability();
-        } catch (availabilityError) {
-          if (availabilityError instanceof StaleRequest) return;
-          availability = {
-            spendMode: closedSpendMode(availabilityError),
-            analysisReadiness: {
-              ready: false,
-              reason: 'analysis_preflight_required',
-            },
-          };
-        }
+        const availability = {
+          spendMode:
+            state.dashboardSpendMode ??
+            closedSpendMode(state.analysisAvailabilityError),
+          analysisReadiness: state.analysisReadiness,
+          ...(state.setupBudget === null
+            ? {}
+            : { setupBudget: state.setupBudget }),
+        };
         if (!currentView(stamp, repositoryId)) return;
         openUnsavedRepository(state.selected, availability);
         return;
@@ -1728,12 +2146,18 @@ export function mountProduction(mount) {
   async function checkSource({ focus = false } = {}) {
     if (
       !state.selected ||
+      state.pending !== null ||
       state.freshness.status === 'checking' ||
       state.sourceAuthorization === 'reauthorization-required'
     )
       return;
+    if (state.setupDecisionPending || state.analysisAvailabilityPending) {
+      state.sourceCheckDeferred = true;
+      return;
+    }
     const stamp = { generation, view: viewGeneration };
     const selected = state.selected;
+    state.sourceCheckDeferred = false;
     state.freshness = {
       status: 'checking',
       summary: state.freshness.summary,
@@ -1803,6 +2227,20 @@ export function mountProduction(mount) {
       };
       if (focus) pendingFocus = 'source-freshness-title';
       paint();
+    } finally {
+      if (currentView(stamp, selected.id)) resumeIdleSourceCheck();
+    }
+  }
+
+  function resumeIdleSourceCheck() {
+    if (
+      state.selected &&
+      state.board &&
+      state.pending === null &&
+      (state.sourceCheckDeferred || state.freshness.status === 'idle')
+    ) {
+      state.sourceCheckDeferred = false;
+      void checkSource();
     }
   }
 
@@ -1814,10 +2252,13 @@ export function mountProduction(mount) {
       state.selected !== null &&
       state.repositories.some(({ id }) => id === state.selected.id) &&
       state.sourceAuthorization === 'ready' &&
+      state.freshness.status !== 'checking' &&
       state.freshness.status !== 'source-unavailable' &&
       !savedSourceUnavailable &&
       state.analysisReadiness.ready === true &&
-      state.board?.spendMode.available === true
+      state.board?.spendMode.available === true &&
+      !state.setupDecisionPending &&
+      !state.analysisAvailabilityPending
     );
   }
 
@@ -1830,6 +2271,8 @@ export function mountProduction(mount) {
       state.board !== null &&
       state.repositories.some(({ id }) => id === state.selected.id) &&
       state.sourceAuthorization === 'ready' &&
+      !state.setupDecisionPending &&
+      !state.analysisAvailabilityPending &&
       state.freshness.status !== 'checking' &&
       state.freshness.status !== 'source-unavailable' &&
       !savedSourceUnavailable &&
@@ -1841,7 +2284,9 @@ export function mountProduction(mount) {
     if (
       !preflightAllowed() ||
       state.analysisReadiness.ready ||
-      state.pending !== null
+      state.pending !== null ||
+      state.setupDecisionPending ||
+      state.analysisAvailabilityPending
     )
       return;
     const repositoryId = state.selected.id;
@@ -1898,6 +2343,8 @@ export function mountProduction(mount) {
       !state.selected ||
       !state.board ||
       state.pending !== null ||
+      state.setupDecisionPending ||
+      state.analysisAvailabilityPending ||
       (state.job && !terminalJobStates.has(state.job.state)) ||
       !analysisAllowed()
     )
@@ -2011,6 +2458,7 @@ export function mountProduction(mount) {
         return;
       }
       stopPolling();
+      if (state.setupDecisionPending) state.analysisAvailabilityDeferred = true;
       if (data.job.state === 'succeeded') {
         state.jobError = null;
         paint();
@@ -2114,6 +2562,7 @@ export function mountProduction(mount) {
       return;
     }
     paintRepositoryNavigation();
+    paintSetupBudget();
     if (state.selected) paintSelectedBoard();
     const focusTarget = pendingFocus ?? retainedFocus;
     if (focusTarget) {
@@ -2198,10 +2647,10 @@ export function mountProduction(mount) {
     if (state.listError) {
       const alert = element('p', state.listError.message, `${boxClass} mt-5`);
       alert.setAttribute('role', 'alert');
-      mount.append(
-        alert,
-        action('Reload repository lists', loadDashboard, true),
-      );
+      const reload = action('Reload repository lists', loadDashboard, true);
+      reload.disabled =
+        state.setupDecisionPending || state.analysisAvailabilityPending;
+      mount.append(alert, reload);
     }
     const merged = mergedRepositories();
     if (!merged.length) {
@@ -2217,12 +2666,15 @@ export function mountProduction(mount) {
         undefined,
         'mt-5 flex flex-wrap items-center gap-5',
       );
+      const reload = action('Reload repositories', loadDashboard, true);
+      reload.disabled =
+        state.setupDecisionPending || state.analysisAvailabilityPending;
       controls.append(
         link(
           'Manage GitHub App access',
           'https://github.com/settings/installations',
         ),
-        action('Reload repositories', loadDashboard, true),
+        reload,
       );
       mount.append(controls);
       return;
@@ -2235,7 +2687,10 @@ export function mountProduction(mount) {
       'mt-2 w-full max-w-xl rounded-md border border-slate-400 bg-white px-3 py-3 text-slate-950 dark:border-slate-500 dark:bg-slate-950 dark:text-slate-50',
     );
     select.id = 'repository-selection';
-    select.disabled = state.pending === 'report';
+    select.disabled =
+      state.pending === 'report' ||
+      state.setupDecisionPending ||
+      state.analysisAvailabilityPending;
     const placeholder = element('option', 'Select a repository');
     placeholder.value = '';
     select.append(placeholder);
@@ -2290,7 +2745,15 @@ export function mountProduction(mount) {
         repository.fullName,
         `/repositories/${repository.id}`,
       );
+      if (state.setupDecisionPending || state.analysisAvailabilityPending) {
+        boardLink.setAttribute('aria-disabled', 'true');
+        boardLink.tabIndex = -1;
+      }
       boardLink.addEventListener('click', (event) => {
+        if (state.setupDecisionPending || state.analysisAvailabilityPending) {
+          event.preventDefault();
+          return;
+        }
         if (
           event.button !== 0 ||
           event.metaKey ||
@@ -2310,6 +2773,168 @@ export function mountProduction(mount) {
       list.append(item);
     }
     section.append(list);
+  }
+
+  function paintSetupBudget() {
+    const budget = state.setupBudget;
+    const needsDiscussion = budget?.status === 'discussion-required';
+    const visibleAvailabilityError = state.selected
+      ? null
+      : state.analysisAvailabilityError;
+    const decisionDisabled =
+      state.setupDecisionPending ||
+      state.analysisAvailabilityPending ||
+      state.pending !== null ||
+      state.freshness.status === 'checking';
+    if (
+      !budget &&
+      !visibleAvailabilityError &&
+      !state.setupDecisionError &&
+      !state.setupDecisionNotice
+    )
+      return;
+    const section = element('section', undefined, `${boxClass} mt-6`);
+    section.setAttribute('aria-labelledby', 'setup-budget-title');
+    const title = element('h2', 'Setup analysis spending', 'text-xl font-bold');
+    title.id = 'setup-budget-title';
+    section.append(title);
+    if (budget) {
+      section.append(
+        element(
+          'p',
+          `Measured setup exposure is ${formatMicrousd(budget.exposureMicrousd)}: ${formatMicrousd(budget.settledMicrousd)} settled, ${formatMicrousd(budget.reservedMicrousd)} reserved, and ${formatMicrousd(budget.unknownMicrousd)} unresolved exposure. The review threshold is ${formatMicrousd(budget.discussionMicrousd)}, the setup cap is ${formatMicrousd(budget.capMicrousd)}, and ${formatMicrousd(budget.remainingMicrousd)} remains under the cap.`,
+          `mt-3 ${mutedClass}`,
+        ),
+        element(
+          'p',
+          `The fixed model is ${budget.model}. Its setup pricing is valid through ${formatDate(budget.pricingValidThrough)}.`,
+          `mt-3 ${mutedClass}`,
+        ),
+      );
+      const blockedStatus = {
+        stopped: 'Paid setup is stopped for this policy.',
+        'budget-exhausted': messages.budget_exhausted,
+        'pricing-expired': messages.pricing_review_required,
+        'pricing-review-required': messages.pricing_review_required,
+      }[budget.status];
+      if (blockedStatus) {
+        const status = element('p', blockedStatus, 'mt-3 font-medium');
+        status.setAttribute('role', 'status');
+        section.append(status);
+      }
+      if (needsDiscussion)
+        section.append(
+          element(
+            'p',
+            `The projected worst-case exposure that triggered review is ${formatMicrousd(budget.discussion.triggerExposureMicrousd)}. A decision is required before another paid analysis can start.`,
+            `mt-3 ${mutedClass}`,
+          ),
+          element(
+            'p',
+            'Either choice records setup budget policy only. It does not start or retry analysis.',
+            `mt-3 text-sm ${mutedClass}`,
+          ),
+        );
+    }
+    if (state.setupDecisionNotice) {
+      const notice = element(
+        'p',
+        state.setupDecisionNotice,
+        'mt-3 font-medium',
+      );
+      notice.setAttribute(
+        'role',
+        state.setupDecisionConflict ? 'alert' : 'status',
+      );
+      section.append(notice);
+    }
+    const decisionError = state.setupDecisionError ?? visibleAvailabilityError;
+    if (decisionError) {
+      const alert = element('p', decisionError.message, 'mt-3');
+      alert.setAttribute('role', 'alert');
+      section.append(alert);
+    }
+    const controls = element(
+      'div',
+      undefined,
+      'mt-4 flex flex-wrap items-center gap-4',
+    );
+    if (state.setupDecisionRetry) {
+      const retry = action(
+        state.setupDecisionPending
+          ? 'Retrying setup budget decision…'
+          : 'Retry setup budget decision',
+        () =>
+          submitSetupDecision(
+            state.setupDecisionRetry.decision,
+            state.setupDecisionRetry,
+          ),
+      );
+      retry.disabled = decisionDisabled;
+      const reload = action(
+        'Reload setup spending',
+        reloadAnalysisAvailability,
+        true,
+      );
+      reload.disabled = decisionDisabled;
+      controls.append(retry, reload);
+    } else if (needsDiscussion) {
+      const continueSetup = action(
+        state.setupDecisionPending
+          ? 'Recording setup budget decision…'
+          : 'Continue setup through $25',
+        () => submitSetupDecision('acknowledge'),
+      );
+      continueSetup.disabled = decisionDisabled;
+      controls.append(continueSetup);
+      if (state.confirmSetupStop) {
+        const confirmation = element(
+          'p',
+          'Confirm that paid setup should stop for this policy. This records the stop and starts no analysis.',
+          'w-full font-medium',
+        );
+        confirmation.setAttribute('role', 'alert');
+        const confirm = action(
+          'Confirm stop paid setup',
+          () => submitSetupDecision('stop'),
+          true,
+        );
+        confirm.disabled = decisionDisabled;
+        const cancel = action(
+          'Cancel stop',
+          () => {
+            state.confirmSetupStop = false;
+            paint();
+          },
+          true,
+        );
+        cancel.disabled = decisionDisabled;
+        controls.append(confirmation, confirm, cancel);
+      } else {
+        const stop = action(
+          'Stop paid setup for this policy',
+          () => {
+            state.confirmSetupStop = true;
+            paint();
+          },
+          true,
+        );
+        stop.disabled = decisionDisabled;
+        controls.append(stop);
+      }
+    } else if (visibleAvailabilityError) {
+      const reload = action(
+        state.setupDecisionPending
+          ? 'Reloading setup spending…'
+          : 'Reload setup spending',
+        reloadAnalysisAvailability,
+        true,
+      );
+      reload.disabled = decisionDisabled;
+      controls.append(reload);
+    }
+    if (controls.childNodes.length > 0) section.append(controls);
+    mount.append(section);
   }
 
   function paintSelectedBoard() {
@@ -2364,6 +2989,9 @@ export function mountProduction(mount) {
       true,
     );
     check.disabled =
+      state.pending !== null ||
+      state.setupDecisionPending ||
+      state.analysisAvailabilityPending ||
       state.freshness.status === 'checking' ||
       state.sourceAuthorization === 'reauthorization-required';
     controls.append(check);

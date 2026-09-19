@@ -255,6 +255,7 @@ function spendService(
     pricingVerifiedAt = '2026-09-18T04:00:00.000Z',
     pricingValidThrough = '2026-09-20T04:00:00.000Z',
     afterPaidRead = null,
+    afterPreflightRead = null,
     preflightRequiredAt = null,
   } = {},
 ) {
@@ -346,6 +347,7 @@ function spendService(
       preflightReads += 1;
       if (preflightReads === preflightRequiredAt)
         throw new BoardError('analysis_preflight_required');
+      afterPreflightRead?.(preflightReads);
       return { ready: true };
     },
     readReservation: async ({ jobId }) => readReservation(jobId),
@@ -452,6 +454,7 @@ function fixture({
   countErrorAt = null,
   countError = new BoardError('analysis_provider_unavailable'),
   revokeDuringPaidReservationAt = null,
+  revokeDuringPreflightAt = null,
   revokeOnPaidBoundaryReread = null,
   revokeDuringPublicationOwnerRead = false,
   messageClient = null,
@@ -516,6 +519,9 @@ function fixture({
     pricingValidThrough,
     afterPaidRead: (number) => {
       if (number === revokeDuringPaidReservationAt) authorizationRevoked = true;
+    },
+    afterPreflightRead: (number) => {
+      if (number === revokeDuringPreflightAt) authorizationRevoked = true;
     },
     afterSettle: (number) => {
       if (number === 1) time.advance(afterSettleAdvance);
@@ -908,6 +914,41 @@ test('the corrective paid boundary strongly rereads preflight and stops before i
   assert.equal(result.terminal.errorCode, 'analysis_preflight_required');
   assert.equal(setup.metrics.messages(), 1);
   assert.equal(setup.spend.preflightReads(), 2);
+  assertNoReport(setup);
+});
+
+test('authorization revocation as the primary preflight read completes blocks paid dispatch', async () => {
+  const setup = fixture({ revokeDuringPreflightAt: 1 });
+  const result = await runWorker(setup);
+  assert.equal(result.state, 'failed');
+  assert.equal(result.terminal.errorCode, 'source_authorization_required');
+  assert.equal(setup.spend.preflightReads(), 1);
+  assert.equal(setup.metrics.rechecks(), 1);
+  assert.equal(setup.metrics.messages(), 0);
+  assert.deepEqual(
+    result.attempts.map(({ state }) => state),
+    ['released', 'released'],
+  );
+  assert.equal(setup.spend.reservation(), null);
+  assertNoReport(setup);
+});
+
+test('authorization revocation as the corrective preflight read completes blocks its dispatch', async () => {
+  const setup = fixture({
+    responses: [primaryResponse({ invalid: true })],
+    revokeDuringPreflightAt: 2,
+  });
+  const result = await runWorker(setup);
+  assert.equal(result.state, 'failed');
+  assert.equal(result.terminal.errorCode, 'source_authorization_required');
+  assert.equal(setup.spend.preflightReads(), 2);
+  assert.equal(setup.metrics.rechecks(), 2);
+  assert.equal(setup.metrics.messages(), 1);
+  assert.deepEqual(
+    result.attempts.map(({ state }) => state),
+    ['settled', 'released'],
+  );
+  assert.equal(setup.spend.reservation(), null);
   assertNoReport(setup);
 });
 

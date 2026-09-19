@@ -611,6 +611,22 @@ test('saved report reads and setup decisions stay on Board storage without acqui
     ready: false,
     reason: 'analysis_preflight_required',
   };
+  const setupBudget = {
+    mode: 'setup',
+    status: 'available',
+    currency: 'USD',
+    policyId: 'setup-opus-5-global-standard-v1',
+    model: 'claude-opus-5',
+    settledMicrousd: 0,
+    reservedMicrousd: 0,
+    unknownMicrousd: 0,
+    exposureMicrousd: 0,
+    capMicrousd: 25_000_000,
+    discussionMicrousd: 20_000_000,
+    remainingMicrousd: 25_000_000,
+    pricingValidThrough: '2026-09-26T05:35:41.000Z',
+    discussion: null,
+  };
   const job = {
     id: jobId,
     operation: 'generate',
@@ -626,6 +642,11 @@ test('saved report reads and setup decisions stay on Board storage without acqui
     decision: 'acknowledge',
     authorizedThroughMicrousd: 25_000_000,
     authorizedOperations: ['generate', 'refresh'],
+    observed: {
+      settledMicrousd: 0,
+      reservedMicrousd: 0,
+      unknownMicrousd: 0,
+    },
   };
   const reportOperations = {
     async listReports(input) {
@@ -652,7 +673,7 @@ test('saved report reads and setup decisions stay on Board storage without acqui
     },
     async getAnalysisAvailability(input) {
       calls.push(['availability', input]);
-      return { spendMode, analysisReadiness };
+      return { spendMode, analysisReadiness, setupBudget };
     },
     async pollJob(input) {
       calls.push(['job', input]);
@@ -660,7 +681,12 @@ test('saved report reads and setup decisions stay on Board storage without acqui
     },
     async decideSetupBudget(input) {
       calls.push(['decision', input]);
-      return { status: 'updated', spendMode };
+      return {
+        status: 'updated',
+        spendMode,
+        analysisReadiness,
+        setupBudget,
+      };
     },
   };
   const ctx = await setup(undefined, reportOperations);
@@ -697,9 +723,9 @@ test('saved report reads and setup decisions stay on Board storage without acqui
         activeJob: null,
         spendMode,
       },
-      { spendMode, analysisReadiness },
+      { spendMode, analysisReadiness, setupBudget },
       { job },
-      { status: 'updated', spendMode },
+      { status: 'updated', spendMode, analysisReadiness, setupBudget },
     ],
   );
   assert.ok(responses.every((response) => response.status === 200));
@@ -920,6 +946,25 @@ test('report routes reject malformed URLs, JSON, CSRF and operation tuples befor
       decision: 'stop',
       authorizedThroughMicrousd: 1,
       authorizedOperations: [],
+      observed: {
+        settledMicrousd: 0,
+        reservedMicrousd: 0,
+        unknownMicrousd: 0,
+      },
+    }),
+    ctx.request('/api/setup-budget-decision', 'POST', jsonHeaders, {
+      policyId: 'setup-v1',
+      discussionRevision: 1,
+      decisionId: 'b'.repeat(64),
+      decision: 'stop',
+      authorizedThroughMicrousd: 0,
+      authorizedOperations: [],
+      observed: {
+        settledMicrousd: 0,
+        reservedMicrousd: 0,
+        unknownMicrousd: 0,
+        privateRevision: 7,
+      },
     }),
     ctx.request(
       '/api/repositories/17/report-jobs',

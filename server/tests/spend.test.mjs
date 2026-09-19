@@ -81,7 +81,11 @@ function maximumCardinalityLedger() {
         (_, index) => ({
           triggerRevision: index + 1,
           decidedAt: '2026-09-19T06:31:00.000Z',
-          observedExposureMicrousd: SETUP_SPEND_LIMITS.capMicrousd,
+          observed: {
+            settledMicrousd: SETUP_SPEND_LIMITS.capMicrousd,
+            reservedMicrousd: 0,
+            unknownMicrousd: 0,
+          },
           decisionId: indexedId(decisionIndex++),
           decision: 'acknowledged',
           authorizedThroughMicrousd: SETUP_SPEND_LIMITS.capMicrousd,
@@ -229,8 +233,8 @@ test('maximum-width preflight covers every cardinality before terminal accountin
         decisions.length === SETUP_SPEND_LIMITS.maxDecisionsPerPolicy,
     ),
   );
-  assert.equal(setupSpendLedgerPreflightBytes(ledger), 193_412);
-  assert.ok(193_412 < SETUP_SPEND_LIMITS.maxBytes);
+  assert.equal(setupSpendLedgerPreflightBytes(ledger), 231_812);
+  assert.ok(231_812 < SETUP_SPEND_LIMITS.maxBytes);
 });
 
 test('terminal attempt accounting stays within its reserved maximum-width shape', () => {
@@ -545,6 +549,89 @@ test('second full reservation raises a revision-bound discussion gate before exp
   const discussion = gated.ledger.discussions[gated.ledger.activePolicyId];
   assert.equal(discussion.status, 'required');
   assert.ok(discussion.triggerExposureMicrousd >= 20_000_000);
+  const repeated = reserveSetupJob(gated.ledger, {
+    jobId: id('c'),
+    operation: 'generate',
+    at: at(3),
+    expectedRevision: gated.ledger.revision,
+  });
+  assert.equal(repeated.status, 'discussion-required');
+  assert.deepEqual(repeated.ledger, gated.ledger);
+  const firstReleased = updateSetupAttempt(gated.ledger, {
+    jobId: id('a'),
+    attemptNumber: 1,
+    state: 'released',
+    at: at(3),
+    expectedRevision: gated.ledger.revision,
+  }).ledger;
+  const allReleased = updateSetupAttempt(firstReleased, {
+    jobId: id('a'),
+    attemptNumber: 2,
+    state: 'released',
+    at: at(4),
+    expectedRevision: firstReleased.revision,
+  }).ledger;
+  const reducedRequired = removeCompletedSetupJob(allReleased, {
+    jobId: id('a'),
+    expectedRevision: allReleased.revision,
+    at: at(5),
+  });
+  assert.equal(exposureMicrousd(reducedRequired), 0);
+  const stillRequired = reserveSetupJob(reducedRequired, {
+    jobId: id('c'),
+    operation: 'generate',
+    at: at(6),
+    expectedRevision: reducedRequired.revision,
+  });
+  assert.equal(stillRequired.status, 'discussion-required');
+  assert.deepEqual(stillRequired.ledger, reducedRequired);
+
+  const narrowDecision = decideSetupDiscussion(gated.ledger, {
+    policyId: gated.ledger.activePolicyId,
+    triggerRevision: discussion.currentRevision,
+    decisionId: id('e'),
+    decision: 'acknowledged',
+    authorizedThroughMicrousd: exposureMicrousd(gated.ledger),
+    authorizedOperations: ['refresh'],
+    observedExposureMicrousd: exposureMicrousd(gated.ledger),
+    at: at(4),
+    expectedRevision: gated.ledger.revision,
+  });
+  const narrowlySettled = updateSetupAttempt(narrowDecision, {
+    jobId: id('a'),
+    attemptNumber: 1,
+    state: 'settled',
+    actualCostMicrousd: 1,
+    at: at(5),
+    expectedRevision: narrowDecision.revision,
+  }).ledger;
+  const narrowlyReleased = updateSetupAttempt(narrowlySettled, {
+    jobId: id('a'),
+    attemptNumber: 2,
+    state: 'released',
+    at: at(6),
+    expectedRevision: narrowlySettled.revision,
+  }).ledger;
+  const reducedAcknowledged = removeCompletedSetupJob(narrowlyReleased, {
+    jobId: id('a'),
+    expectedRevision: narrowlyReleased.revision,
+    at: at(7),
+  });
+  assert.equal(exposureMicrousd(reducedAcknowledged), 1);
+  for (const operation of ['generate', 'refresh']) {
+    const belowThreshold = reserveSetupJob(reducedAcknowledged, {
+      jobId: id(operation === 'generate' ? 'f' : '0'),
+      operation,
+      at: at(8),
+      expectedRevision: reducedAcknowledged.revision,
+    });
+    assert.equal(belowThreshold.status, 'discussion-required');
+    assert.equal(
+      belowThreshold.ledger.discussions[belowThreshold.ledger.activePolicyId]
+        .currentRevision,
+      discussion.currentRevision + 1,
+    );
+  }
   const decided = decideSetupDiscussion(gated.ledger, {
     policyId: gated.ledger.activePolicyId,
     triggerRevision: discussion.currentRevision,
@@ -553,17 +640,171 @@ test('second full reservation raises a revision-bound discussion gate before exp
     authorizedThroughMicrousd: 25_000_000,
     authorizedOperations: ['refresh'],
     observedExposureMicrousd: exposureMicrousd(gated.ledger),
-    at: at(3),
+    at: at(4),
     expectedRevision: gated.ledger.revision,
   });
+  const outOfScope = reserveSetupJob(decided, {
+    jobId: id('c'),
+    operation: 'generate',
+    at: at(5),
+    expectedRevision: decided.revision,
+  });
+  assert.equal(outOfScope.status, 'discussion-required');
+  assert.equal(
+    outOfScope.ledger.discussions[outOfScope.ledger.activePolicyId]
+      .currentRevision,
+    discussion.currentRevision + 1,
+  );
   const second = reserveSetupJob(decided, {
     jobId: id('b'),
     operation: 'refresh',
-    at: at(4),
+    at: at(6),
     expectedRevision: decided.revision,
   });
   assert.equal(second.status, 'reserved');
   assert.ok(exposureMicrousd(second.ledger) <= 25_000_000);
+});
+
+test('discussion history has one ordered decision per completed revision', () => {
+  const first = reserveSetupJob(setup(), {
+    jobId: id('a'),
+    operation: 'generate',
+    at: at(1),
+    expectedRevision: 0,
+  }).ledger;
+  const firstGate = reserveSetupJob(first, {
+    jobId: id('b'),
+    operation: 'refresh',
+    at: at(2),
+    expectedRevision: first.revision,
+  }).ledger;
+  const policyId = firstGate.activePolicyId;
+  const firstDecision = decideSetupDiscussion(firstGate, {
+    policyId,
+    triggerRevision: 1,
+    decisionId: id('c'),
+    decision: 'acknowledged',
+    authorizedThroughMicrousd: SETUP_SPEND_LIMITS.capMicrousd,
+    authorizedOperations: ['refresh'],
+    observedExposureMicrousd: exposureMicrousd(firstGate),
+    at: at(3),
+    expectedRevision: firstGate.revision,
+  });
+  const secondGate = reserveSetupJob(firstDecision, {
+    jobId: id('d'),
+    operation: 'generate',
+    at: at(4),
+    expectedRevision: firstDecision.revision,
+  }).ledger;
+  const secondDecision = decideSetupDiscussion(secondGate, {
+    policyId,
+    triggerRevision: 2,
+    decisionId: id('e'),
+    decision: 'acknowledged',
+    authorizedThroughMicrousd: SETUP_SPEND_LIMITS.capMicrousd,
+    authorizedOperations: ['generate', 'refresh'],
+    observedExposureMicrousd: exposureMicrousd(secondGate),
+    at: at(5),
+    expectedRevision: secondGate.revision,
+  });
+
+  const outOfOrder = structuredClone(secondDecision);
+  outOfOrder.discussions[policyId].decisions.reverse();
+  const missingRequiredDecision = structuredClone(secondGate);
+  missingRequiredDecision.discussions[policyId].decisions = [];
+  const missingCompletedDecision = structuredClone(secondDecision);
+  missingCompletedDecision.discussions[policyId].decisions.shift();
+  const stoppedThenAcknowledged = structuredClone(secondDecision);
+  stoppedThenAcknowledged.discussions[policyId].decisions[0] = {
+    ...stoppedThenAcknowledged.discussions[policyId].decisions[0],
+    triggerRevision: 2,
+    decision: 'stopped',
+    authorizedThroughMicrousd: 0,
+    authorizedOperations: [],
+  };
+  const reopenedAfterStop = structuredClone(secondDecision);
+  reopenedAfterStop.discussions[policyId].decisions[0] = {
+    ...reopenedAfterStop.discussions[policyId].decisions[0],
+    decision: 'stopped',
+    authorizedThroughMicrousd: 0,
+    authorizedOperations: [],
+  };
+  const triggerOverCap = structuredClone(secondGate);
+  triggerOverCap.discussions[policyId].triggerExposureMicrousd =
+    SETUP_SPEND_LIMITS.capMicrousd + 1;
+  for (const malformed of [
+    outOfOrder,
+    missingRequiredDecision,
+    missingCompletedDecision,
+    stoppedThenAcknowledged,
+    reopenedAfterStop,
+    triggerOverCap,
+  ])
+    assert.throws(() => projectSpendLedger(malformed), {
+      code: 'service_unavailable',
+    });
+});
+
+test('discussion decision identifiers are unique across retained policies', () => {
+  const first = reserveSetupJob(setup(), {
+    jobId: id('a'),
+    operation: 'generate',
+    at: at(1),
+    expectedRevision: 0,
+  }).ledger;
+  const firstGate = reserveSetupJob(first, {
+    jobId: id('b'),
+    operation: 'refresh',
+    at: at(2),
+    expectedRevision: first.revision,
+  }).ledger;
+  const firstPolicyId = firstGate.activePolicyId;
+  const firstDecision = decideSetupDiscussion(firstGate, {
+    policyId: firstPolicyId,
+    triggerRevision: 1,
+    decisionId: id('c'),
+    decision: 'acknowledged',
+    authorizedThroughMicrousd: SETUP_SPEND_LIMITS.capMicrousd,
+    authorizedOperations: ['generate', 'refresh'],
+    observedExposureMicrousd: exposureMicrousd(firstGate),
+    at: at(3),
+    expectedRevision: firstGate.revision,
+  });
+  const nextPolicy = createSetupPolicy({
+    deployId: 'deploy-2',
+    pricingAttestation,
+  });
+  const activated = activateSetupPolicy(firstDecision, {
+    ...nextPolicy,
+    at: at(4),
+    expectedRevision: firstDecision.revision,
+  });
+  const secondGate = reserveSetupJobRaw(activated, {
+    jobId: id('d'),
+    operation: 'generate',
+    at: at(5),
+    expectedRevision: activated.revision,
+    expectedPolicyId: nextPolicy.policyId,
+    expectedDeployId: 'deploy-2',
+    expectedPricingAttestation: pricingAttestation,
+  }).ledger;
+  const secondDecision = decideSetupDiscussion(secondGate, {
+    policyId: nextPolicy.policyId,
+    triggerRevision: 1,
+    decisionId: id('e'),
+    decision: 'acknowledged',
+    authorizedThroughMicrousd: SETUP_SPEND_LIMITS.capMicrousd,
+    authorizedOperations: ['generate', 'refresh'],
+    observedExposureMicrousd: exposureMicrousd(secondGate),
+    at: at(6),
+    expectedRevision: secondGate.revision,
+  });
+  const duplicate = structuredClone(secondDecision);
+  duplicate.discussions[nextPolicy.policyId].decisions[0].decisionId =
+    duplicate.discussions[firstPolicyId].decisions[0].decisionId;
+  assert.throws(() => projectSpendLedger(duplicate), {
+    code: 'service_unavailable',
+  });
 });
 
 test('stopped discussion is permanent and malformed or oversized ledgers fail closed', () => {

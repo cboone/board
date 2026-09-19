@@ -20,10 +20,34 @@ const repository = {
   private: true,
   url: 'https://github.com/cboone/widgets',
 };
-const spendMode = { available: true, mode: 'setup', reason: null };
+const spendMode = {
+  available: false,
+  mode: 'setup',
+  reason: 'budget_discussion_required',
+};
 const analysisReadiness = {
   ready: false,
   reason: 'analysis_preflight_required',
+};
+const setupBudget = {
+  mode: 'setup',
+  status: 'discussion-required',
+  currency: 'USD',
+  policyId: 'setup-opus-5-global-standard-v1',
+  model: 'claude-opus-5',
+  settledMicrousd: 1_000_000,
+  reservedMicrousd: 20_000_000,
+  unknownMicrousd: 500_000,
+  exposureMicrousd: 21_500_000,
+  capMicrousd: 25_000_000,
+  discussionMicrousd: 20_000_000,
+  remainingMicrousd: 3_500_000,
+  pricingValidThrough: '2026-09-26T05:35:41.000Z',
+  discussion: {
+    status: 'required',
+    currentRevision: 2,
+    triggerExposureMicrousd: 21_500_000,
+  },
 };
 const preflightMarker = {
   schemaVersion: 1,
@@ -98,7 +122,10 @@ test('projects every JSON response family through an exact recursive allowlist',
       },
     ],
     [projectDirectReportResponse, emptyReport()],
-    [projectAnalysisAvailabilityResponse, { spendMode, analysisReadiness }],
+    [
+      projectAnalysisAvailabilityResponse,
+      { spendMode, analysisReadiness, setupBudget },
+    ],
     [
       projectAnalysisPreflightResponse,
       {
@@ -116,7 +143,10 @@ test('projects every JSON response family through an exact recursive allowlist',
       },
     ],
     [projectJobResponse, { job }],
-    [projectSetupDecisionResponse, { status: 'updated', spendMode }],
+    [
+      projectSetupDecisionResponse,
+      { status: 'updated', spendMode, analysisReadiness, setupBudget },
+    ],
   ];
   for (const [project, value, expected = value] of cases) {
     const projected = project(structuredClone(value));
@@ -130,6 +160,75 @@ test('projects every JSON response family through an exact recursive allowlist',
   assert.throws(() => projectRepositoryListResponse(nested), {
     code: 'service_unavailable',
   });
+});
+
+test('rejects inconsistent setup budget aggregates and discussion states', () => {
+  const project = (candidate) =>
+    projectAnalysisAvailabilityResponse({
+      spendMode,
+      analysisReadiness,
+      setupBudget: candidate,
+    });
+  for (const candidate of [
+    { ...setupBudget, exposureMicrousd: setupBudget.exposureMicrousd + 1 },
+    { ...setupBudget, remainingMicrousd: setupBudget.remainingMicrousd + 1 },
+    { ...setupBudget, currency: 'EUR' },
+    {
+      ...setupBudget,
+      discussion: { ...setupBudget.discussion, status: 'acknowledged' },
+    },
+    { ...setupBudget, privateRevision: 7 },
+  ])
+    assert.throws(() => project(candidate), { code: 'internal_error' });
+});
+
+test('projects a scope gate below the discussion threshold and bounds its trigger', () => {
+  const scopeGate = {
+    ...setupBudget,
+    settledMicrousd: 1,
+    reservedMicrousd: 0,
+    unknownMicrousd: 0,
+    exposureMicrousd: 1,
+    remainingMicrousd: 24_999_999,
+    discussion: {
+      ...setupBudget.discussion,
+      currentRevision: 2,
+      triggerExposureMicrousd: 10_819_201,
+    },
+  };
+  assert.deepEqual(
+    projectAnalysisAvailabilityResponse({
+      spendMode,
+      analysisReadiness,
+      setupBudget: scopeGate,
+    }).setupBudget,
+    scopeGate,
+  );
+  assert.deepEqual(
+    projectSetupDecisionResponse({
+      status: 'conflict',
+      spendMode,
+      analysisReadiness,
+      setupBudget: scopeGate,
+    }).setupBudget,
+    scopeGate,
+  );
+  for (const triggerExposureMicrousd of [-1, 25_000_001])
+    assert.throws(
+      () =>
+        projectAnalysisAvailabilityResponse({
+          spendMode,
+          analysisReadiness,
+          setupBudget: {
+            ...scopeGate,
+            discussion: {
+              ...scopeGate.discussion,
+              triggerExposureMicrousd,
+            },
+          },
+        }),
+      { code: 'internal_error' },
+    );
 });
 
 test('enforces the final buffered JSON ceiling on exact UTF-8 bytes', () => {

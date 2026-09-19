@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import {
+  analysisAvailability,
   deferred,
   emptyBoard,
   jobId,
@@ -9,8 +10,51 @@ import {
   safeJob,
   safePreflight,
   savedBoard,
+  setupBudget,
   sourceSummary,
 } from './mock-api.js';
+
+function discussionAvailability(overrides = {}) {
+  return analysisAvailability({
+    spendMode: {
+      available: false,
+      mode: 'setup',
+      reason: 'budget_discussion_required',
+    },
+    setupBudget: setupBudget({
+      status: 'discussion-required',
+      settledMicrousd: 8_000_000,
+      reservedMicrousd: 2_000_000,
+      unknownMicrousd: 500_000,
+      discussion: {
+        status: 'required',
+        currentRevision: 1,
+        triggerExposureMicrousd: 21_319_200,
+      },
+      ...overrides,
+    }),
+  });
+}
+
+function decidedAvailability(status) {
+  const stopped = status === 'stopped';
+  return analysisAvailability({
+    spendMode: stopped
+      ? { available: false, mode: 'disabled', reason: 'analysis_unavailable' }
+      : { available: true, mode: 'setup', reason: null },
+    setupBudget: setupBudget({
+      status: stopped ? 'stopped' : 'available',
+      settledMicrousd: 8_000_000,
+      reservedMicrousd: 2_000_000,
+      unknownMicrousd: 500_000,
+      discussion: {
+        status: stopped ? 'stopped' : 'acknowledged',
+        currentRevision: 1,
+        triggerExposureMicrousd: 21_319_200,
+      },
+    }),
+  });
+}
 
 test('generates only after an explicit click and reloads the successful report', async ({
   page,
@@ -78,6 +122,50 @@ test('generates only after an explicit click and reloads the successful report',
   ).toEqual({ local: [], session: [] });
 });
 
+test('rechecks the source after a successful job races with the initial source check', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  const firstCheckStarted = deferred();
+  const releaseFirstCheck = deferred();
+  let reportReads = 0;
+  let sourceChecks = 0;
+  flow.report = async () => {
+    reportReads += 1;
+    return {
+      status: 200,
+      data:
+        reportReads === 1
+          ? savedBoard(repositories[1], {
+              activeJob: safeJob('analyzing', { operation: 'refresh' }),
+            })
+          : savedBoard(),
+    };
+  };
+  flow.check = async () => {
+    sourceChecks += 1;
+    if (sourceChecks === 1) {
+      firstCheckStarted.resolve();
+      await releaseFirstCheck.promise;
+    }
+    return { status: 200, data: sourceSummary() };
+  };
+  flow.job = async () => {
+    await firstCheckStarted.promise;
+    return {
+      status: 200,
+      data: { job: safeJob('succeeded', { operation: 'refresh' }) },
+    };
+  };
+
+  await page.goto('/repositories/202');
+  await expect.poll(() => reportReads).toBe(2);
+  expect(sourceChecks).toBe(1);
+
+  releaseFirstCheck.resolve();
+  await expect.poll(() => sourceChecks).toBe(2);
+});
+
 test('enables first-use generation after an unverified session completes a source check', async ({
   page,
 }) => {
@@ -98,13 +186,12 @@ test('requires the explicit no-spend setup verification before enabling paid ana
   flow.boards.set(202, emptyBoard());
   flow.availability = async () => ({
     status: 200,
-    data: {
-      spendMode: { available: true, mode: 'setup', reason: null },
+    data: analysisAvailability({
       analysisReadiness: {
         ready: false,
         reason: 'analysis_preflight_required',
       },
-    },
+    }),
   });
   flow.preflight = async () => ({
     status: 200,
@@ -137,6 +224,803 @@ test('requires the explicit no-spend setup verification before enabling paid ana
     operation: 'generate',
     expectedCurrentReportId: null,
   });
+  expect(
+    flow.calls.filter(({ path }) => path.endsWith('/report-jobs')),
+  ).toEqual([]);
+});
+
+test('serializes source checks behind a pending setup verification', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  const pending = deferred();
+  flow.boards.set(202, emptyBoard());
+  flow.availability = async () => ({
+    status: 200,
+    data: analysisAvailability({
+      analysisReadiness: {
+        ready: false,
+        reason: 'analysis_preflight_required',
+      },
+    }),
+  });
+  flow.preflight = async () => {
+    await pending.promise;
+    return {
+      status: 200,
+      data: { preflight: safePreflight() },
+    };
+  };
+
+  await page.goto('/repositories/202');
+  const verify = page.getByRole('button', { name: 'Verify analysis setup' });
+  await expect(verify).toBeEnabled();
+  const checksBefore = flow.calls.filter(({ path }) =>
+    path.endsWith('/check'),
+  ).length;
+  await verify.click();
+  await expect(
+    page.getByRole('button', { name: 'Verifying analysis setup…' }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole('button', { name: 'Check GitHub' }),
+  ).toBeDisabled();
+
+  pending.resolve();
+  await expect(
+    page.getByRole('button', { name: 'Generate report' }),
+  ).toBeEnabled();
+  expect(flow.calls.filter(({ path }) => path.endsWith('/check'))).toHaveLength(
+    checksBefore,
+  );
+});
+
+test('serializes setup decisions behind the source-check budget refresh', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  const availabilityStarted = deferred();
+  const availabilityPending = deferred();
+  let availabilityReads = 0;
+  flow.boards.set(202, emptyBoard());
+  flow.availability = async () => {
+    availabilityReads += 1;
+    if (availabilityReads === 1)
+      return { status: 200, data: discussionAvailability() };
+    availabilityStarted.resolve();
+    await availabilityPending.promise;
+    return { status: 200, data: discussionAvailability() };
+  };
+
+  await page.goto('/repositories/202');
+  await availabilityStarted.promise;
+  const decide = page.getByRole('button', {
+    name: 'Continue setup through $25',
+  });
+  await expect(decide).toBeDisabled();
+  await expect(page.getByLabel('Repository')).toBeDisabled();
+  await expect(
+    page.getByRole('link', { name: repositories[0].fullName }),
+  ).toHaveAttribute('aria-disabled', 'true');
+  await decide.evaluate((button) => {
+    button.disabled = false;
+    button.click();
+  });
+  expect(
+    flow.calls.filter(({ path }) => path === '/api/setup-budget-decision'),
+  ).toEqual([]);
+
+  availabilityPending.resolve();
+  await expect(decide).toBeEnabled();
+  await decide.click();
+  await expect(
+    page.getByText('setup budget decision was recorded', { exact: false }),
+  ).toBeVisible();
+  expect(
+    flow.calls.filter(({ path }) => path === '/api/setup-budget-decision'),
+  ).toHaveLength(1);
+});
+
+test('shows measured setup spending and records continuation without starting analysis', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  flow.availability = async () => ({
+    status: 200,
+    data: discussionAvailability(),
+  });
+  flow.decision = async () => ({
+    status: 200,
+    data: { status: 'updated', ...decidedAvailability('acknowledged') },
+  });
+
+  await page.goto('/');
+  const section = page
+    .getByRole('heading', { name: 'Setup analysis spending' })
+    .locator('..');
+  await expect(section).toContainText('Measured setup exposure is $10.50');
+  await expect(section).toContainText('$8.00 settled');
+  await expect(section).toContainText('$2.00 reserved');
+  await expect(section).toContainText('$0.50 unresolved exposure');
+  await expect(section).toContainText('$14.50 remains under the cap');
+  await expect(section).toContainText(
+    'projected worst-case exposure that triggered review is $21.3192',
+  );
+  expect(
+    flow.calls.filter(({ path }) => path.endsWith('/report-jobs')),
+  ).toEqual([]);
+
+  await page
+    .getByRole('button', { name: 'Continue setup through $25' })
+    .click();
+  await expect(
+    page.getByText('setup budget decision was recorded', { exact: false }),
+  ).toBeVisible();
+  const decisions = flow.calls.filter(
+    ({ path }) => path === '/api/setup-budget-decision',
+  );
+  expect(decisions).toHaveLength(1);
+  expect(decisions[0].csrfToken).toBe(flow.csrfToken);
+  expect(decisions[0].body).toEqual({
+    policyId: 'setup-policy-v1',
+    discussionRevision: 1,
+    decisionId: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    decision: 'acknowledge',
+    authorizedThroughMicrousd: 25_000_000,
+    authorizedOperations: ['generate', 'refresh'],
+    observed: {
+      settledMicrousd: 8_000_000,
+      reservedMicrousd: 2_000_000,
+      unknownMicrousd: 500_000,
+    },
+  });
+  expect(
+    flow.calls.filter(({ path }) => path.endsWith('/report-jobs')),
+  ).toEqual([]);
+});
+
+test('clears a resolved admission budget gate after the setup decision', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  let admissionBlocked = false;
+  flow.boards.set(202, emptyBoard());
+  flow.availability = async () => ({
+    status: 200,
+    data: admissionBlocked ? discussionAvailability() : analysisAvailability(),
+  });
+  flow.admission = async () => {
+    admissionBlocked = true;
+    return {
+      status: 409,
+      data: {
+        error: { code: 'budget_discussion_required', retryable: false },
+      },
+    };
+  };
+  flow.decision = async () => ({
+    status: 200,
+    data: { status: 'updated', ...decidedAvailability('acknowledged') },
+  });
+
+  await page.goto('/repositories/202');
+  await page.getByRole('button', { name: 'Generate report' }).click();
+  const resolvedError = page.getByRole('alert').filter({
+    hasText:
+      'The setup spending threshold requires a decision before continuing.',
+  });
+  await expect(resolvedError).toBeVisible();
+  await page
+    .getByRole('button', { name: 'Continue setup through $25' })
+    .click();
+  await expect(
+    page.getByText('setup budget decision was recorded', { exact: false }),
+  ).toBeVisible();
+  await expect(resolvedError).toHaveCount(0);
+});
+
+test('reload clears a resolved gate after a committed decision response is lost', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  let admissionBlocked = false;
+  let decisionCommitted = false;
+  flow.boards.set(202, emptyBoard());
+  flow.availability = async () => ({
+    status: 200,
+    data: decisionCommitted
+      ? decidedAvailability('acknowledged')
+      : admissionBlocked
+        ? discussionAvailability()
+        : analysisAvailability(),
+  });
+  flow.admission = async () => {
+    admissionBlocked = true;
+    return {
+      status: 409,
+      data: {
+        error: { code: 'budget_discussion_required', retryable: false },
+      },
+    };
+  };
+  flow.decision = async () => {
+    decisionCommitted = true;
+    return {
+      status: 503,
+      data: { error: { code: 'service_unavailable', retryable: true } },
+    };
+  };
+
+  await page.goto('/repositories/202');
+  await page.getByRole('button', { name: 'Generate report' }).click();
+  const resolvedError = page.getByRole('alert').filter({
+    hasText:
+      'The setup spending threshold requires a decision before continuing.',
+  });
+  await expect(resolvedError).toBeVisible();
+  await page
+    .getByRole('button', { name: 'Continue setup through $25' })
+    .click();
+  await expect(
+    page.getByRole('button', { name: 'Retry setup budget decision' }),
+  ).toBeVisible();
+  await page.getByRole('button', { name: 'Reload setup spending' }).click();
+  await expect(resolvedError).toHaveCount(0);
+  await expect(
+    page.getByText('Setup spending was reloaded. No analysis was started.'),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Retry setup budget decision' }),
+  ).toHaveCount(0);
+});
+
+test('shows an authorization-scope discussion below the review threshold', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  flow.availability = async () => ({
+    status: 200,
+    data: discussionAvailability({
+      settledMicrousd: 1,
+      reservedMicrousd: 0,
+      unknownMicrousd: 0,
+      discussion: {
+        status: 'required',
+        currentRevision: 2,
+        triggerExposureMicrousd: 10_819_201,
+      },
+    }),
+  });
+
+  await page.goto('/');
+  const section = page
+    .getByRole('heading', { name: 'Setup analysis spending' })
+    .locator('..');
+  await expect(section).toContainText('Measured setup exposure is $0.000001');
+  await expect(section).toContainText('The review threshold is $20.00');
+  await expect(section).toContainText(
+    'projected worst-case exposure that triggered review is $10.819201',
+  );
+  await expect(
+    page.getByRole('button', { name: 'Continue setup through $25' }),
+  ).toBeEnabled();
+  expect(
+    flow.calls.filter(({ path }) => path.endsWith('/report-jobs')),
+  ).toEqual([]);
+});
+
+test('keeps repository reload and navigation inactive during a setup decision', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  const pending = deferred();
+  flow.list = async () => ({
+    status: 503,
+    data: { error: { code: 'service_unavailable', retryable: true } },
+  });
+  flow.catalog = {
+    items: [
+      {
+        repository: repositories[0],
+        current: {
+          reportId,
+          generatedAt: '2026-09-18T20:10:00.000Z',
+          sourceFingerprint: 'c'.repeat(64),
+        },
+        sourceStatus: 'ready',
+        activeJob: null,
+      },
+    ],
+    nextCursor: null,
+  };
+  flow.availability = async () => ({
+    status: 200,
+    data: discussionAvailability(),
+  });
+  flow.decision = async () => {
+    await pending.promise;
+    return {
+      status: 200,
+      data: { status: 'updated', ...decidedAvailability('acknowledged') },
+    };
+  };
+
+  await page.goto('/');
+  const reload = page.getByRole('button', { name: 'Reload repository lists' });
+  await page
+    .getByRole('button', { name: 'Continue setup through $25' })
+    .click();
+  await expect(reload).toBeDisabled();
+  await expect(page.getByLabel('Repository')).toBeDisabled();
+  await expect(
+    page.getByRole('link', { name: repositories[0].fullName }),
+  ).toHaveAttribute('aria-disabled', 'true');
+  const reportReads = flow.calls.filter(({ path }) =>
+    path.endsWith('/report'),
+  ).length;
+  await page.getByLabel('Repository').evaluate((select) => {
+    select.disabled = false;
+    select.value = '101';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await expect(page).toHaveURL(/\/$/u);
+  expect(
+    flow.calls.filter(({ path }) => path.endsWith('/report')),
+  ).toHaveLength(reportReads);
+  const listReads = flow.calls.filter(
+    ({ path }) => path === '/api/repositories',
+  ).length;
+  await reload.evaluate((button) => {
+    button.disabled = false;
+    button.click();
+  });
+  expect(
+    flow.calls.filter(({ path }) => path === '/api/repositories'),
+  ).toHaveLength(listReads);
+
+  pending.resolve();
+  await expect(
+    page.getByText('setup budget decision was recorded', { exact: false }),
+  ).toBeVisible();
+  await expect(reload).toBeEnabled();
+  await expect(page.getByLabel('Repository')).toBeEnabled();
+});
+
+test('requires inline confirmation before stopping paid setup', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  flow.availability = async () => ({
+    status: 200,
+    data: discussionAvailability(),
+  });
+  flow.decision = async () => ({
+    status: 200,
+    data: { status: 'updated', ...decidedAvailability('stopped') },
+  });
+
+  await page.goto('/');
+  await page
+    .getByRole('button', { name: 'Stop paid setup for this policy' })
+    .click();
+  await expect(
+    page.getByText('Confirm that paid setup should stop', { exact: false }),
+  ).toBeVisible();
+  expect(
+    flow.calls.filter(({ path }) => path === '/api/setup-budget-decision'),
+  ).toEqual([]);
+  await page.getByRole('button', { name: 'Confirm stop paid setup' }).click();
+  await expect(
+    page.getByText('Paid setup is stopped for this policy.'),
+  ).toBeVisible();
+
+  const decision = flow.calls.find(
+    ({ path }) => path === '/api/setup-budget-decision',
+  );
+  expect(decision.body).toEqual({
+    policyId: 'setup-policy-v1',
+    discussionRevision: 1,
+    decisionId: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    decision: 'stop',
+    authorizedThroughMicrousd: 0,
+    authorizedOperations: [],
+    observed: {
+      settledMicrousd: 8_000_000,
+      reservedMicrousd: 2_000_000,
+      unknownMicrousd: 500_000,
+    },
+  });
+  expect(
+    flow.calls.filter(({ path }) => path.endsWith('/report-jobs')),
+  ).toEqual([]);
+});
+
+test('clears stop confirmation when a newer budget projection arrives', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  let sourceChecks = 0;
+  flow.boards.set(202, emptyBoard());
+  flow.check = async () => {
+    sourceChecks += 1;
+    return { status: 200, data: sourceSummary() };
+  };
+  flow.availability = async () => ({
+    status: 200,
+    data: discussionAvailability({
+      discussion: {
+        status: 'required',
+        currentRevision: sourceChecks > 1 ? 2 : 1,
+        triggerExposureMicrousd: sourceChecks > 1 ? 22_000_000 : 21_319_200,
+      },
+    }),
+  });
+
+  await page.goto('/repositories/202');
+  await page
+    .getByRole('button', { name: 'Stop paid setup for this policy' })
+    .click();
+  const confirmation = page.getByText('Confirm that paid setup should stop', {
+    exact: false,
+  });
+  await expect(confirmation).toBeVisible();
+  await page.getByRole('button', { name: 'Check GitHub' }).click();
+  await expect(confirmation).toHaveCount(0);
+  await expect(
+    page.getByRole('button', { name: 'Stop paid setup for this policy' }),
+  ).toBeVisible();
+  expect(sourceChecks).toBe(2);
+});
+
+test('reuses the exact setup decision after an uncertain service response', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  flow.availability = async () => ({
+    status: 200,
+    data: discussionAvailability(),
+  });
+  let attempts = 0;
+  flow.decision = async () => {
+    attempts += 1;
+    return attempts === 1
+      ? {
+          status: 503,
+          data: { error: { code: 'service_unavailable', retryable: true } },
+        }
+      : {
+          status: 200,
+          data: { status: 'existing', ...decidedAvailability('acknowledged') },
+        };
+  };
+
+  await page.goto('/');
+  await page
+    .getByRole('button', { name: 'Continue setup through $25' })
+    .click();
+  await expect(
+    page.getByRole('button', { name: 'Retry setup budget decision' }),
+  ).toBeVisible();
+  await page
+    .getByRole('button', { name: 'Retry setup budget decision' })
+    .click();
+  await expect(
+    page.getByText('existing setup budget decision was confirmed', {
+      exact: false,
+    }),
+  ).toBeVisible();
+  const decisions = flow.calls.filter(
+    ({ path }) => path === '/api/setup-budget-decision',
+  );
+  expect(decisions).toHaveLength(2);
+  expect(decisions[1].body).toEqual(decisions[0].body);
+  expect(decisions[0].body.decisionId).toMatch(/^[a-f0-9]{64}$/u);
+  expect(
+    flow.calls.filter(({ path }) => path.endsWith('/report-jobs')),
+  ).toEqual([]);
+});
+
+test('defers a terminal-job budget refresh until an explicit reload completes', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  const terminal = deferred();
+  const pollStarted = deferred();
+  const reloadStarted = deferred();
+  const reloadResponse = deferred();
+  let availabilityReads = 0;
+  let reloadInFlight = false;
+  let terminalCompleted = false;
+  flow.boards.set(
+    202,
+    savedBoard(repositories[1], {
+      activeJob: safeJob('analyzing', { operation: 'refresh' }),
+    }),
+  );
+  flow.availability = async () => {
+    availabilityReads += 1;
+    if (reloadInFlight) {
+      reloadStarted.resolve();
+      await reloadResponse.promise;
+      return { status: 200, data: discussionAvailability() };
+    }
+    return {
+      status: 200,
+      data: terminalCompleted
+        ? analysisAvailability({
+            setupBudget: setupBudget({
+              status: 'available',
+              settledMicrousd: 14_000_000,
+              discussion: {
+                status: 'acknowledged',
+                currentRevision: 1,
+                triggerExposureMicrousd: 21_319_200,
+              },
+            }),
+          })
+        : discussionAvailability(),
+    };
+  };
+  flow.decision = async () => ({
+    status: 503,
+    data: { error: { code: 'service_unavailable', retryable: true } },
+  });
+  flow.job = async () => {
+    pollStarted.resolve();
+    await terminal.promise;
+    terminalCompleted = true;
+    return {
+      status: 200,
+      data: {
+        job: safeJob('failed', {
+          operation: 'refresh',
+          errorCode: 'analysis_output_invalid',
+        }),
+      },
+    };
+  };
+
+  await page.goto('/repositories/202');
+  await pollStarted.promise;
+  await page
+    .getByRole('button', { name: 'Continue setup through $25' })
+    .click();
+  await expect(
+    page.getByRole('button', { name: 'Reload setup spending' }),
+  ).toBeVisible();
+  const readsBeforeReload = availabilityReads;
+  reloadInFlight = true;
+  await page.getByRole('button', { name: 'Reload setup spending' }).click();
+  await reloadStarted.promise;
+  terminal.resolve();
+  await expect(page.getByRole('alert')).toContainText(
+    'did not produce a valid report',
+  );
+  expect(availabilityReads).toBe(readsBeforeReload + 1);
+
+  reloadInFlight = false;
+  reloadResponse.resolve();
+  await expect.poll(() => availabilityReads).toBe(readsBeforeReload + 2);
+  await expect(
+    page
+      .getByRole('heading', { name: 'Setup analysis spending' })
+      .locator('..'),
+  ).toContainText('Measured setup exposure is $14.00');
+});
+
+test('defers a terminal-job budget refresh until a setup decision completes', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  const terminal = deferred();
+  const pollStarted = deferred();
+  const decision = deferred();
+  let availabilityReads = 0;
+  let terminalCompleted = false;
+  flow.boards.set(
+    202,
+    savedBoard(repositories[1], {
+      activeJob: safeJob('analyzing', { operation: 'refresh' }),
+    }),
+  );
+  flow.availability = async () => {
+    availabilityReads += 1;
+    return {
+      status: 200,
+      data: terminalCompleted
+        ? analysisAvailability({
+            setupBudget: setupBudget({
+              status: 'available',
+              settledMicrousd: 12_000_000,
+              discussion: {
+                status: 'acknowledged',
+                currentRevision: 1,
+                triggerExposureMicrousd: 21_319_200,
+              },
+            }),
+          })
+        : discussionAvailability(),
+    };
+  };
+  flow.job = async () => {
+    pollStarted.resolve();
+    await terminal.promise;
+    terminalCompleted = true;
+    return {
+      status: 200,
+      data: {
+        job: safeJob('failed', {
+          operation: 'refresh',
+          errorCode: 'analysis_output_invalid',
+        }),
+      },
+    };
+  };
+  flow.decision = async () => {
+    await decision.promise;
+    return {
+      status: 200,
+      data: { status: 'updated', ...decidedAvailability('acknowledged') },
+    };
+  };
+
+  await page.goto('/repositories/202');
+  await pollStarted.promise;
+  const continueSetup = page.getByRole('button', {
+    name: 'Continue setup through $25',
+  });
+  await expect(continueSetup).toBeEnabled();
+  await continueSetup.click();
+  const readsBeforeTerminal = availabilityReads;
+  terminal.resolve();
+  await expect(page.getByRole('alert')).toContainText(
+    'did not produce a valid report',
+  );
+  expect(availabilityReads).toBe(readsBeforeTerminal);
+
+  decision.resolve();
+  await expect(
+    page.getByText('setup budget decision was recorded', { exact: false }),
+  ).toBeVisible();
+  await expect.poll(() => availabilityReads).toBe(readsBeforeTerminal + 1);
+  await expect(
+    page
+      .getByRole('heading', { name: 'Setup analysis spending' })
+      .locator('..'),
+  ).toContainText('Measured setup exposure is $12.00');
+  await expect(continueSetup).toHaveCount(0);
+});
+
+test('refreshes setup spending after a successful job races with a decision', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  const terminal = deferred();
+  const pollStarted = deferred();
+  const boardReloaded = deferred();
+  const decision = deferred();
+  let availabilityReads = 0;
+  let terminalCompleted = false;
+  let reportReads = 0;
+  let sourceChecks = 0;
+  flow.boards.set(
+    202,
+    savedBoard(repositories[1], {
+      activeJob: safeJob('analyzing', { operation: 'refresh' }),
+    }),
+  );
+  flow.report = async () => {
+    reportReads += 1;
+    if (reportReads > 1) boardReloaded.resolve();
+    return { status: 200, data: flow.boards.get(202) };
+  };
+  flow.availability = async () => {
+    availabilityReads += 1;
+    return {
+      status: 200,
+      data: terminalCompleted
+        ? analysisAvailability({
+            setupBudget: setupBudget({
+              status: 'available',
+              settledMicrousd: 13_000_000,
+              discussion: {
+                status: 'acknowledged',
+                currentRevision: 1,
+                triggerExposureMicrousd: 21_319_200,
+              },
+            }),
+          })
+        : discussionAvailability(),
+    };
+  };
+  flow.check = async () => {
+    sourceChecks += 1;
+    return { status: 200, data: sourceSummary() };
+  };
+  flow.job = async () => {
+    pollStarted.resolve();
+    await terminal.promise;
+    terminalCompleted = true;
+    flow.boards.set(202, savedBoard());
+    return {
+      status: 200,
+      data: { job: safeJob('succeeded', { operation: 'refresh' }) },
+    };
+  };
+  flow.decision = async () => {
+    await decision.promise;
+    return {
+      status: 200,
+      data: { status: 'updated', ...decidedAvailability('acknowledged') },
+    };
+  };
+
+  await page.goto('/repositories/202');
+  await pollStarted.promise;
+  const continueSetup = page.getByRole('button', {
+    name: 'Continue setup through $25',
+  });
+  await expect(continueSetup).toBeEnabled();
+  await continueSetup.click();
+  const readsBeforeTerminal = availabilityReads;
+  const checksBeforeTerminal = sourceChecks;
+  terminal.resolve();
+  await boardReloaded.promise;
+  expect(availabilityReads).toBe(readsBeforeTerminal);
+  expect(sourceChecks).toBe(checksBeforeTerminal);
+
+  decision.resolve();
+  await expect.poll(() => availabilityReads).toBe(readsBeforeTerminal + 2);
+  await expect.poll(() => sourceChecks).toBe(checksBeforeTerminal + 1);
+  await expect(
+    page
+      .getByRole('heading', { name: 'Setup analysis spending' })
+      .locator('..'),
+  ).toContainText('Measured setup exposure is $13.00');
+  await expect(continueSetup).toHaveCount(0);
+});
+
+test('replaces setup spending with the conflict projection for fresh review', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  flow.availability = async () => ({
+    status: 200,
+    data: discussionAvailability(),
+  });
+  const changed = discussionAvailability({
+    settledMicrousd: 9_000_000,
+    reservedMicrousd: 1_500_000,
+    unknownMicrousd: 500_000,
+    discussion: {
+      status: 'required',
+      currentRevision: 2,
+      triggerExposureMicrousd: 22_000_000,
+    },
+  });
+  flow.decision = async () => ({
+    status: 200,
+    data: { status: 'conflict', ...changed },
+  });
+
+  await page.goto('/');
+  await page
+    .getByRole('button', { name: 'Continue setup through $25' })
+    .click();
+  await expect(page.getByRole('alert')).toContainText(
+    'Review the current measured exposure before deciding again',
+  );
+  const section = page
+    .getByRole('heading', { name: 'Setup analysis spending' })
+    .locator('..');
+  await expect(section).toContainText('Measured setup exposure is $11.00');
+  await expect(section).toContainText('$9.00 settled');
+  await expect(section).toContainText(
+    'projected worst-case exposure that triggered review is $22.00',
+  );
+  expect(
+    flow.calls.filter(({ path }) => path === '/api/setup-budget-decision'),
+  ).toHaveLength(1);
   expect(
     flow.calls.filter(({ path }) => path.endsWith('/report-jobs')),
   ).toEqual([]);
@@ -281,6 +1165,7 @@ test('rejects a contradictory available response for a new board', async ({
         reason: 'budget_exhausted',
       },
       analysisReadiness: { ready: true, reason: null },
+      setupBudget: setupBudget(),
     },
   });
   await page.goto('/repositories/202');

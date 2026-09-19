@@ -12,6 +12,7 @@ import {
   projectSpendLedger,
   removeCompletedSetupJob,
   reserveSetupJob,
+  spendBreakdownMicrousd,
   updateSetupAttempt,
 } from './spend.mjs';
 
@@ -201,6 +202,7 @@ function safeSummary(ledger, at) {
   const policy = ledger.policies[policyId];
   const discussion = ledger.discussions[policyId] ?? null;
   const exposure = exposureMicrousd(ledger);
+  const observed = spendBreakdownMicrousd(ledger);
   const nextReservationMicrousd =
     SETUP_SPEND_LIMITS.maximumAttempts * SETUP_SPEND_LIMITS.attemptCostMicrousd;
   const expired = Date.parse(at) >= Date.parse(policy.pricingValidThrough);
@@ -218,15 +220,17 @@ function safeSummary(ledger, at) {
   return Object.freeze({
     mode: 'setup',
     status,
+    currency: 'USD',
     policyId,
     model: policy.model,
+    settledMicrousd: observed.settledMicrousd,
+    reservedMicrousd: observed.reservedMicrousd,
+    unknownMicrousd: observed.unknownMicrousd,
     exposureMicrousd: exposure,
-    settledMicrousd: ledger.settledMicrousd,
     capMicrousd: policy.capMicrousd,
     discussionMicrousd: policy.discussionMicrousd,
     remainingMicrousd: Math.max(0, policy.capMicrousd - exposure),
     pricingValidThrough: policy.pricingValidThrough,
-    activeJobCount: Object.keys(ledger.active).length,
     discussion:
       discussion === null
         ? null
@@ -717,7 +721,9 @@ function decisionMatches(found, input) {
   return (
     found.policyId === input.policyId &&
     found.decision.triggerRevision === input.triggerRevision &&
-    found.decision.observedExposureMicrousd ===
+    found.decision.observed.settledMicrousd +
+      found.decision.observed.reservedMicrousd +
+      found.decision.observed.unknownMicrousd ===
       input.observedExposureMicrousd &&
     found.decision.decision === input.decision &&
     found.decision.authorizedThroughMicrousd ===
@@ -730,11 +736,30 @@ function currentDecisionMatches(found, input, decision) {
   return (
     found.policyId === input.policyId &&
     found.decision.triggerRevision === input.discussionRevision &&
+    same(found.decision.observed, input.observed) &&
     found.decision.decision === decision &&
     found.decision.authorizedThroughMicrousd ===
       input.authorizedThroughMicrousd &&
     same(found.decision.authorizedOperations, input.authorizedOperations)
   );
+}
+
+function observedBreakdown(value) {
+  if (
+    value === null ||
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype ||
+    Reflect.ownKeys(value).length !== 3 ||
+    !['settledMicrousd', 'reservedMicrousd', 'unknownMicrousd'].every(
+      (key) => Object.hasOwn(value, key) && integer(value[key]),
+    )
+  )
+    throw unavailable();
+  const exposureMicrousd =
+    value.settledMicrousd + value.reservedMicrousd + value.unknownMicrousd;
+  if (!Number.isSafeInteger(exposureMicrousd)) throw unavailable();
+  return exposureMicrousd;
 }
 
 function validateDecisionInput(input) {
@@ -832,11 +857,11 @@ export async function applyCurrentSetupDiscussionDecision(input) {
     input.authorizedOperations.some((operation) => !OPERATIONS.has(operation))
   )
     throw unavailable();
+  observedBreakdown(input.observed);
   iso(input.at);
   const current = await readLedger(selected);
   if (current === null) throw unavailable();
   bindCurrentLedger(current.ledger, selected);
-  if (input.policyId !== current.ledger.activePolicyId) throw unavailable();
   const existing = findDecision(current.ledger, input.decisionId);
   if (existing) {
     if (!currentDecisionMatches(existing, input, decision)) throw unavailable();
@@ -845,6 +870,14 @@ export async function applyCurrentSetupDiscussionDecision(input) {
       spend: safeSummary(current.ledger, input.at),
     });
   }
+  if (input.policyId !== current.ledger.activePolicyId) throw unavailable();
+  const summary = safeSummary(current.ledger, input.at);
+  if (
+    input.observed.settledMicrousd !== summary.settledMicrousd ||
+    input.observed.reservedMicrousd !== summary.reservedMicrousd ||
+    input.observed.unknownMicrousd !== summary.unknownMicrousd
+  )
+    return Object.freeze({ status: 'conflict', spend: summary });
   const discussion = current.ledger.discussions[input.policyId];
   if (
     discussion?.status !== 'required' ||
@@ -854,7 +887,7 @@ export async function applyCurrentSetupDiscussionDecision(input) {
       status: 'conflict',
       spend: safeSummary(current.ledger, input.at),
     });
-  const observedExposureMicrousd = exposureMicrousd(current.ledger);
+  const observedExposureMicrousd = observedBreakdown(input.observed);
   const ledger = decideSetupDiscussion(current.ledger, {
     policyId: input.policyId,
     triggerRevision: input.discussionRevision,

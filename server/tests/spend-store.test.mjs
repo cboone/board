@@ -37,6 +37,24 @@ const context = (storage) => ({
 });
 const authorize = async () => true;
 
+function observedBreakdown(ledger) {
+  let reservedMicrousd = 0;
+  let unknownMicrousd = 0;
+  for (const entry of Object.values(ledger.active)) {
+    for (const attempt of entry.attempts) {
+      if (attempt.state === 'reserved')
+        reservedMicrousd += attempt.ceilingMicrousd;
+      else if (attempt.state === 'unknown')
+        unknownMicrousd += attempt.unknownExposureMicrousd;
+    }
+  }
+  return {
+    settledMicrousd: ledger.settledMicrousd,
+    reservedMicrousd,
+    unknownMicrousd,
+  };
+}
+
 function memoryStorage() {
   let current = null;
   let sequence = 0;
@@ -106,19 +124,25 @@ test('ledger creation resolves a lost acknowledgement and exposes only a safe su
   assert.deepEqual(Object.keys(summary), [
     'mode',
     'status',
+    'currency',
     'policyId',
     'model',
-    'exposureMicrousd',
     'settledMicrousd',
+    'reservedMicrousd',
+    'unknownMicrousd',
+    'exposureMicrousd',
     'capMicrousd',
     'discussionMicrousd',
     'remainingMicrousd',
     'pricingValidThrough',
-    'activeJobCount',
     'discussion',
   ]);
   assert.equal(summary.mode, 'setup');
   assert.equal(summary.status, 'available');
+  assert.equal(summary.currency, 'USD');
+  assert.equal(summary.settledMicrousd, 0);
+  assert.equal(summary.reservedMicrousd, 0);
+  assert.equal(summary.unknownMicrousd, 0);
   assert.equal(summary.exposureMicrousd, 0);
   assert.equal(summary.capMicrousd, 25_000_000);
   assert.ok(!JSON.stringify(summary).includes('accountingDigest'));
@@ -131,6 +155,72 @@ test('ledger creation resolves a lost acknowledgement and exposes only a safe su
       at: at(5),
     }),
     { code: 'service_unavailable' },
+  );
+});
+
+test('safe summary partitions exact exposure into settled, reserved, and unknown amounts', async () => {
+  const storage = memoryStorage();
+  await setup(storage);
+  await reserveSetupSpend({
+    ...context(storage),
+    jobId: id('a'),
+    operation: 'generate',
+    at: at(5),
+    revalidate: authorize,
+  });
+  const reserved = await readSetupSpendSummary({
+    ...context(storage),
+    at: at(6),
+  });
+  assert.deepEqual(
+    {
+      settledMicrousd: reserved.settledMicrousd,
+      reservedMicrousd: reserved.reservedMicrousd,
+      unknownMicrousd: reserved.unknownMicrousd,
+      exposureMicrousd: reserved.exposureMicrousd,
+    },
+    {
+      settledMicrousd: 0,
+      reservedMicrousd: 10_819_200,
+      unknownMicrousd: 0,
+      exposureMicrousd: 10_819_200,
+    },
+  );
+  await settleSetupAttempt({
+    ...context(storage),
+    jobId: id('a'),
+    attemptNumber: 1,
+    actualCostMicrousd: 123_456,
+    at: at(7),
+    revalidate: authorize,
+  });
+  await markSetupAttemptUnknown({
+    ...context(storage),
+    jobId: id('a'),
+    attemptNumber: 2,
+    actualCostMicrousd: 0,
+    unknownExposureMicrousd: SETUP_SPEND_LIMITS.attemptCostMicrousd,
+    pricingReviewRequired: false,
+    at: at(8),
+    revalidate: authorize,
+  });
+  const mixed = await readSetupSpendSummary({
+    ...context(storage),
+    at: at(9),
+  });
+  assert.deepEqual(
+    {
+      settledMicrousd: mixed.settledMicrousd,
+      reservedMicrousd: mixed.reservedMicrousd,
+      unknownMicrousd: mixed.unknownMicrousd,
+      exposureMicrousd: mixed.exposureMicrousd,
+    },
+    {
+      settledMicrousd: 123_456,
+      reservedMicrousd: 0,
+      unknownMicrousd: 5_409_600,
+      exposureMicrousd: 5_533_056,
+    },
   );
 });
 
@@ -186,6 +276,10 @@ test('concurrent reservations revalidate after CAS conflict and install one thre
   });
   assert.equal(gated.status, 'discussion-required');
   assert.equal(storage.metrics.writes, writes);
+  assert.deepEqual(
+    storage.value().discussions[ledger.activePolicyId],
+    ledger.discussions[ledger.activePolicyId],
+  );
 });
 
 test('reservation and attempt accounting are idempotent across lost acknowledgements', async () => {
@@ -1017,8 +1111,27 @@ test('current discussion decisions bind private revision and exposure internally
     decision: 'acknowledge',
     authorizedThroughMicrousd: 25_000_000,
     authorizedOperations: ['refresh'],
+    observed: observedBreakdown(ledger),
     at: at(7),
   };
+  const writes = storage.metrics.writes;
+  const stale = await applyCurrentSetupDiscussionDecision({
+    ...decision,
+    decisionId: id('1'),
+    observed: {
+      ...decision.observed,
+      reservedMicrousd: decision.observed.reservedMicrousd - 1,
+    },
+  });
+  assert.equal(stale.status, 'conflict');
+  assert.equal(storage.metrics.writes, writes);
+  assert.deepEqual(
+    stale.spend,
+    await readSetupSpendSummary({
+      ...context(storage),
+      at: at(7),
+    }),
+  );
   storage.loseNextAcknowledgement();
   const applied = await applyCurrentSetupDiscussionDecision(decision);
   assert.equal(applied.status, 'updated');
@@ -1040,13 +1153,46 @@ test('current discussion decisions bind private revision and exposure internally
     }),
     { code: 'service_unavailable' },
   );
-  const stale = await applyCurrentSetupDiscussionDecision({
+  await assert.rejects(
+    applyCurrentSetupDiscussionDecision({
+      ...decision,
+      observed: {
+        ...decision.observed,
+        settledMicrousd: 1,
+        reservedMicrousd: decision.observed.reservedMicrousd - 1,
+      },
+      at: at(8),
+    }),
+    { code: 'service_unavailable' },
+  );
+  assert.equal(
+    (
+      await reserveSetupSpend({
+        ...context(storage),
+        jobId: id('b'),
+        operation: 'refresh',
+        at: at(8),
+        revalidate: authorize,
+      })
+    ).status,
+    'reserved',
+  );
+  assert.equal(
+    (
+      await applyCurrentSetupDiscussionDecision({
+        ...decision,
+        at: at(9),
+      })
+    ).status,
+    'existing',
+  );
+  const staleRevision = await applyCurrentSetupDiscussionDecision({
     ...decision,
     discussionRevision: decision.discussionRevision + 1,
     decisionId: id('1'),
     at: at(8),
   });
-  assert.equal(stale.status, 'conflict');
-  assert.ok(!Object.hasOwn(stale.spend, 'revision'));
-  assert.ok(!Object.hasOwn(stale.spend, 'observedExposureMicrousd'));
+  assert.equal(staleRevision.status, 'conflict');
+  assert.ok(!Object.hasOwn(staleRevision.spend, 'revision'));
+  assert.ok(!Object.hasOwn(staleRevision.spend, 'observedExposureMicrousd'));
 });

@@ -163,6 +163,8 @@ export function createAnalysisPreflight({
     const existing = await readiness.read({ budget: input.budget });
     if (existing !== null) {
       await input.authorize();
+      await loadState({ ...input, request: requested }, selected, false);
+      await input.authorize();
       return Object.freeze({ marker: existing });
     }
 
@@ -234,6 +236,8 @@ export function createAnalysisPreflight({
         verifiedAt,
       },
     });
+    await input.authorize();
+    await loadState({ ...input, request: requested }, selected, false);
     await input.authorize();
     return Object.freeze({ marker });
   }

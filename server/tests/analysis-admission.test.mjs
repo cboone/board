@@ -6,6 +6,7 @@ import { createJobStore } from '../lib/job-store.mjs';
 import { transitionJob } from '../lib/job-machine.mjs';
 import { deriveAnalysisJobIdentity } from '../lib/jobs.mjs';
 import { repositoryStateKey } from '../lib/report-store.mjs';
+import { spendBreakdownMicrousd } from '../lib/spend.mjs';
 import {
   SETUP_SPEND_LEDGER_KEY,
   applyCurrentSetupDiscussionDecision,
@@ -349,6 +350,7 @@ test('a stopped setup policy maps to analysis unavailable and clears the claim',
     decision: 'stop',
     authorizedThroughMicrousd: 0,
     authorizedOperations: [],
+    observed: spendBreakdownMicrousd(ledger),
     at: NOW,
   });
   const stopped = request({

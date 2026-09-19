@@ -34,6 +34,7 @@ import {
   SETUP_SPEND_LEDGER_KEY,
   ensureSetupSpendLedger,
   listSetupSpendReservations,
+  readSetupSpendSummary,
   readSetupSpendReservation,
   reserveSetupSpend,
 } from '../lib/spend-store.mjs';
@@ -48,6 +49,22 @@ const repository = Object.freeze({
   name: 'widgets',
   private: true,
   url: 'https://github.com/cboone/widgets',
+});
+const emptySetupBudget = () => ({
+  mode: 'setup',
+  status: 'available',
+  currency: 'USD',
+  policyId: 'setup-opus-5-global-standard-v1',
+  model: 'claude-opus-5',
+  settledMicrousd: 0,
+  reservedMicrousd: 0,
+  unknownMicrousd: 0,
+  exposureMicrousd: 0,
+  capMicrousd: 25_000_000,
+  discussionMicrousd: 20_000_000,
+  remainingMicrousd: 25_000_000,
+  pricingValidThrough: '2026-09-26T05:35:41.000Z',
+  discussion: null,
 });
 const jobIdentity = deriveAnalysisJobIdentity({
   ownerId: OWNER_ID,
@@ -358,7 +375,7 @@ async function fixture({
       decisions.push(input);
       return {
         status: 'updated',
-        spend: { mode: 'setup', status: 'available' },
+        spend: emptySetupBudget(),
       };
     },
     now,
@@ -1372,7 +1389,7 @@ test('global admission sweep completes another repository before reserving and d
   assert.equal(sourceCalls, 0);
 });
 
-test('binds the owner decision to the server-side spend transition and returns a minimal projection', async () => {
+test('binds the owner decision to the server-side spend transition and returns current aggregate facts', async () => {
   const board = await fixture();
   const decision = {
     policyId: 'setup-opus-5-global-standard-v1',
@@ -1381,6 +1398,11 @@ test('binds the owner decision to the server-side spend transition and returns a
     decision: 'acknowledge',
     authorizedThroughMicrousd: 25_000_000,
     authorizedOperations: ['generate', 'refresh'],
+    observed: {
+      settledMicrousd: 0,
+      reservedMicrousd: 10_819_200,
+      unknownMicrousd: 0,
+    },
   };
   const result = await board.operations.decideSetupBudget({
     ownerId: OWNER_ID,
@@ -1390,6 +1412,11 @@ test('binds the owner decision to the server-side spend transition and returns a
   assert.deepEqual(result, {
     status: 'updated',
     spendMode: { available: true, mode: 'setup', reason: null },
+    analysisReadiness: {
+      ready: false,
+      reason: 'analysis_preflight_required',
+    },
+    setupBudget: emptySetupBudget(),
   });
   assert.deepEqual(board.decisions[0], {
     storage: board.spendStorage,
@@ -1398,7 +1425,115 @@ test('binds the owner decision to the server-side spend transition and returns a
     ...decision,
     at: NOW,
   });
-  assert.equal(JSON.stringify(result).includes('Microusd'), false);
+  assert.ok(JSON.stringify(result).includes('Microusd'));
+});
+
+test('an exact decision retry activates a new deploy before finding the retained decision', async () => {
+  const reportStorage = memoryStorage();
+  const jobStorage = memoryStorage();
+  const spendStorage = memoryStorage();
+  const spendContext = {
+    storage: spendStorage,
+    budget,
+    deployId: 'deploy-1',
+  };
+  await ensureSetupSpendLedger({ ...spendContext, at: NOW });
+  assert.equal(
+    (
+      await reserveSetupSpend({
+        ...spendContext,
+        jobId: 'a'.repeat(64),
+        operation: 'generate',
+        at: NOW,
+        revalidate: async () => true,
+      })
+    ).status,
+    'reserved',
+  );
+  assert.equal(
+    (
+      await reserveSetupSpend({
+        ...spendContext,
+        jobId: 'b'.repeat(64),
+        operation: 'refresh',
+        at: NOW,
+        revalidate: async () => true,
+      })
+    ).status,
+    'discussion-required',
+  );
+  const gated = await readSetupSpendSummary({ ...spendContext, at: NOW });
+  const decision = {
+    policyId: gated.policyId,
+    discussionRevision: gated.discussion.currentRevision,
+    decisionId: 'c'.repeat(64),
+    decision: 'acknowledge',
+    authorizedThroughMicrousd: 25_000_000,
+    authorizedOperations: ['generate', 'refresh'],
+    observed: {
+      settledMicrousd: gated.settledMicrousd,
+      reservedMicrousd: gated.reservedMicrousd,
+      unknownMicrousd: gated.unknownMicrousd,
+    },
+  };
+  const operationsFor = (deployId) =>
+    createReportOperations({
+      reportStorage,
+      jobStorage,
+      spendStorage,
+      sourceOperations: {
+        async checkRepository() {
+          throw new Error('source must not be read');
+        },
+      },
+      admission: async () => {
+        throw new Error('admission must not run');
+      },
+      reconcile: async () => {},
+      deployId,
+      now: () => NOW,
+    });
+  assert.equal(
+    (
+      await operationsFor('deploy-1').decideSetupBudget({
+        ownerId: OWNER_ID,
+        decision,
+        budget,
+      })
+    ).status,
+    'updated',
+  );
+  const beforeRetry = spendStorage.value(SETUP_SPEND_LEDGER_KEY);
+  assert.equal(beforeRetry.activePolicyId, decision.policyId);
+
+  const nextDeploy = operationsFor('deploy-2');
+  const retried = await nextDeploy.decideSetupBudget({
+    ownerId: OWNER_ID,
+    decision,
+    budget,
+  });
+  assert.equal(retried.status, 'existing');
+  assert.notEqual(retried.setupBudget.policyId, decision.policyId);
+  assert.notEqual(
+    spendStorage.value(SETUP_SPEND_LEDGER_KEY).activePolicyId,
+    decision.policyId,
+  );
+  await assert.rejects(
+    nextDeploy.decideSetupBudget({
+      ownerId: OWNER_ID,
+      decision: { ...decision, authorizedOperations: ['generate'] },
+      budget,
+    }),
+    { code: 'service_unavailable' },
+  );
+  await assert.rejects(
+    nextDeploy.decideSetupBudget({
+      ownerId: OWNER_ID,
+      decision: { ...decision, decisionId: 'd'.repeat(64) },
+      budget,
+    }),
+    { code: 'service_unavailable' },
+  );
 });
 
 test('returns initial analysis availability after a bounded nonpaid reconciliation', async () => {
@@ -1414,9 +1549,17 @@ test('returns initial analysis availability after a bounded nonpaid reconciliati
       ready: false,
       reason: 'analysis_preflight_required',
     },
+    setupBudget: {
+      ...emptySetupBudget(),
+      policyId: result.setupBudget.policyId,
+    },
   });
+  assert.match(
+    result.setupBudget.policyId,
+    /^setup-opus-5-global-standard-v1\.[a-f0-9]{64}$/u,
+  );
   assert.deepEqual(board.reconciliations, [{ ownerId: OWNER_ID, budget }]);
-  assert.equal(JSON.stringify(result).includes('Microusd'), false);
+  assert.ok(JSON.stringify(result).includes('Microusd'));
   assert.notEqual(board.spendStorage.value(SETUP_SPEND_LEDGER_KEY), null);
 });
 

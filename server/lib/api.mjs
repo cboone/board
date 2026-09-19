@@ -273,6 +273,7 @@ function decisionRequest(value) {
       'decision',
       'authorizedThroughMicrousd',
       'authorizedOperations',
+      'observed',
     ]) ||
     typeof value.policyId !== 'string' ||
     !/^[a-z0-9][a-z0-9._-]{0,127}$/u.test(value.policyId) ||
@@ -293,7 +294,22 @@ function decisionRequest(value) {
     ) ||
     (value.decision === 'stop' &&
       (value.authorizedThroughMicrousd !== 0 ||
-        value.authorizedOperations.length !== 0))
+        value.authorizedOperations.length !== 0)) ||
+    !exact(value.observed, [
+      'settledMicrousd',
+      'reservedMicrousd',
+      'unknownMicrousd',
+    ]) ||
+    ![
+      value.observed.settledMicrousd,
+      value.observed.reservedMicrousd,
+      value.observed.unknownMicrousd,
+    ].every((amount) => Number.isSafeInteger(amount) && amount >= 0) ||
+    !Number.isSafeInteger(
+      value.observed.settledMicrousd +
+        value.observed.reservedMicrousd +
+        value.observed.unknownMicrousd,
+    )
   )
     throw new BoardError('invalid_request');
   return {
@@ -303,6 +319,11 @@ function decisionRequest(value) {
     decision: value.decision,
     authorizedThroughMicrousd: value.authorizedThroughMicrousd,
     authorizedOperations: [...value.authorizedOperations],
+    observed: {
+      settledMicrousd: value.observed.settledMicrousd,
+      reservedMicrousd: value.observed.reservedMicrousd,
+      unknownMicrousd: value.observed.unknownMicrousd,
+    },
   };
 }
 
