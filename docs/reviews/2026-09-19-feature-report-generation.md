@@ -62,18 +62,21 @@ Primary files: `server/lib/analysis-input.mjs`,
 ### No-spend analysis preflight
 
 The owner- and CSRF-protected preflight route accepts the exact repository,
-operation, and expected-current-report tuple. It performs a fresh GitHub source
-check, prepares the bounded input, retrieves fixed-model metadata, and calls
-token counting through a provider surface that does not expose Messages. It
-persists one source-free readiness marker bound to the deploy, setup policy,
-model contract, and request contract.
+operation, and expected-current-report tuple. Every call pins current repository
+access. When the deployment has no marker, preflight performs a fresh GitHub
+source check, prepares the bounded input, retrieves fixed-model metadata, and
+calls token counting through a provider surface that does not expose Messages.
+That first verification persists one source-free readiness marker bound to the
+deploy, setup policy, model contract, and request contract.
 
 Admission requires the current marker and rejects a missing, malformed, stale,
-or foreign marker. Reusing an existing marker still revalidates the exact
-report tuple and active-job state. A new preflight repeats that same validation
-after marker publication, closing the interval in which another request could
-claim the repository while metadata and token counting completed. Lost marker
-acknowledgements and concurrent create-only writes converge on the same
+or foreign marker. Reusing an existing marker skips full source and provider
+setup while revalidating authorization, the exact report tuple, and active-job
+state. The paid worker independently recollects and recounts its current source
+before the paid boundary. New marker creation repeats the tuple and active-job
+validation after publication, closing the interval in which another request
+could claim the repository while metadata and token counting completed. Lost
+marker acknowledgements and concurrent create-only writes converge on the same
 canonical marker without another provider setup call.
 
 Primary files: `server/lib/analysis-preflight-readiness.mjs`,
@@ -279,6 +282,12 @@ phase-plan documents.
     appears instead of assuming Firefox records that later request in the same
     rendering turn. The assertion still requires the exact repository-check
     method and path before generation proceeds.
+16. **Preflight source-freshness wording:** Exact-head Copilot review found a
+    documentation discrepancy in the reused-marker path. The review and pull
+    request now distinguish the full source check used to create a marker from
+    later calls that repin current access and revalidate report state without
+    another full source or provider request. The worker still recollects and
+    recounts the source used for paid analysis.
 
 ## Plan compliance
 
