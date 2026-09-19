@@ -335,6 +335,12 @@ phase-plan documents.
     test confirms that an admitted first-generation job stays out of the saved
     report catalog while the direct report endpoint returns its active job for
     polling and recovery.
+23. **Synthetic idempotency fingerprints:** Full-history Gitleaks classified two
+    UUID fixtures added by the admission and catalog regressions as generic API
+    keys. The repository's exact-fingerprint allowlist now names only those two
+    introducing-commit, path, rule, and line combinations. No file-wide,
+    rule-wide, or value-pattern exclusion was added. The complete local
+    full-history scan passes with no leaks.
 
 ## Plan compliance
 
