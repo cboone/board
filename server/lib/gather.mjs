@@ -858,7 +858,7 @@ async function resolveReference(client, repo, entry, reads) {
 
 async function gatherPass(
   client,
-  { appId, ownerId, repositoryId, budget, immutable },
+  { appId, ownerId, repositoryId, budget, immutable, onRepositoryPinned },
 ) {
   const repository = await pinRepository(
     client,
@@ -867,6 +867,7 @@ async function gatherPass(
     repositoryId,
     budget,
   );
+  if (onRepositoryPinned) await onRepositoryPinned(selection(repository));
   const prefix = pathPrefix(repository);
   const [issueItems, pullItems, milestoneItems, labelItems, branchItems] =
     await completeAll([
@@ -1272,8 +1273,28 @@ export function createSourceOperations({
     },
     async checkRepository(options) {
       const selectedRepositoryId = repositoryId(options);
+      if (
+        options.onRepositoryPinned !== undefined &&
+        typeof options.onRepositoryPinned !== 'function'
+      )
+        throw new BoardError('invalid_request');
       const { client, budget } = prepare(options);
       const observedFrom = new Date(now()).toISOString();
+      let pinHookCalled = false;
+      let pinHookFailed = false;
+      const onRepositoryPinned =
+        options.onRepositoryPinned === undefined
+          ? undefined
+          : async (repository) => {
+              if (pinHookCalled) return;
+              pinHookCalled = true;
+              try {
+                await options.onRepositoryPinned(repository);
+              } catch (error) {
+                pinHookFailed = true;
+                throw error;
+              }
+            };
       const immutable = {
         comparisons: new Map(),
         trees: new Map(),
@@ -1287,6 +1308,7 @@ export function createSourceOperations({
             repositoryId: selectedRepositoryId,
             budget,
             immutable,
+            onRepositoryPinned,
           };
           const first = await gatherPass(client, parameters);
           const second = await gatherPass(client, parameters);
@@ -1297,6 +1319,7 @@ export function createSourceOperations({
           budget.assertActive();
           return summarize(second, observedFrom, new Date(now()).toISOString());
         } catch (error) {
+          if (pinHookFailed) throw error;
           if (error.code !== 'source_unstable' || attempt !== 0) throw error;
         }
       }

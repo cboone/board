@@ -548,10 +548,16 @@ export function clearRepositoryJob(input, { jobId, lastAnalysisAttempt }) {
 
 export function beginSourceCheck(input, { startedAt }) {
   const state = projectRepositoryState(input);
+  const checkedAt = iso(startedAt);
+  if (
+    state.sourceCheck !== null &&
+    Date.parse(checkedAt) < Date.parse(state.sourceCheck.startedAt)
+  )
+    throw new BoardError('source_unstable');
   const next = clone(state);
   next.sourceCheck = {
     sequence: (next.sourceCheck?.sequence ?? 0) + 1,
-    startedAt: iso(startedAt),
+    startedAt: checkedAt,
     completedAt: null,
     status: 'checking',
     summary: null,

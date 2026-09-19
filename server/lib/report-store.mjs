@@ -180,12 +180,14 @@ function withRepositoryIdentity(state, repository) {
   });
 }
 
-/** Create admission state once, or CAS-refresh its last trusted identity. */
+/** Create state once and optionally CAS-refresh its last trusted identity. */
 export async function readOrCreateRepositoryState({
   storage,
   budget,
   repository,
+  refreshIdentity = true,
 }) {
+  if (typeof refreshIdentity !== 'boolean') throw unavailable();
   const identity = projectRepositoryIdentity(repository);
   const options = stateOptions(storage, budget, identity.id);
   const current = await readProjectedRecord(options);
@@ -200,7 +202,8 @@ export async function readOrCreateRepositoryState({
   }
   const updated = await updateProjectedRecord({
     ...options,
-    update: (state) => withRepositoryIdentity(state, identity),
+    update: (state) =>
+      refreshIdentity ? withRepositoryIdentity(state, identity) : state,
   });
   return resultRecord(updated, 'state');
 }

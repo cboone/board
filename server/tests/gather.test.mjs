@@ -5,6 +5,7 @@ import {
   isKnownCredentialPath,
   selectSourceFiles,
 } from '../lib/gather.mjs';
+import { BoardError } from '../lib/errors.mjs';
 import { createOperationBudget, SOURCE_LIMITS } from '../lib/source-limits.mjs';
 import { validateReport } from '../../src/domain/report-contract.js';
 import {
@@ -197,6 +198,63 @@ test('lightweight repository access pins only current eligibility and the defaul
     defaultBranch: repo.default_branch,
     defaultTip: TIP,
   });
+  assert.deepEqual(
+    provider.calls.map((call) => call.url.pathname),
+    [
+      '/user/installations',
+      '/user/installations/1/repositories',
+      '/repos/cboone/widgets',
+      '/repos/cboone/widgets/branches/main',
+    ],
+  );
+});
+test('a source check calls its optional pinned hook once before inventory collection', async () => {
+  const provider = fixtureProvider();
+  const observations = [];
+  const result = await operations(provider).checkRepository(
+    params({
+      async onRepositoryPinned(repository) {
+        observations.push({
+          repository,
+          paths: provider.calls.map((call) => call.url.pathname),
+        });
+      },
+    }),
+  );
+  assert.equal(result.summary.status, 'complete');
+  assert.deepEqual(observations, [
+    {
+      repository: {
+        id: repo.id,
+        fullName: repo.full_name,
+        name: repo.name,
+        private: repo.private,
+        url: repo.html_url,
+      },
+      paths: [
+        '/user/installations',
+        '/user/installations/1/repositories',
+        '/repos/cboone/widgets',
+        '/repos/cboone/widgets/branches/main',
+      ],
+    },
+  ]);
+});
+test('a pinned-hook source error is not retried as source instability', async () => {
+  const provider = fixtureProvider();
+  let calls = 0;
+  await assert.rejects(
+    operations(provider).checkRepository(
+      params({
+        onRepositoryPinned() {
+          calls += 1;
+          throw new BoardError('source_unstable');
+        },
+      }),
+    ),
+    { code: 'source_unstable' },
+  );
+  assert.equal(calls, 1);
   assert.deepEqual(
     provider.calls.map((call) => call.url.pathname),
     [
