@@ -298,9 +298,10 @@ expired pre-provider job belonging to another repository. Such entries could
 retain reservations and fill the four-entry ledger indefinitely.
 
 Required resolution: before every reservation, inspect all at-most-four active
-jobs and run state-specific nonpaid reconciliation for expired entries. Leave
-live and unknown entries untouched, and reject new paid work while an expired
-entry remains unresolved.
+jobs and run state-specific nonpaid reconciliation for every terminal entry
+with pending accounting and every expired nonterminal entry. Leave live
+nonterminal and unknown entries untouched, and reject new paid work while a
+terminal-pending or expired entry remains unresolved.
 
 Disposition: resolved in the third corrected plan; exact-commit re-review
 pending.

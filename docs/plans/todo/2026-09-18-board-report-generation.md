@@ -990,11 +990,12 @@ that proves absence resolves its lost acknowledgement. Thus the ledger retains
 only active or unresolved exposure, while job records retain terminal history.
 
 Before every new reservation, inspect all at-most-four active entries and their
-jobs. Run the state-specific nonpaid reconciler for each expired entry,
-including pre-provider `reserved`, `dispatchable`, `collecting`, and `counting`
-jobs from other repositories; remove entries whose jobs prove known accounting
-complete. Leave live paid/pre-provider work and unresolved unknown exposure
-untouched. Do not admit new paid work while an expired entry remains
+jobs. Run the state-specific nonpaid reconciler for every terminal entry with
+pending accounting and every expired nonterminal entry, including pre-provider
+`reserved`, `dispatchable`, `collecting`, and `counting` jobs from other
+repositories; remove entries whose jobs prove known accounting complete. Leave
+only live nonterminal work and unresolved unknown exposure untouched. Do not
+admit new paid work while a terminal-pending or expired entry remains
 unreconciled. Setup exposure permits at most two simultaneously fully reserved
 jobs and at most four full-ceiling unknown attempts, so the four-entry bound is
 compatible with the cap. A future production policy must define its own
@@ -1417,7 +1418,8 @@ Before any paid call, verify in the deployed artifact:
   global accounting head with job B, then prove A recovers from its own active
   entry's transition ID/sequence/digest without replaying settlement. Fill the
   active map with interrupted pre-provider jobs from other repositories, expire
-  them, and prove a new admission reconciles their job/accounting/claim order
+  them, and separately interrupt after a terminal job CAS but before its ledger
+  settlement. Prove a new admission reconciles each job/accounting/claim order
   within the four-entry bound before reserving.
 - Race identical and different idempotency keys, concurrent repositories,
   global cross-repository UUID reuse, active-job claims, source checks, catalog
