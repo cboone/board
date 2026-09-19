@@ -329,10 +329,18 @@ Current-tree validation includes:
 - root and server dependency audits with zero vulnerabilities;
 - fixture and production builds with their artifact verifiers; and
 - frontend and server lint, formatting, `actionlint`, Markdown lint, and
-  `git diff --check`.
+  `git diff --check`;
+- exact full-history Gitleaks scanning with no leaks; and
+- the exact v3.2.0 TruffleHog workflow command with zero verified findings and
+  one known indeterminate historical URI fixture from commit `0e72d14`. The
+  current fixture constructs that URI at runtime and passes a strict
+  current-file scan.
 
-The final pre-push pass must repeat any check affected by subsequent review
-edits and run the repository's exact CI-style Gitleaks and TruffleHog scans.
+A stricter full-history TruffleHog run with `--fail` exits on that reviewed
+historical fixture, so it is not recorded as a strict pass. No file-wide or
+detector-wide exclusion was added. The shared action's missing released strict
+mode and precise, redacted fixture allowlist are tracked in
+[cboone/gh-actions#123](https://github.com/cboone/gh-actions/issues/123).
 
 The final review must also verify signature presence for every new commit. Local
 signature trust may remain unavailable in the sandbox; that limitation must be
