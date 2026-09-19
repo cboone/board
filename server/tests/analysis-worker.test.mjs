@@ -39,11 +39,22 @@ function accounting(sequence, status = 'pending') {
 
 function clock(value = Date.parse('2026-09-19T04:00:00.000Z')) {
   let current = value;
+  let advanceAfterRead = 0;
   return Object.freeze({
-    now: () => current,
+    now: () => {
+      const observed = current;
+      current += advanceAfterRead;
+      advanceAfterRead = 0;
+      return observed;
+    },
     advance: (milliseconds) => {
       current += milliseconds;
       return current;
+    },
+    advanceAfterNextRead: (milliseconds) => {
+      assert.equal(advanceAfterRead, 0);
+      assert.ok(Number.isSafeInteger(milliseconds) && milliseconds >= 0);
+      advanceAfterRead = milliseconds;
     },
   });
 }
@@ -445,7 +456,10 @@ function fixture({
   prepareAdvance = 0,
   responseAdvance = 0,
   afterSettleAdvance = 0,
+  primaryStartAdvance = 0,
+  primaryStartAdvanceAfterRead = 0,
   correctiveStartAdvance = 0,
+  correctiveStartAdvanceAfterRead = 0,
   paidPolicyExpiryAt = null,
   preflightRequiredAt = null,
   pricingVerifiedAt,
@@ -498,8 +512,14 @@ function fixture({
       }
     },
     afterTransition: (event) => {
-      if (event.type === 'corrective-started')
+      if (event.type === 'primary-started') {
+        time.advance(primaryStartAdvance);
+        time.advanceAfterNextRead(primaryStartAdvanceAfterRead);
+      }
+      if (event.type === 'corrective-started') {
         time.advance(correctiveStartAdvance);
+        time.advanceAfterNextRead(correctiveStartAdvanceAfterRead);
+      }
       if (event.type === 'free-lease-claimed' && event.phase === 'counting')
         time.advance(countClaimAdvance);
     },
@@ -1927,6 +1947,19 @@ test('an expired reviewed policy blocks the corrective paid boundary', async () 
   );
 });
 
+test('primary deadline expiry after CAS ownership proof stops before provider dispatch', async () => {
+  const setup = fixture({
+    primaryStartAdvance: 299_999,
+    primaryStartAdvanceAfterRead: 1,
+  });
+  const result = await runWorker(setup);
+  assertUnknownAccounting(result, setup);
+  assert.equal(result.terminal.errorCode, 'analysis_ambiguous');
+  assert.equal(setup.metrics.messages(), 0);
+  assertNoReport(setup);
+  await assertNoAdditionalPaidCall(setup, 0);
+});
+
 test('corrective CAS ownership expiring before dispatch never reaches the provider', async () => {
   const setup = fixture({
     responses: [primaryResponse({ invalid: true })],
@@ -1943,6 +1976,20 @@ test('corrective CAS ownership expiring before dispatch never reaches the provid
     ['settled', 'unknown'],
   );
   assert.equal(setup.metrics.messages(), 1);
+});
+
+test('corrective deadline expiry after CAS ownership proof stops before provider dispatch', async () => {
+  const setup = fixture({
+    responses: [primaryResponse({ invalid: true })],
+    correctiveStartAdvance: 299_999,
+    correctiveStartAdvanceAfterRead: 1,
+  });
+  const result = await runWorker(setup);
+  assertCorrectiveUnknownAccounting(result, setup);
+  assert.equal(result.terminal.errorCode, 'analysis_ambiguous');
+  assert.equal(setup.metrics.messages(), 1);
+  assertNoReport(setup);
+  await assertNoAdditionalPaidCall(setup, 1);
 });
 
 test('authorization revocation before immutable write preserves the saved report', async () => {

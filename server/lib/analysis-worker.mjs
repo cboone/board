@@ -1235,10 +1235,7 @@ export function createAnalysisWorker(input) {
         schema: ANALYSIS_DELTA_SCHEMA,
         signal: deadlineSignal(
           signal,
-          Math.max(
-            1,
-            Date.parse(current.value.stateDeadlineAt) - clockMilliseconds(now),
-          ),
+          Date.parse(current.value.stateDeadlineAt) - clockMilliseconds(now),
         ),
       });
     } catch (error) {
@@ -1612,10 +1609,7 @@ export function createAnalysisWorker(input) {
         schema: ANALYSIS_DELTA_SCHEMA,
         signal: deadlineSignal(
           signal,
-          Math.max(
-            1,
-            Date.parse(current.value.stateDeadlineAt) - clockMilliseconds(now),
-          ),
+          Date.parse(current.value.stateDeadlineAt) - clockMilliseconds(now),
         ),
       });
     } catch (error) {
