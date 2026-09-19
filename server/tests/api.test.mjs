@@ -62,7 +62,7 @@ function summary() {
     ),
   };
 }
-async function setup(sourceOperations) {
+async function setup(sourceOperations, reportOperations = null) {
   const now = () => Date.parse('2026-09-18T12:00:00.000Z');
   const config = testConfig();
   const storage = memoryStorage();
@@ -97,10 +97,11 @@ async function setup(sourceOperations) {
   };
   const done = await authorize();
   const cookies = done.cookies[1].split(';')[0];
-  const request = (path, method = 'GET', headers = {}) =>
+  const request = (path, method = 'GET', headers = {}, body) =>
     new Request(`${ORIGIN}${path}`, {
       method,
       headers: { Cookie: cookies, ...headers },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
   const session = await auth.requireAuthorizedOwner(request('/api/session'));
   const operations = sourceOperations ?? {
@@ -114,9 +115,18 @@ async function setup(sourceOperations) {
     }),
   };
   const budgets = [];
+  let tokenAcquisitions = 0;
+  const apiAuth = {
+    ...auth,
+    async acquireToken(...arguments_) {
+      tokenAcquisitions += 1;
+      return auth.acquireToken(...arguments_);
+    },
+  };
   const api = createApi({
-    auth,
+    auth: apiAuth,
     sourceOperations: operations,
+    reportOperations,
     createOperationBudget: () => {
       const value = budget(now);
       budgets.push(value);
@@ -134,6 +144,7 @@ async function setup(sourceOperations) {
     budgets,
     csrf: { Origin: ORIGIN, 'X-CSRF-Token': session.csrfToken },
     networkCalls: () => networkCalls,
+    tokenAcquisitions: () => tokenAcquisitions,
   };
 }
 
@@ -585,6 +596,242 @@ test('malformed source summaries and unknown provider exceptions return sanitize
       },
     });
   }
+});
+
+test('saved report reads and setup decisions stay on Board storage without acquiring a GitHub token', async () => {
+  const calls = [];
+  const jobId = 'd'.repeat(64);
+  const decision = {
+    policyId: 'setup-v1',
+    discussionRevision: 1,
+    decisionId: 'e'.repeat(64),
+    decision: 'acknowledge',
+    authorizedThroughMicrousd: 25_000_000,
+    authorizedOperations: ['generate', 'refresh'],
+  };
+  const reportOperations = {
+    async listReports(input) {
+      calls.push(['list', input]);
+      return { items: [], nextCursor: null };
+    },
+    async getReport(input) {
+      calls.push(['report', input]);
+      return { marker: 'private-report' };
+    },
+    async pollJob(input) {
+      calls.push(['job', input]);
+      return { marker: 'private-job' };
+    },
+    async decideSetupBudget(input) {
+      calls.push(['decision', input]);
+      return { ok: true };
+    },
+  };
+  const ctx = await setup(undefined, reportOperations);
+  const responses = [
+    await ctx.api(ctx.request('/api/reports?cursor=opaque-cursor')),
+    await ctx.api(ctx.request('/api/repositories/17/report')),
+    await ctx.api(ctx.request(`/api/report-jobs/${jobId}`)),
+    await ctx.api(
+      ctx.request(
+        '/api/setup-budget-decision',
+        'POST',
+        { ...ctx.csrf, 'Content-Type': 'application/json' },
+        decision,
+      ),
+    ),
+  ];
+  assert.deepEqual(
+    await Promise.all(responses.map((response) => response.json())),
+    [
+      { items: [], nextCursor: null },
+      { marker: 'private-report' },
+      { marker: 'private-job' },
+      { ok: true },
+    ],
+  );
+  assert.ok(responses.every((response) => response.status === 200));
+  assert.ok(
+    responses.every(
+      (response) => response.headers.get('cache-control') === 'no-store',
+    ),
+  );
+  assert.equal(ctx.tokenAcquisitions(), 0);
+  assert.equal(ctx.networkCalls(), 2);
+  assert.deepEqual(
+    calls.map(([name, input]) => [
+      name,
+      input.ownerId,
+      input.repositoryId ?? input.jobId ?? input.cursor ?? null,
+    ]),
+    [
+      ['list', 99961, 'opaque-cursor'],
+      ['report', 99961, 17],
+      ['job', 99961, jobId],
+      ['decision', 99961, null],
+    ],
+  );
+  assert.deepEqual(calls[3][1].decision, decision);
+  assert.ok(calls.every(([, input]) => ctx.budgets.includes(input.budget)));
+});
+
+test('analysis admission validates its bounded body before GitHub work and returns 202 after pinning access', async () => {
+  let sourceCalls = 0;
+  let admitted;
+  const sourceOperations = {
+    async listRepositories() {
+      throw new Error('Unexpected listing');
+    },
+    async checkRepositoryAccess(input) {
+      sourceCalls += 1;
+      assert.equal(input.repositoryId, 17);
+      return {
+        ...repo,
+        defaultBranch: 'main',
+        defaultTip: 'a'.repeat(40),
+      };
+    },
+  };
+  const job = {
+    id: 'b'.repeat(64),
+    operation: 'generate',
+    state: 'queued',
+    createdAt: '2026-09-18T12:00:00.000Z',
+    errorCode: null,
+    reportId: null,
+  };
+  const reportOperations = {
+    async admitJob(input) {
+      admitted = input;
+      return { job };
+    },
+  };
+  const ctx = await setup(sourceOperations, reportOperations);
+  const headers = { ...ctx.csrf, 'Content-Type': 'application/json' };
+  const invalid = await ctx.api(
+    ctx.request('/api/repositories/17/report-jobs', 'POST', headers, {
+      idempotencyKey: '123e4567-e89b-42d3-a456-426614174000',
+      operation: 'generate',
+      expectedCurrentReportId: null,
+      unexpected: true,
+    }),
+  );
+  assert.equal(invalid.status, 400);
+  assert.equal(sourceCalls, 0);
+  assert.equal(ctx.tokenAcquisitions(), 0);
+
+  const response = await ctx.api(
+    ctx.request('/api/repositories/17/report-jobs', 'POST', headers, {
+      idempotencyKey: 'ABCDEFAB-CDEF-4ABC-8DEF-ABCDEFABCDEF',
+      operation: 'generate',
+      expectedCurrentReportId: null,
+    }),
+  );
+  assert.equal(response.status, 202);
+  assert.deepEqual(await response.json(), { job });
+  assert.equal(sourceCalls, 1);
+  assert.equal(ctx.tokenAcquisitions(), 1);
+  assert.equal(admitted.ownerId, 99961);
+  assert.equal(admitted.authorizationEpoch, ctx.session.authorizationEpoch);
+  assert.equal(admitted.repository.id, 17);
+  assert.deepEqual(admitted.request, {
+    idempotencyKey: 'abcdefab-cdef-4abc-8def-abcdefabcdef',
+    operation: 'generate',
+    expectedCurrentReportId: null,
+  });
+  assert.equal(admitted.budget, ctx.budgets[1]);
+});
+
+test('report routes reject malformed URLs, JSON, CSRF and operation tuples before delegated work', async () => {
+  let reportCalls = 0;
+  const reportOperations = new Proxy(
+    {},
+    {
+      get() {
+        return async () => {
+          reportCalls += 1;
+          return {};
+        };
+      },
+    },
+  );
+  const ctx = await setup(undefined, reportOperations);
+  const jsonHeaders = { ...ctx.csrf, 'Content-Type': 'application/json' };
+  const cases = [
+    ctx.request('/api/reports?cursor=one&cursor=two'),
+    ctx.request('/api/repositories/17/report?raw=true'),
+    ctx.request('/api/report-jobs/not-a-job'),
+    ctx.request('/api/repositories/17/report-jobs', 'POST', jsonHeaders, {
+      idempotencyKey: '123e4567-e89b-42d3-a456-426614174000',
+      operation: 'refresh',
+      expectedCurrentReportId: null,
+    }),
+    ctx.request('/api/setup-budget-decision', 'POST', jsonHeaders, {
+      policyId: 'setup-v1',
+      discussionRevision: 1,
+      decisionId: 'a'.repeat(64),
+      decision: 'stop',
+      authorizedThroughMicrousd: 1,
+      authorizedOperations: [],
+    }),
+    ctx.request(
+      '/api/repositories/17/report-jobs',
+      'POST',
+      { Origin: ORIGIN, 'Content-Type': 'application/json' },
+      {
+        idempotencyKey: '123e4567-e89b-42d3-a456-426614174000',
+        operation: 'generate',
+        expectedCurrentReportId: null,
+      },
+    ),
+  ];
+  for (const request of cases) {
+    const response = await ctx.api(request);
+    assert.ok([400, 403].includes(response.status));
+  }
+  assert.equal(reportCalls, 0);
+  assert.equal(ctx.tokenAcquisitions(), 0);
+});
+
+test('stored source checks use the report coordinator while the API projects only safe summary fields', async () => {
+  let checked;
+  const value = summary();
+  value.provenance.files[0].contents = 'private-file-content';
+  const ctx = await setup(undefined, {
+    async checkSource(input) {
+      checked = input;
+      return {
+        summary: value,
+        sourceSnapshot: { body: 'private-issue-body' },
+      };
+    },
+  });
+  const response = await ctx.api(
+    ctx.request('/api/repositories/17/check', 'POST', ctx.csrf),
+  );
+  assert.equal(response.status, 200);
+  const serialized = JSON.stringify(await response.json());
+  assert.ok(!serialized.includes('private-file-content'));
+  assert.ok(!serialized.includes('private-issue-body'));
+  assert.equal(checked.ownerId, 99961);
+  assert.equal(checked.repositoryId, 17);
+  assert.equal(checked.accessToken, 'synthetic-access');
+  assert.equal(checked.budget, ctx.budgets[0]);
+});
+
+test('a revoked session cannot return a private report read that finishes later', async () => {
+  let ctx;
+  const reportOperations = {
+    async getReport() {
+      await ctx.auth.logout({ session: ctx.session });
+      return { report: 'private-report-body' };
+    },
+  };
+  ctx = await setup(undefined, reportOperations);
+  const response = await ctx.api(ctx.request('/api/repositories/17/report'));
+  assert.equal(response.status, 401);
+  assert.ok(!JSON.stringify(await response.json()).includes('private-report'));
+  assert.equal(ctx.tokenAcquisitions(), 0);
 });
 
 const environment = () => ({
