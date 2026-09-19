@@ -11,10 +11,11 @@ living-document corrections checked separately.
 
 ## Result
 
-Ready for deployed acceptance and the phase PR. Local verification passes and
-independent authentication, source, frontend, and build reviews are clean.
-Deployed acceptance and current-head PR checks remain separate phase gates.
-Paid analysis and report persistence belong to the following phase.
+Deployed acceptance passed. Local verification passes and independent
+authentication, source, frontend, and build reviews are clean. Current-head PR
+checks and merge remain. Verification of the automatic production deployment is
+a post-merge operational step. Paid analysis and report persistence belong to
+the following phase.
 
 ## Reviewed behavior
 
@@ -81,7 +82,7 @@ No credential files or real repository inputs were used in these reproducers.
 - `git diff --check` passed. Signed checkpoints retain reviewable boundaries;
   the latest build checkpoint's local GPG signature was verified.
 
-## Remaining acceptance
+## Deployed acceptance and remaining phase steps
 
 The existing owned site is `tracker-boards`, ID
 `9ddf762e-9c92-44da-8636-e03913200664`. Reviewed commit
@@ -97,17 +98,20 @@ from production-only environment metadata and owner-confirmed App installation.
 Manual fixture draft `6aadcd18b83e9e153b9c7bbf` is ready in `deploy-preview`
 context with explicit provider inventory of zero Functions. Its static fixture
 welcome and `/demo` routes, CSP, and fixture-only API JSON `404` pass. Fresh
-isolated staging contained no Edge Functions; confirm the provider's zero Edge
-Functions summary. Automatic PR #22 preview `6aadce8caab4cf000879539c` is
-separately
+isolated staging contained no Edge Functions. Automatic PR #22 preview
+`6aadd047dd098e0008ba0705` is separately
 reported ready in `deploy-preview` context from
-`221f4d1fae02b096ebfa7416f01bf4c4bfcf1563`, with zero Functions. Its live
+`c6f5831b07ffe33c18fecfacfcbe285b234cdf9b`, with zero Functions. Its live
 fixture/CSP and static API JSON `404` checks pass. Live owner OAuth and
-public/private source acceptance remain pending; provider zero Edge Functions
-confirmation remains an owner-visible deploy-summary check.
+public/private source acceptance passed on September 18, 2026. The owner
+reported passes for an eligible public repository check, an eligible private
+repository check, and sign-out. The owner also confirmed that the Netlify deploy
+summary showed `Edge Functions: 0`.
 
-Record private acceptance as sanitized pass/fail without private repository
+This review records the private acceptance result without private repository
 identifiers, counts, source tips, issue titles, or screenshots. Deliberate live
 installation revocation is not performed; synthetic tests cover that boundary.
 Anthropic credentials and paid calls are absent. Anthropic setup spending
-remains zero.
+remains zero. Current-head PR CI and review, merge, and verification of the
+automatic production deployment remain operational phase steps; deployment
+verification follows the merge.

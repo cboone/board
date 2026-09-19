@@ -5,7 +5,9 @@ Date: 2026-09-18
 Status: implementation passes local verification against merged baseline
 `f8b78767babe021754873bd60540fbac8500b186`. Independent baseline reviews preceded
 implementation. Final independent implementation reviews are clean. Deployed
-acceptance and current-head PR checks are the remaining phase gates.
+acceptance passes. Current-head PR checks, merge, and the resulting automatic
+production deployment are the remaining phase steps. The deployment verification
+is a post-merge operational check.
 
 ## Outcome and authority
 
@@ -62,8 +64,10 @@ Dependencies before implementation or live acceptance:
 2. The authorized new Netlify site was created in the owned `cboone` Personal
    account, displayed as Catamount Hardware: `tracker-boards`, site ID
    `9ddf762e-9c92-44da-8636-e03913200664`, canonical URL
-   `https://tracker-boards.netlify.app`. It is empty, without a repository link
-   or deployment. Creation does not establish production acceptance.
+   `https://tracker-boards.netlify.app`. It was empty at the planning baseline.
+   It is now connected to `cboone/board`, and the reviewed
+   authentication/source-check composition is deployed and accepted as recorded
+   below.
 3. The registered App is `cboone-tracker-boards`, ID `4995264`, Client ID
    `Iv23liQyjqNGXrULGeSB`, owned by GitHub user `99961`. Independent
    verification confirms `metadata:read`, `issues:read`, `pull_requests:read`,
@@ -71,9 +75,9 @@ Dependencies before implementation or live acceptance:
    personal `cboone` account covering the intended selected repositories and
    generation of the installation-required App private key, with its downloaded
    PEM handled outside the repository and Netlify. These are owner-confirmed
-   setup facts; live installation and repository-access verification have not
-   run. Authorization and installation remain separate operations, and live
-   OAuth has not run.
+   setup facts. Live owner OAuth and repository-access verification subsequently
+   passed for one eligible public repository and one eligible private
+   repository. Authorization and installation remain separate operations.
 4. Production-context-only configuration is installed and independently
    verified: canonical `BOARD_APP_ORIGIN`, owner `BOARD_OWNER_ID=99961`, both
    App identifiers, `BOARD_TOKEN_KEY_ID=2026-09-18`, a fresh cryptographically
@@ -107,13 +111,13 @@ Dependencies before implementation or live acceptance:
    decision without inventing a blanket registration/deployment approval gate
    for work already authorized.
 
-Live installation/source-grant verification, callback acceptance, disabled
-device flow, expiring user-token behavior, live OAuth/sign-in, deployment, and
-runtime acceptance remain pending. Owner-confirmed setup does not establish any
-of those outcomes or change the merged-baseline review prerequisite. Complete
-locally testable implementation and reviewable setup instructions while a
-dependency is pending; report the exact remaining dependency without
-representing mocked acceptance as live acceptance.
+Live owner sign-in, eligible public and private source checks, sign-out, and the
+preview deploy summary's zero Edge Functions count pass. Callback failure,
+disabled device flow, expiring user-token behavior, unsupported authorization,
+and revocation boundaries retain their documented automated coverage. These
+results do not change the merged-baseline review prerequisite or replace
+current-head PR checks and merge. Verification of the resulting automatic
+production deployment follows the merge as an operational check.
 
 ## Minimal implementation structure
 
@@ -290,8 +294,9 @@ records their local verification. CI acceptance remains a current-head PR gate.
 The registered `cboone-tracker-boards` App has independently verified owner ID
 `99961`, App ID `4995264`, Client ID `Iv23liQyjqNGXrULGeSB`, the following exact
 read-only repository permissions, and `events:[]`. The owner confirms personal
-account installation covering the intended selected repositories; live
-installation/source-access verification remains pending:
+account installation covering the intended selected repositories. Live
+installation/source-access verification passes for one eligible public
+repository and one eligible private repository:
 
 | Permission      | Access | Purpose                                          |
 | --------------- | ------ | ------------------------------------------------ |
@@ -916,14 +921,22 @@ repeat only for meaningful subsequent changes or unresolved failures.
    stays server-side, and zero Anthropic calls occurred. A successful collection
    does not claim that analysis/report persistence exists.
 
+Acceptance record on September 18, 2026: owner sign-in passed, an eligible
+public repository source check passed, an eligible private repository source
+check passed, and sign-out passed. The owner also confirmed that the Netlify
+deploy summary showed `Edge Functions: 0`. This public record intentionally
+contains no private repository identifier, count, source tip, issue title, or
+screenshot. Anthropic calls and spending remain zero.
+
 Exit when the implemented production authentication and gathering path passes
 mocked behavior/artifact checks and authorized live public/private acceptance;
 the exact deployed version, remaining provider/runtime limitations, sanitized
 private-repository pass/fail, and any owner-dependent live checks are recorded.
 Detailed private acceptance evidence remains protected/transient and is never
 published with the plan/PR. Complete independent branch review, signed logical
-commits, PR creation/monitoring, merge commit, and worktree cleanup through the
-original authorized project workflow before starting Phase 3.
+commits, current-head PR monitoring, merge commit, automatic production
+deployment verification as a post-merge operational step, and worktree cleanup
+through the original authorized project workflow before starting Phase 3.
 
 ## Primary references
 

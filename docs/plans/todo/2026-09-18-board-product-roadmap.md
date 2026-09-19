@@ -7,11 +7,13 @@ Phase 2 planning passed independent review against that baseline in its distinct
 worktree. Its implementation passes local verification and independent final
 review. Its reviewed production composition is deployed with passing anonymous
 route, header, origin, and OAuth transaction-storage checks. Isolated and
-automatic PR fixture deploys prove fixture routes and zero Functions; provider
-Edge Function acceptance remains. Live owner/source acceptance and current-head
-PR checks remain phase gates.
-Live authentication, source gathering, analysis, storage, and production
-acceptance remain to be delivered. This is the living roadmap for
+automatic PR fixture deploys prove fixture routes and zero Functions. Live owner
+sign-in, public and private source checks, sign-out, and the provider's zero Edge
+Functions summary pass. Current-head PR checks, merge, and the automatic
+production deployment remain Phase 2 operational steps; the deployment check
+follows the merge.
+Analysis, report storage, and complete report production acceptance remain to be
+delivered. This is the living roadmap for
 the complete product, not authorization to
 assume unanswered spending or service-configuration choices. Production usage
 limits will be proposed using setup calibration evidence before ordinary paid
@@ -79,19 +81,23 @@ verified; its branch and worktree are removed.
 - The Phase 1 plan and branch review record actual local verification. CI and
   secret scanning passed the final submitted head. These results do not
   establish live-service or production acceptance.
-- Netlify configuration builds `dist`. Production deployment remains unverified.
-  Setting a fixture environment variable does not yet enforce future API or
-  credential isolation.
+- Netlify configuration builds `dist`. The reviewed Phase 2 composition is live
+  in production, while nonproduction deploys remain fixture-only with no
+  Functions. Current-head PR review and merge remain. Verify the resulting
+  automatic production deployment afterward as an operational check.
 - Foundation issues #12 through #17 are reconciled with agreed scope. Scaffold
-  issue #13 and fixture quality issue #14 are completed; #12, #15, #16, and #17
-  retain their remaining hosted/protected/isolation acceptance.
-- The empty owned `tracker-boards` site and read-only `cboone-tracker-boards`
-  App are created. The owner confirmed installation for intended repositories.
+  issue #13 and fixture quality issue #14 are completed. Issue #16 is complete
+  after its hosted-site, owner-source, sign-out, and preview-isolation acceptance
+  conditions passed; #12, #15, and #17 retain later report and product
+  acceptance.
+- The owned `tracker-boards` site and read-only `cboone-tracker-boards` App are
+  created. The owner confirmed installation for intended repositories.
   Production-only authentication configuration is installed; secret metadata
   confirms exactly one production context. On September 18 the owner confirmed
   863.7 of 1,000 shared credits remaining, expiring September 23. See
-  [production setup](../../production-setup.md). OAuth, live source grants,
-  repository linkage, deployment, and runtime acceptance remain unverified.
+  [production setup](../../production-setup.md). Repository linkage, reviewed
+  production deployment, owner OAuth, eligible public and private source checks,
+  sign-out, and the preview Edge Functions summary are now verified.
 
 ## Established constraints
 
@@ -123,11 +129,11 @@ verified; its branch and worktree are removed.
   available and is reserved in `cboone`: site ID
   `9ddf762e-9c92-44da-8636-e03913200664`, address
   `https://tracker-boards.netlify.app`. Its reviewed authentication/source-check
-  composition is deployed and connected to `cboone/board`; full owner/source
-  acceptance remains pending. A custom domain
+  composition is deployed and connected to `cboone/board`; owner sign-in,
+  eligible public and private source checks, and sign-out pass. A custom domain
   is later work; do not change DNS or register a custom domain in this release.
-  This confirmed choice supersedes issue #16's original `backlog-tracker-app`
-  hostname; that issue now follows the same preferred-name/fallback requirement.
+  This confirmed choice superseded issue #16's original `backlog-tracker-app`
+  hostname and satisfied its preferred-name/fallback requirement.
   The authenticated CLI lists the owned `cboone` account, named
   **Catamount Hardware**, with account type **Personal**. Use that explicit
   account destination; its billing configuration and resource charges still
@@ -306,7 +312,7 @@ the older roadmap's claimed decisions or the README's predictions.
 | Q07 | Issue bodies/comments, labels, milestones, PR descriptions, branches, repository tree, and relevant files selected under bounded limits                                               | Support richer context for public and private repos; select technical bounds; do not fetch arbitrary external URLs             | Confirmed by user; bounds pending   |
 | Q08 | Retain unclear issues and unverified external blockers, show uncertainty, withhold affected starts, and complete the rest of the report                                               | Conservative recommendations without dropping issues; invalid structure and incomplete core collection still fail              | Confirmed by user                   |
 | Q09 | Opus 5 at appropriate effort; $25 total setup budget including paid tests and retries; discuss near the cap; production budget flexible and unspecified                               | Track and reserve all setup costs; notify at $20; settle runtime/input bounds and production policy                            | Confirmed setup; production pending |
-| Q10 | New Netlify site, preferred tracker-boards.netlify.app or similar available name; custom domain later; no self-hosting guide for this release                                         | Owned tracker-boards site has reviewed production deployment and GitHub connection; owner/source acceptance pending            | Confirmed by user; site connected   |
+| Q10 | New Netlify site, preferred tracker-boards.netlify.app or similar available name; custom domain later; no self-hosting guide for this release                                         | Owned tracker-boards site has reviewed production deployment, GitHub connection, and owner/source acceptance                   | Confirmed by user; site accepted    |
 | Q11 | Original report plus sign-in, repo selection, generation/refresh, freshness, progress/errors, and provenance; report deletion deferred                                                | User confirms this covers initial needs; no additional report types or optional application features are required              | Confirmed by user                   |
 | Q12 | Saved reports stay viewable to the authorized account when the source is archived, transferred, deleted, or inaccessible; mark historical/source-unavailable and disable new analysis | Keep both retained reports until explicit deletion; saved-report retrieval is independent of current source eligibility/access | Confirmed by user                   |
 
@@ -456,24 +462,27 @@ independent review against the merged Phase 1 baseline before implementation.
 Local verification passes: 152 report unit checks, 161 native backend checks,
 five composition checks, and 45 fixture plus 54 mocked production browser
 checks across Chromium, Firefox, and WebKit. Formatting, linting, static artifact
-verification, and the server dependency audit pass. These checks use synthetic
-data and establish no live owner sign-in or GitHub source acceptance. Anthropic
-setup spending remains zero.
+verification, and the server dependency audit pass. These local checks use
+synthetic data; the separate live acceptance below establishes owner sign-in and
+GitHub source access. Anthropic setup spending remains zero.
 
 Reviewed commit `9295a3a169f0294f475e0fad2da7f6e45bf80101` is live as production
 deploy `6aadcfbcf08a71c73059a8be`. The native function manifest specifies Node24,
 runtime API version 2, and `/api/*`; live anonymous routing/security headers,
 protected-route 401 responses, encrypted OAuth transaction storage/PKCE,
-sanitized invalid callback, and immutable-origin rejection pass. These checks
-do not establish owner authorization or public/private source acceptance.
+sanitized invalid callback, and immutable-origin rejection pass. On September
+18, 2026, owner sign-in, one eligible public repository source check, one
+eligible private repository source check, and sign-out passed against this
+deployed composition.
 
 Manual fixture draft `6aadcd18b83e9e153b9c7bbf` is ready in
 `deploy-preview` context. The provider reports zero Functions, and live fixture
 routes/CSP plus the fixture-only API JSON `404` pass. Fresh staging contained no
-Edge Functions; provider summary confirmation remains a gate. Automatic PR #22
-preview `6aadce8caab4cf000879539c` is also ready in `deploy-preview` context
-with explicit provider inventory of zero Functions. Live fixture/CSP and static
-API JSON `404` checks pass.
+Edge Functions. The owner confirmed that the provider deploy summary showed
+`Edge Functions: 0`. Automatic PR #22 preview
+`6aadd047dd098e0008ba0705` is also ready in `deploy-preview` context with
+explicit provider inventory of zero Functions. Live fixture/CSP and static API
+JSON `404` checks pass.
 
 Implement the agreed GitHub authorization method, server-side token/session
 handling, repository selection, complete gathering, and source verification.
@@ -491,6 +500,11 @@ owned by another account or organization. A source snapshot alone is not a
 completed analysis report. Saved historical report retrieval is a separate
 authorized-account operation and must not be rejected solely because the source
 has since become ineligible or inaccessible.
+
+The live owner, eligible public repository, eligible private repository,
+sign-out, and preview Edge Functions acceptance gates pass. Remaining work is
+current-head PR CI and review, then merge and verification of the resulting
+automatic production deployment.
 
 ### Phase 3: Analysis, report persistence, and refresh
 

@@ -8,8 +8,9 @@ commit `9295a3a169f0294f475e0fad2da7f6e45bf80101`, deploy ID
 `6aadcfbcf08a71c73059a8be`. The site API independently reports that deployment
 ready in production context with one Function. The project is connected through
 Netlify's GitHub provider to `cboone/board`, production branch `main`, build
-`npm run build`, and publish directory `dist`. Live owner sign-in and
-public/private source acceptance remain pending.
+`npm run build`, and publish directory `dist`. On September 18, 2026, live owner
+sign-in, an eligible public repository source check, an eligible private
+repository source check, and sign-out all passed.
 No custom domain or self-hosting guide is required for this release.
 
 ## Owner-controlled GitHub App setup
@@ -32,9 +33,10 @@ before live OAuth acceptance. The owner confirms installation on the personal
 `cboone` account covering the intended selected repositories and generation of
 the installation-required App private key. The downloaded PEM is handled outside
 the repository and Netlify. This is owner-confirmed setup; live installation and
-repository-access verification have not run. Board authorization remains a
-separate sign-in operation after deployment. Board's server uses user tokens and
-does not accept that key or a webhook secret as runtime configuration.
+repository-access verification subsequently passed through the sanitized public
+and private source checks recorded below. Board authorization remains a separate
+sign-in operation after deployment. Board's server uses user tokens and does not
+accept that key or a webhook secret as runtime configuration.
 
 The App identifiers and Client Secret are installed in Netlify's production
 context. Metadata confirms `GITHUB_APP_CLIENT_SECRET` is secret, has scopes
@@ -78,9 +80,10 @@ in project files. No Anthropic key is required for the
 authentication/source-check phase. The production bundle manifest contains one
 native `api` function using `nodejs24.x`, runtime API version 2, and `/api/*`.
 Live anonymous API and OAuth transaction storage checks pass. Owner sign-in,
-disabled device flow, expiring user-token behavior, and actual
-installation/source grants remain live verification checks. App installation
-and private-key handling are owner-confirmed.
+actual installation/source grants for one eligible public repository and one
+eligible private repository, and sign-out pass. Disabled device flow and
+expiring user-token behavior remain covered by configuration and automated
+checks. App installation and private-key handling are owner-confirmed.
 
 ## Deployment dependencies and evidence
 
@@ -104,21 +107,23 @@ Manual fixture draft `6aadcd18b83e9e153b9c7bbf` is independently reported
 ready in `deploy-preview` context with an explicit provider inventory of zero
 Functions. Its welcome and `/demo` routes serve fixtures with CSP, and
 `/api/session` serves the fixture-only JSON `404`. The fresh isolated staging
-directory contained no Edge Functions, but provider edge inventory still
-requires confirmation from the per-deploy summary.
+directory contained no Edge Functions. On September 18, 2026, the owner
+confirmed that the Netlify deploy summary reported `Edge Functions: 0` for the
+acceptance preview.
 
-Automatic PR #22 preview `6aadce8caab4cf000879539c` is independently reported
+Automatic PR #22 preview `6aadd047dd098e0008ba0705` is independently reported
 ready in `deploy-preview` context from commit
-`221f4d1fae02b096ebfa7416f01bf4c4bfcf1563`, with an explicit provider
+`c6f5831b07ffe33c18fecfacfcbe285b234cdf9b`, with an explicit provider
 inventory of zero Functions. Its fixture/CSP and static API JSON `404` checks
 pass. This verifies repository-linked preview composition separately from the
 manual draft.
 
-Verify actual owner sign-in and an eligible public/private source check. Confirm
-the provider summary's zero Edge Functions count. The committed production
-context selects `npm run build:production`; every other context produces
-fixtures. Keep the Netlify GitHub App limited to the required repository access.
-Avoid the CLI's legacy deploy-key/webhook registration flow.
+Live acceptance on September 18, 2026, recorded passes for owner sign-in, an
+eligible public repository source check, an eligible private repository source
+check, sign-out, and the provider summary's zero Edge Functions count. The
+committed production context selects `npm run build:production`; every other
+context produces fixtures. Keep the Netlify GitHub App limited to the required
+repository access. Avoid the CLI's legacy deploy-key/webhook registration flow.
 
 Public evidence records private acceptance pass/fail without private identifiers,
 counts, source tips, issue titles, or screenshots. Keep mocked checks distinct
