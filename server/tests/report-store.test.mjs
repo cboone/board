@@ -25,6 +25,7 @@ import {
   readCurrentReportEnvelope,
   readOrCreateRepositoryState,
   readReportEnvelope,
+  readRepositoryState,
   repositoryStateKey,
   rotateRepositoryReport,
   writeImmutableReportVersion,
@@ -279,10 +280,27 @@ test('source check sequencing rejects stale completion and replays the exact win
       completedAt: at(3),
       status: 'failed',
       errorCode: 'provider_unavailable',
+      repository: {
+        ...repository(17),
+        name: 'stale-name',
+        fullName: 'cboone/stale-name',
+        url: 'https://github.com/cboone/stale-name',
+      },
     }),
     { code: 'source_unstable' },
   );
+  assert.equal(
+    (await readRepositoryState({ storage, budget, repositoryId: 17 })).state
+      .repository.name,
+    repository(17).name,
+  );
   storage.loseNextAcknowledgement(repositoryStateKey(17));
+  const currentRepository = {
+    ...repository(17),
+    name: 'current-name',
+    fullName: 'cboone/current-name',
+    url: 'https://github.com/cboone/current-name',
+  };
   const finished = await finishSourceCheck({
     storage,
     budget,
@@ -291,8 +309,10 @@ test('source check sequencing rejects stale completion and replays the exact win
     completedAt: at(3),
     status: 'failed',
     errorCode: 'provider_unavailable',
+    repository: currentRepository,
   });
   assert.equal(finished.state.sourceCheck.status, 'failed');
+  assert.deepEqual(finished.state.repository, currentRepository);
   const revision = finished.state.revision;
   const replayed = await finishSourceCheck({
     storage,
@@ -302,6 +322,7 @@ test('source check sequencing rejects stale completion and replays the exact win
     completedAt: at(3),
     status: 'failed',
     errorCode: 'provider_unavailable',
+    repository: currentRepository,
   });
   assert.equal(replayed.status, 'unchanged');
   assert.equal(replayed.state.revision, revision);

@@ -169,6 +169,8 @@ function safeSummary(ledger, at) {
   const policy = ledger.policies[policyId];
   const discussion = ledger.discussions[policyId] ?? null;
   const exposure = exposureMicrousd(ledger);
+  const nextReservationMicrousd =
+    SETUP_SPEND_LIMITS.maximumAttempts * SETUP_SPEND_LIMITS.attemptCostMicrousd;
   const expired = Date.parse(at) >= Date.parse(policy.pricingValidThrough);
   const status = ledger.pricingReviewRequired
     ? 'pricing-review-required'
@@ -178,7 +180,7 @@ function safeSummary(ledger, at) {
         ? 'stopped'
         : discussion?.status === 'required'
           ? 'discussion-required'
-          : exposure >= policy.capMicrousd
+          : exposure + nextReservationMicrousd > policy.capMicrousd
             ? 'budget-exhausted'
             : 'available';
   return Object.freeze({
@@ -294,7 +296,7 @@ export async function readSetupSpendReservation(input) {
 export async function listSetupSpendReservations(input) {
   const selected = select(input);
   const current = await readLedger(selected);
-  if (current === null) throw unavailable();
+  if (current === null) return Object.freeze([]);
   return Object.freeze(
     Object.entries(current.ledger.active)
       .sort(([left], [right]) => left.localeCompare(right, 'en'))

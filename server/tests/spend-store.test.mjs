@@ -86,6 +86,12 @@ async function setup(storage) {
 
 test('ledger creation resolves a lost acknowledgement and exposes only a safe summary', async () => {
   const storage = memoryStorage();
+  assert.deepEqual(
+    await listSetupSpendReservations({
+      ...context(storage),
+    }),
+    [],
+  );
   storage.loseNextAcknowledgement();
   assert.deepEqual(await setup(storage), { status: 'existing', revision: 0 });
   assert.deepEqual(await setup(storage), { status: 'existing', revision: 0 });
@@ -614,6 +620,15 @@ test('discussion decisions are exact, lost-ack safe and never raise the cap', as
       })
     ).status,
     'reserved',
+  );
+  assert.equal(
+    (
+      await readSetupSpendSummary({
+        ...context(storage),
+        at: at(10),
+      })
+    ).status,
+    'budget-exhausted',
   );
   const exhausted = await reserveSetupSpend({
     ...context(storage),

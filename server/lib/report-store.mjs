@@ -326,12 +326,16 @@ export async function finishSourceCheck({
   storage,
   budget,
   repositoryId,
+  repository = null,
   sequence,
   completedAt,
   status,
   summary = null,
   errorCode = null,
 }) {
+  const identity =
+    repository === null ? null : projectRepositoryIdentity(repository);
+  if (identity !== null && identity.id !== repositoryId) throw unavailable();
   const completion = {
     sequence,
     completedAt,
@@ -350,10 +354,14 @@ export async function finishSourceCheck({
         state.sourceCheck.completedAt === completion.completedAt &&
         state.sourceCheck.status === completion.status &&
         same(state.sourceCheck.summary, completion.summary) &&
-        state.sourceCheck.errorCode === completion.errorCode
+        state.sourceCheck.errorCode === completion.errorCode &&
+        (identity === null || same(state.repository, identity))
       )
         return state;
-      return finishSourceCheckRecord(state, completion);
+      const completed = finishSourceCheckRecord(state, completion);
+      return identity === null
+        ? completed
+        : projectRepositoryState({ ...completed, repository: identity });
     },
   });
 }
