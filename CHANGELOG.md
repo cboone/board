@@ -23,3 +23,6 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   fingerprints that include issue comments and referenced closed-state metadata.
 - Independent backend verification and build composition that removes Functions
   from every nonproduction deployment.
+- Owner-only Generate and Refresh actions backed by fixed Opus 5 analysis,
+  durable current and previous reports, authenticated cross-device access,
+  source provenance, report comparisons, and persistent job and spending guards.
