@@ -301,6 +301,14 @@ phase-plan documents.
     GitHub authorization tokens and owner-session credentials never go to
     Anthropic. The Anthropic API key and GitHub authorization tokens never enter
     browser-accessible storage or static artifacts.
+19. **Paid dispatch deadline race:** Primary and corrective dispatch now pass
+    the exact remaining duration until their durable deadline to the
+    abort-signal guard. When the signal clock read observes expiry after
+    paid-boundary ownership proof, it throws before `createMessage`, then
+    reconciles the committed in-flight attempt to conservative ambiguous and
+    unknown accounting. Deterministic tests cross the deadline between the
+    ownership and signal clock reads; restoring the one-millisecond fallback
+    makes both tests dispatch a provider request after expiry.
 
 ## Plan compliance
 
@@ -376,7 +384,7 @@ Current-tree validation includes:
 - paid-boundary tests that revoke authorization as primary and corrective
   preflight reads complete;
 - `npm test`: 182 of 182 Vitest checks;
-- `npm run test:server`: 457 of 457 native backend checks;
+- `npm run test:server`: 459 of 459 native backend checks;
 - `npm run test:composition`: 5 of 5 composition checks;
 - `npm run test:browser:production`: 189 of 189 checks across Chromium,
   Firefox, and WebKit;
