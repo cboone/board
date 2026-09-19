@@ -5,7 +5,7 @@ import {
   readEnvironment,
   readPublicOrigin,
   requireCanonicalOrigin,
-  requireProductionContext,
+  requirePublishedDeploy,
 } from '../lib/environment.mjs';
 import { errorResponse } from '../lib/errors.mjs';
 import { createProductionStorage } from '../lib/storage.mjs';
@@ -23,7 +23,7 @@ export function createHandler({
 } = {}) {
   return async function handler(request, context) {
     try {
-      requireProductionContext(context);
+      requirePublishedDeploy(context);
       const origin = readPublicOrigin(env);
       requireCanonicalOrigin(request, origin);
       const environment = readEnvironment(env);

@@ -843,7 +843,7 @@ const environment = () => ({
   BOARD_TOKEN_KEY_ID: 'current',
   BOARD_TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 8).toString('base64'),
 });
-test('native entry guards exact deploy.context and canonical origin before secrets or store opening', async () => {
+test('native entry guards the published production deploy and canonical origin before secrets or store opening', async () => {
   let secretReads = 0;
   let storeOpens = 0;
   let providerCalls = 0;
@@ -872,6 +872,9 @@ test('native entry guards exact deploy.context and canonical origin before secre
     { deploy: { context: 'deploy-preview' } },
     { deploy: { context: 'branch-deploy' } },
     { deploy: { context: 'unknown' } },
+    { deploy: { context: 'production' } },
+    { deploy: { context: 'production', published: false, id: 'deploy-1' } },
+    { deploy: { context: 'production', published: true, id: '../deploy' } },
   ])
     assert.equal(
       (await handler(new Request(`${ORIGIN}/api/session`), context)).status,
@@ -880,7 +883,7 @@ test('native entry guards exact deploy.context and canonical origin before secre
   assert.equal(
     (
       await handler(new Request('https://other.example/api/session'), {
-        deploy: { context: 'production' },
+        deploy: { context: 'production', published: true, id: 'deploy-1' },
       })
     ).status,
     403,
@@ -903,7 +906,7 @@ test('production bootstrap uses validated configuration and injected storage wit
     },
   });
   const response = await handler(new Request(`${ORIGIN}/api/session`), {
-    deploy: { context: 'production' },
+    deploy: { context: 'production', published: true, id: 'deploy-1' },
   });
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { auth: false });
