@@ -1019,7 +1019,10 @@ pending bookkeeping and every expired nonterminal entry, including pre-provider
 `collecting`, and `counting` jobs from other repositories. Pending bookkeeping
 includes a terminal job whose accounting status is still `unreserved` but whose
 matching active ledger entry proves an interrupted reservation. Remove entries
-whose jobs prove known accounting complete. Leave only live nonterminal work
+only when the job's complete accounting tuple and the entry's last transition
+prove all attempts known or released. Any terminal job with a matching reserved
+active entry is pending bookkeeping regardless of whether its job accounting is
+`unreserved`, `pending`, or stale `complete`. Leave only live nonterminal work
 and unresolved unknown exposure untouched. Do not admit new paid work while a
 terminal-pending or expired entry remains unreconciled. Setup exposure permits
 at most two simultaneously fully reserved jobs and at most four full-ceiling
@@ -1123,13 +1126,18 @@ read the ledger because an interruption after the reservation CAS but before
 the job CAS can leave a matching active entry. If one exists, release it, copy
 the full resulting accounting tuple into the job, mark accounting complete, and
 remove the entry; nullable accounting facts remain only when the strong read
-proves no matching entry. If cleanup stops after the terminal fence, that
-terminal/`unreserved` job plus matching active entry is pending bookkeeping and
-the bounded global sweep resumes it. If the terminal job CAS loses to a paid
-transition, recovery releases nothing and reconciles the newly read state. A
-new explicit Generate/Refresh action is required after terminal cleanup. A
-report GET or job poll never creates a new reservation or dispatches a new paid
-attempt.
+proves no matching entry. In that no-entry branch, perform a nonmonetary
+reservation-fence ledger CAS that increments only logical `revision` against the
+exact read ETag before marking the job accounting complete. On conflict, restart
+the ledger read: a delayed reservation that won must be released through the
+active-entry branch, while a successful fence makes every outstanding
+reservation CAS based on the earlier ETag fail. If cleanup stops after the
+terminal fence, that terminal job plus any matching active entry is pending
+bookkeeping regardless of its current accounting status, and the bounded global
+sweep resumes it. If the terminal job CAS loses to a paid transition, recovery
+releases nothing and reconciles the newly read state. A new explicit
+Generate/Refresh action is required after terminal cleanup. A report GET or job
+poll never creates a new reservation or dispatches a new paid attempt.
 
 The worker performs:
 
@@ -1516,7 +1524,12 @@ Before any paid call, verify in the deployed artifact:
   once more after the terminal fence, then prove a different-repository
   admission's global sweep resumes that pending bookkeeping and restores
   capacity. Also prove the no-entry branch moves directly from `unreserved` to
-  `complete` with nullable facts.
+  `complete` with nullable facts only after its reservation-fence ledger CAS.
+  Delay the original reservation CAS until after the no-entry read: prove either
+  the reservation wins and is released exactly once or the fence wins and the
+  delayed reservation cannot commit. If a terminal job is stale `complete` with
+  a still-reserved matching entry, prove the sweep reconciles it rather than
+  deleting or trusting the entry.
 - Interrupt after lightweight eligibility, capability generation, capability
   installation, and committed-but-unacknowledged installation. Race the
   repository-claim loser and each ordered pre-provider terminal/accounting/claim

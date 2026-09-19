@@ -415,6 +415,26 @@ capacity.
 Disposition: resolved in the ninth corrected plan; exact-commit re-review
 pending.
 
+### R24 Delayed reservation CAS fencing
+
+Finding: exact commit `bcfe28ff6ab2ab2d5bbf9bcab99f4887efe93c72`
+allowed terminal recovery to strongly read no active entry and mark a
+`created`/`unreserved` job complete while an earlier reservation CAS was still
+in flight against the same ledger ETag. If that delayed CAS committed afterward,
+the ledger could contain a reserved active entry for a terminal job whose stale
+nullable accounting said complete.
+
+Required resolution: in the no-entry cleanup branch, conditionally increment
+the logical ledger revision before nullable job completion so the write either
+fences the delayed reservation or conflicts and reveals it for release. Treat
+every terminal job with a matching reserved active entry as pending bookkeeping
+regardless of job accounting status; remove an entry only when its own last
+transition and the job's full tuple prove completion. Test both delayed-CAS
+linearizations and a stale terminal/`complete` job with a reserved entry.
+
+Disposition: resolved in the tenth corrected plan; exact-commit re-review
+pending.
+
 ## Confirmed design decisions
 
 The reviews confirmed these parts of the exact plan:
