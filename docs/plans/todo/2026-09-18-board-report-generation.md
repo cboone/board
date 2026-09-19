@@ -776,14 +776,16 @@ provider body.
 The `accounting` object is always present. The inert job starts with status
 `unreserved` and nullable ledger revision, sequence, digest, and transition ID.
 The first committed reservation and every later monetary accounting transition
-sets status `pending` and fills those facts; a terminal record uses `complete`
-after all exposure is known and the active entry can be removed, or `unknown`
-while conservative exposure remains active. A transition ID is a 64-character
-lowercase hexadecimal domain-separated SHA-256 digest of the canonical
-job/attempt transition. Accounting digests use the same fixed representation;
-ledger revisions and sequences are nonnegative safe integers. Project the
-maximum terminal widths before the first paid boundary. Persist the job's
-resulting accounting facts before removing its active ledger entry.
+sets status `pending` and fills those facts. A terminal job keeps its current
+accounting status between the terminal-state CAS and later ledger/job-accounting
+CAS operations; its final accounting status is `complete` after all exposure is
+known and the active entry can be removed, or `unknown` while conservative
+exposure remains active. A transition ID is a 64-character lowercase
+hexadecimal domain-separated SHA-256 digest of the canonical job/attempt
+transition. Accounting digests use the same fixed representation; ledger
+revisions and sequences are nonnegative safe integers. Project the maximum
+terminal widths before the first paid boundary. Persist the job's resulting
+accounting facts before removing its active ledger entry.
 
 Admission copies the authenticated session's `authorizationEpoch`, not its
 cookie or token. The worker uses a job-only auth helper to acquire the current
@@ -1106,12 +1108,15 @@ recovery first CAS-fences that exact job and lease as terminal. It then
 CAS-releases any still-reserved exact ledger attempts, CAS-marks the job's
 accounting complete with the resulting ledger revision, accounting sequence,
 accounting digest, and transition ID, and finally CAS-clears only its matching
-repository claim. A `created` job can have no reservation, so its ledger step is
-conditional and its nullable accounting facts remain empty. If the terminal
-job CAS loses to a paid transition, recovery releases nothing and reconciles
-the newly read state. A new explicit Generate/Refresh action is required after
-terminal cleanup. A report GET or job poll never creates a new reservation or
-dispatches a new paid attempt.
+repository claim. For a `created` job, strongly read the ledger because an
+interruption after the reservation CAS but before the job CAS can leave a
+matching active entry. If one exists, release it, copy the full resulting
+accounting tuple into the job, mark accounting complete, and remove the entry;
+nullable accounting facts remain only when the strong read proves no matching
+entry. If the terminal job CAS loses to a paid transition, recovery releases
+nothing and reconciles the newly read state. A new explicit Generate/Refresh
+action is required after terminal cleanup. A report GET or job poll never
+creates a new reservation or dispatches a new paid attempt.
 
 The worker performs:
 
@@ -1142,12 +1147,16 @@ remains in the active ledger; and clear this job's repository claim last. A
 terminal job with a prior reservation leaves accounting `pending` until the
 separate ledger CAS and job-accounting CAS finish. An unreserved `created` or
 reservation-rejected terminal job moves directly from `unreserved` to
-`complete` with nullable accounting facts and no ledger mutation. Successful
-publication orders the immutable version and job digest before the pointer,
-retains the claim through ledger settlement, and clears it only after the job is
-succeeded. No path releases a reservation while its job can still cross a paid
-boundary, and no path admits a replacement job before the prior accounting is
-durable.
+`complete` with nullable accounting facts only after a strong ledger read proves
+there is no matching active entry. If an interrupted reservation entry exists,
+recovery releases it and persists the full resulting accounting tuple before
+marking `complete`. A reservation rejection may still require a nonmonetary
+policy or discussion ledger CAS that advances only the logical ledger revision.
+Successful publication orders the immutable version and job digest before the
+pointer, retains the claim through ledger settlement, and clears it only after
+the job is succeeded. No path releases a reservation while its job can still
+cross a paid boundary, and no path admits a replacement job before the prior
+accounting is durable.
 
 Implement one bounded nonpaid reconciler invoked at the start of every worker,
 authenticated job poll and report read, identical admission, and any admission
@@ -1484,6 +1493,12 @@ Before any paid call, verify in the deployed artifact:
   responses. Verify only free states repeat, attempts settle once, successful
   publication resumes without another model call, and ambiguous paid states
   never replay.
+- Interrupt after the reservation ledger CAS and before the job moves from
+  `created` to `reserved`. Prove recovery fences the job, finds and releases the
+  matching active entry exactly once, persists the full resulting accounting
+  tuple, marks accounting complete, removes the entry, and clears the claim
+  last. Also prove the no-entry branch moves directly from `unreserved` to
+  `complete` with nullable facts.
 - Interrupt after lightweight eligibility, capability generation, capability
   installation, and committed-but-unacknowledged installation. Race the
   repository-claim loser and each ordered pre-provider terminal/accounting/claim

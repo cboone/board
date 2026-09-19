@@ -367,9 +367,31 @@ terminal job CAS and separate ledger/job-accounting CAS operations. Apply those
 distinctions to the generic cross-store order, expired in-flight and
 incomplete-usage paths, and cover exact status plus entry retention/removal in
 recovery tests. An unreserved terminal job instead moves directly to `complete`
-with nullable accounting facts and no ledger mutation.
+with nullable accounting facts and no monetary accounting transition or active
+entry; a required nonmonetary policy/discussion ledger CAS may still advance the
+logical ledger revision.
 
 Disposition: resolved in the seventh corrected plan; exact-commit re-review
+pending.
+
+### R22 Reservation-to-job interruption
+
+Finding: exact commit `ea43b2284768f505375f43bd3be0a23d590e8ae6`
+committed the ledger reservation before moving the job from `created` to
+`reserved`, but its recovery text assumed a `created` job could have no
+reservation. A crash between those cross-store writes could leave a real active
+entry that the nullable direct-completion path failed to release or record. The
+job-schema prose also described only final terminal accounting states without
+allowing the required terminal-state plus pending-accounting interval.
+
+Required resolution: after terminally fencing a `created` job, strongly read
+the ledger. If its matching active entry exists, release it, persist the full
+resulting accounting tuple, mark accounting complete, remove the entry, and
+clear the claim last. Move directly from `unreserved` to `complete` with nullable
+facts only after proving no entry exists. Describe `complete` and `unknown` as
+final accounting states and test both interruption branches exactly.
+
+Disposition: resolved in the eighth corrected plan; exact-commit re-review
 pending.
 
 ## Confirmed design decisions
