@@ -7,6 +7,7 @@ import {
   ensureSetupSpendLedger,
   fenceSetupReservation,
   markSetupAttemptUnknown,
+  readSetupSpendReservation,
   readSetupSpendSummary,
   releaseSetupAttempt,
   removeCompletedSetupSpend,
@@ -275,6 +276,96 @@ test('reservation and attempt accounting are idempotent across lost acknowledgem
   );
   assert.equal(storage.value().accountingSequence, 3);
   assert.equal(storage.value().revision, 4);
+});
+
+test('reservation reads expose exact immutable worker accounting without creating entries', async () => {
+  const storage = memoryStorage();
+  await setup(storage);
+  assert.equal(
+    await readSetupSpendReservation({
+      ...context(storage),
+      jobId: id('a'),
+    }),
+    null,
+  );
+  const writes = storage.metrics.writes;
+
+  await reserveSetupSpend({
+    ...context(storage),
+    jobId: id('a'),
+    operation: 'generate',
+    at: at(5),
+    revalidate: authorize,
+  });
+  const reserved = await readSetupSpendReservation({
+    ...context(storage),
+    jobId: id('a'),
+  });
+  assert.deepEqual(Object.keys(reserved), [
+    'policyId',
+    'reservationMicrousd',
+    'attempts',
+    'accounting',
+  ]);
+  assert.deepEqual(reserved.reservationMicrousd, [5_409_600, 5_409_600]);
+  assert.deepEqual(
+    reserved.attempts.map(({ number, ceilingMicrousd, state }) => ({
+      number,
+      ceilingMicrousd,
+      state,
+    })),
+    [
+      { number: 1, ceilingMicrousd: 5_409_600, state: 'reserved' },
+      { number: 2, ceilingMicrousd: 5_409_600, state: 'reserved' },
+    ],
+  );
+  assert.equal(reserved.accounting.status, 'pending');
+  assert.equal(Object.isFrozen(reserved), true);
+  assert.equal(Object.isFrozen(reserved.reservationMicrousd), true);
+  assert.equal(Object.isFrozen(reserved.attempts), true);
+  assert.equal(Object.isFrozen(reserved.attempts[0]), true);
+  assert.equal(storage.metrics.writes, writes + 1);
+
+  await settleSetupAttempt({
+    ...context(storage),
+    jobId: id('a'),
+    attemptNumber: 1,
+    actualCostMicrousd: 123_456,
+    at: at(6),
+    revalidate: authorize,
+  });
+  await markSetupAttemptUnknown({
+    ...context(storage),
+    jobId: id('a'),
+    attemptNumber: 2,
+    actualCostMicrousd: 0,
+    unknownExposureMicrousd: SETUP_SPEND_LIMITS.attemptCostMicrousd,
+    at: at(7),
+    revalidate: authorize,
+  });
+  const accounted = await readSetupSpendReservation({
+    ...context(storage),
+    jobId: id('a'),
+  });
+  assert.equal(accounted.attempts[0].state, 'settled');
+  assert.equal(accounted.attempts[0].actualCostMicrousd, 123_456);
+  assert.equal(accounted.attempts[1].state, 'unknown');
+  assert.equal(
+    accounted.attempts[1].unknownExposureMicrousd,
+    SETUP_SPEND_LIMITS.attemptCostMicrousd,
+  );
+  assert.equal(accounted.accounting.status, 'unknown');
+  assert.ok(!Object.hasOwn(accounted, 'createdAt'));
+  assert.ok(!JSON.stringify(accounted).includes('deploy-1'));
+
+  await assert.rejects(
+    readSetupSpendReservation({
+      ...context(storage),
+      deployId: 'another-deploy',
+      jobId: id('a'),
+    }),
+    { code: 'service_unavailable' },
+  );
 });
 
 test('reservation fencing advances only logical revision and resolves a lost acknowledgement', async () => {
