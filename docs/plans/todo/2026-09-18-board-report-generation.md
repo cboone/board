@@ -321,9 +321,11 @@ The fixed policy requires the model to:
 - Write concrete reasons in neutral language without em dashes, work estimates,
   effort proxies, or unsupported certainty. Preserve canonical GitHub titles
   verbatim; these prose restrictions apply only to model-authored fields.
-- Never quote or reproduce source bodies, comments, pull-request descriptions,
-  milestone or label descriptions, reference text, file content, or prior
-  analysis. Summarize only the evidence needed for an analysis conclusion.
+- Do not intentionally quote or reproduce source bodies, comments,
+  pull-request descriptions, milestone or label descriptions, reference text,
+  or file content. Summarize only the evidence needed for an analysis
+  conclusion. Prior accepted analysis may be preserved when the source still
+  supports it.
 - Return analysis fields only. It cannot return or override repository identity,
   source IDs, canonical titles, milestones, progress, sync, fingerprint, or
   provenance.
@@ -426,17 +428,31 @@ Validation failure is an analysis failure. It never produces a partial report.
 Before trusted assembly, apply `NO_VERBATIM_POLICY_V1` to every model-authored
 persisted prose field. Build its transient corpus only from admitted issue
 bodies, comments, pull-request descriptions, milestone and label descriptions,
-reference text, selected file content, and prior-analysis prose. Normalize both
-sides with Unicode NFC, CRLF-to-LF conversion, case folding, and collapsed
-Unicode whitespace. Reject a candidate when model prose contains any normalized
-source line of at least 32 Unicode code points or any contiguous normalized
-source window of 64 Unicode code points. Implement the check with bounded
-line/window hashes over already bounded inputs, then confirm any hash match by
-exact normalized comparison. Canonical source fields inserted by the server,
-including titles and display identities, are not model prose and are outside
-this corpus check. Apply `SOURCE_SAFETY_POLICY_V1` to model output as well,
-regardless of match length. A violation is a strict output-validation failure;
-no raw match enters its safe error, job, report version, or log.
+reference text, and selected file content. Previously validated and persisted
+prior-analysis prose is not raw source and stays outside this corpus so an
+unchanged refresh can preserve it and compare as `unchanged`.
+
+Normalization is ordered and fixed to the pinned Node 24.13.0 runtime's Unicode
+16.0 behavior. First replace CRLF and lone CR with LF, apply `normalize('NFC')`,
+then apply ECMAScript `toLowerCase()` without a locale. For line matching, split
+on LF before replacing each run of remaining Unicode `White_Space` characters
+with one ASCII space and trimming the line. For full-field and window matching,
+replace every Unicode `White_Space` run, including LF, with one ASCII space and
+trim. Count Unicode code points with string iteration, not UTF-16 code units.
+
+Reject when any nonempty normalized model prose field exactly equals any
+complete normalized raw-source field, when it contains a normalized source line
+of at least 32 code points, or when it contains a contiguous normalized source
+window of 64 code points. The deterministic validator permits shorter
+incidental overlap that is neither a complete-field equality nor long enough
+for those thresholds; the system policy still forbids intentional quoting.
+Implement line/window matching with bounded hashes over already bounded inputs,
+then confirm every hash match by exact normalized comparison. Canonical source
+fields inserted by the server, including titles and display identities, are not
+model prose and are outside this corpus check. Apply
+`SOURCE_SAFETY_POLICY_V1` to model output as well, regardless of match length. A
+violation is a strict output-validation failure; no raw match enters its safe
+error, job, report version, or log.
 
 ## Provider transport and paid-attempt policy
 
@@ -451,6 +467,8 @@ The primary Messages request is fixed to:
 {
   model: 'claude-opus-5',
   max_tokens: 16384,
+  inference_geo: 'global',
+  service_tier: 'standard_only',
   thinking: { type: 'adaptive', display: 'omitted' },
   output_config: {
     effort: 'high',
@@ -462,20 +480,24 @@ The primary Messages request is fixed to:
 }
 ```
 
-Omit tools, citations, prompt caching, premium speed, geography routing,
+Omit tools, citations, prompt caching, premium speed, US-only inference,
 sampling controls, message prefilling, model fallback, and any beta feature not
-required by the reviewed request. Send the same model, system, message,
-thinking, effort, and output schema to the free token-count endpoint.
+required by the reviewed request. Pin every paid request to global inference and
+standard-only service so workspace defaults cannot select a priced geography or
+priority tier. Send the same model, system, message, thinking, effort, and
+output schema to the free token-count endpoint; the count request omits billing
+controls that its endpoint does not accept.
 
 Implement a bounded streaming-event parser. Bound response bytes, event count,
 line length, JSON depth, and elapsed runtime. Retain validated input and cache
-usage from `message_start`; replace output usage with the latest cumulative
-`message_delta` values; and require a final `message_stop`. Never add cumulative
-deltas. Missing, decreasing, contradictory, or incomplete final usage makes the
-attempt financially unknown and retains its full reservation. Select content by
-block type and never persist thinking blocks, signatures, SSE frames, raw model
-JSON, the provider request, or provider error bodies. From invocation start,
-stop provider work at 810,000 ms and reserve the final 90,000 ms of Netlify's
+usage plus effective inference geography and service tier from `message_start`;
+replace output usage with the latest cumulative `message_delta` values; and
+require a final `message_stop`. Never add cumulative deltas. Missing,
+decreasing, contradictory, or incomplete final usage or billing classification
+makes the attempt financially unknown and retains its full reservation. Select
+content by block type and never persist thinking blocks, signatures, SSE frames,
+raw model JSON, the provider request, or provider error bodies. From invocation
+start, stop provider work at 810,000 ms and reserve the final 90,000 ms of Netlify's
 15-minute limit for durable classification and bookkeeping. Bound complete
 source collection to 90,000 ms, all count requests together to 60,000 ms, and
 each Messages attempt to 300,000 ms or the earlier provider cutoff. Cross a paid
@@ -642,7 +664,8 @@ analysis
   pricingPolicyId
   attempts[]
     number, terminalClass, inputTokens, cacheCreationInputTokens
-    cacheReadInputTokens, outputTokens, rates, costMicrousd
+    cacheReadInputTokens, outputTokens, rates, inferenceGeo, serviceTier
+    costMicrousd
 ```
 
 The saved `report` and independent `inventory` contain canonical titles,
@@ -852,7 +875,7 @@ currency: "USD"
 activePolicyId
 policies
   <policy-id>
-    model, effort, maximumAttempts
+    model, effort, inferenceGeo, serviceTier, maximumAttempts
     inputRateMicrousd, outputRateMicrousd
     attemptInputCeiling, attemptOutputCeiling, attemptCostCeilingMicrousd
     capMicrousd: 25000000
@@ -860,15 +883,13 @@ policies
     featurePolicyHash
     pricingSource, pricingVerifiedAt, pricingValidThrough, deployId
 settledMicrousd
-reservations
+accountingSequence, accountingDigest
+active
   <job-id>
-    policyId, createdAt
+    policyId, createdAt, accountingState
     attempts[]
-      number, ceilingMicrousd, state, actualCostMicrousd
-unknown
-  <job-id>
-    attempts[]
-      number, exposureMicrousd, recordedAt
+      number, ceilingMicrousd, state
+      actualCostMicrousd, unknownExposureMicrousd, recordedAt
 discussions
   <policy-id>
     status, currentRevision, triggeredAt, triggerExposureMicrousd
@@ -878,6 +899,17 @@ discussions
 pricingReviewRequired
 updatedAt
 ```
+
+Set `SETUP_LEDGER_MAX_BYTES` to 262,144,
+`SETUP_LEDGER_MAX_ACTIVE_JOBS` to four, and
+`SETUP_LEDGER_MAX_POLICIES` to 16. The existing 32-decision limit applies per
+policy. At reservation, install every fixed attempt property and preflight the
+entire ledger with each active numeric field projected to its maximum safe
+terminal width. Policy and discussion mutations use the same projection. A
+paid-boundary CAS requires that preallocated active entry, so later settlement,
+release, or unknown classification never adds a field, array item, or
+unreserved byte. Reject admission or policy mutation before a provider call
+when either exact entry or serialized-byte ceiling would be exceeded.
 
 The initial per-attempt reservation is 5,409,600 microdollars:
 
@@ -922,10 +954,13 @@ lifetime $25 setup cap.
 
 At current published base rates and with every extra billed feature disabled,
 actual cost is `5 * input_tokens + 25 * output_tokens` microdollars. Bind those
-rates and disabled billed features to the stored setup policy and bounded-valid
-pricing attestation. Validate nonnegative provider usage, require zero cache
-usage because caching is disabled, and reject tool/premium or other unexpected
-billing fields. Missing or inconsistent usage makes the attempt unknown.
+rates, `inference_geo:'global'`, `service_tier:'standard_only'`, and disabled
+billed features to the stored setup policy and bounded-valid pricing
+attestation. Validate nonnegative provider usage, require the response's
+effective inference geography to be `global`, effective service tier to be
+`standard`, and zero cache usage because caching is disabled. Reject tool,
+premium, geography, tier, or other unexpected billing fields. Missing or
+inconsistent billing facts make the attempt unknown.
 
 Settle each definitively completed attempt immediately, including rejected
 output, before another attempt can cross its paid boundary. Add its actual cost
@@ -938,19 +973,35 @@ usage is only a lower bound. Release reservations for attempts that provably
 never crossed the boundary. Reconciliation never assumes an unknown attempt was
 free.
 
-Keep the bounded per-attempt audit in the setup ledger and job so every paid
-boundary is reconstructable after a crash. Preserve unknown entries until
-authoritative owner billing evidence resolves them. Admission, report reads,
-job polls, and duplicate worker delivery can finish idempotent accounting from
-a fenced job or immutable report without calling Anthropic.
+Each accounting CAS increments `accountingSequence` and replaces
+`accountingDigest` with a domain-separated hash of the previous digest and the
+canonical job/attempt transition. The job stores the resulting sequence,
+revision, and digest, plus its complete per-attempt audit. Resolve a lost ledger
+acknowledgement by matching the active attempt state and digest. After the job
+is durably accounting-complete, CAS-remove its active ledger entry only when it
+contains no unknown attempt. Preserve an entry with unknown exposure until
+authoritative owner billing evidence resolves it. Thus the ledger retains only
+active or unresolved exposure, while job records retain terminal history.
 
-On every strong read, require `settledMicrousd` to equal the sum of settled
-attempt actuals and recompute total exposure as that value plus all reserved
-ceilings plus all unknown exposures. Released attempts contribute zero. An
-unknown attempt contributes at least its full reviewed ceiling and any larger
-known lower bound. Integer overflow, duplicate settlement, an actual cost above
-its ceiling, or a policy mismatch sets `pricingReviewRequired` and blocks later
-paid work without reducing recorded exposure.
+Before a new reservation, reconcile every non-unknown terminal entry in the
+bounded `active` map and remove every entry whose job already proves complete;
+do not admit new paid work while an earlier known terminal entry remains
+unresolved. Setup exposure permits at most two simultaneously fully reserved
+jobs and at most four full-ceiling unknown attempts, so the four-entry bound is
+compatible with the cap. A future production policy must define its own
+compatible active-entry and byte bounds before it can be enabled.
+
+On every strong read, validate `settledMicrousd`, accounting sequence/digest,
+the fixed active-entry shapes, and recompute total exposure as the aggregate
+settled value plus active reserved ceilings plus active unknown exposures.
+Settled attempts are already represented by the aggregate and released
+attempts contribute zero. An unknown attempt contributes at least its full
+reviewed ceiling and any larger known lower bound. Integer overflow, duplicate
+or inconsistent accounting transitions, an actual cost above its ceiling, a
+capacity invariant failure, or a policy mismatch sets `pricingReviewRequired`
+and blocks later paid work without reducing recorded exposure. A bounded
+operator audit can reconstruct the hash chain from retained job records; normal
+admission does not list the job store.
 
 Production ledgers are disabled during setup. After calibration, a separate
 versioned production policy will define a positive monthly USD cap, a maximum
@@ -1078,9 +1129,10 @@ Anthropic.
   unknown.
 - An unexpired `primary-invalid` with live finalization ownership remains
   untouched; only that owner may settle attempt one and fence the corrective
-  attempt. After finalization expiry, reconciliation settles durably known
-  primary usage, releases the never-dispatched correction, fails the job, marks
-  accounting complete, and clears the matching claim.
+  attempt. After finalization expiry, reconciliation first CAS-fences the exact
+  job as terminal failed. It then settles durably known primary usage, releases
+  the never-dispatched correction, marks accounting complete, and clears the
+  matching claim.
 - `version-written` resumes guarded pointer publication; `published` resumes
   ledger settlement, job success, claim clearing, catalog repair, and cleanup.
   Terminal states with pending accounting resume bookkeeping only.
@@ -1098,14 +1150,21 @@ JSON envelope with fixed messages.
 
 Add these owner-authenticated routes:
 
-| Method | Route                                | Purpose                      |
-| ------ | ------------------------------------ | ---------------------------- |
-| GET    | `/api/reports`                       | List saved report identities |
-| GET    | `/api/repositories/:id/report`       | Load current board state     |
-| POST   | `/api/repositories/:id/report-jobs`  | Admit Generate or Refresh    |
-| GET    | `/api/report-jobs/:jobId`            | Poll one authorized job      |
-| POST   | `/api/setup-budget-decision`         | Record an explicit decision  |
-| POST   | Netlify background function endpoint | Run one capability-bound job |
+| Method | Route                               | Purpose                      |
+| ------ | ----------------------------------- | ---------------------------- |
+| GET    | `/api/reports`                      | List saved report identities |
+| GET    | `/api/repositories/:id/report`      | Load current board state     |
+| POST   | `/api/repositories/:id/report-jobs` | Admit Generate or Refresh    |
+| GET    | `/api/report-jobs/:jobId`           | Poll one authorized job      |
+| POST   | `/api/setup-budget-decision`        | Record an explicit decision  |
+
+The separate `POST /.netlify/functions/report-job` background endpoint is not
+session-authenticated and never receives cookies, a GitHub token, or a CSRF
+token from the browser. After production, published-deploy, method, origin, and
+bounded-body guards, it accepts only the job ID and raw dispatch capability from
+the server-side admission call. It validates the capability hash before any
+source, storage-dependent continuation, or provider work and returns no report
+data.
 
 `GET /api/reports?cursor=<cursor>` requires only the Board session. It must not
 acquire a GitHub token or reject access because source authorization expired.
@@ -1283,10 +1342,13 @@ Before any paid call, verify in the deployed artifact:
   credential paths in tree metadata, every rule and placeholder boundary,
   invalid UTF-8, mandatory-input failure before count, optional whole-item
   omission, and safe provenance. Test `NO_VERBATIM_POLICY_V1` at 31/32-line and
-  63/64-span boundaries, Unicode/whitespace normalization, canonical-title
-  exemption, prompt-injection requests to copy text, claim queries, output
-  secrets, corrective-output rejection, and absence of matched text from jobs,
-  versions, errors, and logs.
+  63/64-span boundaries, exact whole-field equality at short lengths, ordered
+  CR/LF, NFC, lowercase, horizontal/full whitespace, Unicode-version, and
+  code-point boundaries. Cover permitted shorter incidental overlap,
+  canonical-title and accepted-prior-analysis exemptions, an unchanged refresh,
+  prompt-injection requests to copy text, claim queries, output secrets,
+  corrective-output rejection, and absence of matched text from jobs, versions,
+  errors, and logs.
 - Test every wire sentinel and invalid combination, sparse issue analysis,
   duplicate/unknown IDs, output limits, source binding, canonical-field
   protection, uncertainty, branch units, assignment-only behavior, and final
@@ -1304,8 +1366,9 @@ Before any paid call, verify in the deployed artifact:
 ### Provider tests
 
 - Compare the free-count and Messages request envelopes field for field and
-  assert the exact model, effort, thinking, schema, version header, and omitted
-  paid features.
+  assert the exact model, effort, thinking, schema, version header, paid-only
+  global-inference and standard-only-service controls, and omitted paid
+  features.
 - Exercise fragmented streaming frames, input/cache usage in `message_start`,
   cumulative output in multiple `message_delta` events, usage-free
   `message_stop`, multiple content block types, terminal ordering, refusal,
@@ -1316,11 +1379,13 @@ Before any paid call, verify in the deployed artifact:
   request. Plant duplicate delivery and lost-CAS-response conditions and count
   provider mock invocations.
 - Reject an expired or mismatched pricing attestation, policy ID, model, rates,
-  billed-feature hash, or deploy ID before a Messages call. For a dispatched
-  response with an unpriceable model, cache use, tool use, premium/service tier,
-  geography, or unknown billed field, prove the job publishes no version,
-  records unknown exposure at `max(full attempt ceiling, known lower bound)`,
-  sets `pricingReviewRequired`, cannot run correction, and blocks later paid
+  billed-feature hash, inference geography, service tier, or deploy ID before a
+  Messages call. Prove workspace defaults cannot replace the pinned paid
+  controls. For a dispatched response with an unpriceable model, cache use,
+  tool use, premium/service tier, geography, or unknown billed field, prove the
+  job publishes no version, records unknown exposure at
+  `max(full attempt ceiling, known lower bound)`, sets
+  `pricingReviewRequired`, cannot run correction, and blocks later paid
   admission.
 - Assert no raw request, output, thinking, error body, or source text enters
   logs, persisted jobs, ledgers, or report envelopes.
@@ -1330,6 +1395,12 @@ Before any paid call, verify in the deployed artifact:
 - Exercise exact allowlist schemas and byte bounds, strict key validation,
   strong reads, `onlyIfNew`, `onlyIfMatch`, bounded CAS conflicts, and
   fail-closed storage errors.
+- Fill the setup ledger to each four-active-job, 16-policy, 32-decision, and
+  262,144-byte boundary using worst-width projections. Repeat definitive
+  zero-billed refusals and very small settlements beyond those counts and prove
+  accounting-complete entries are removed, aggregate settled cost and the hash
+  chain remain stable, and post-dispatch settlement always fits its preallocated
+  record.
 - Race identical and different idempotency keys, concurrent repositories,
   global cross-repository UUID reuse, active-job claims, source checks, catalog
   merges/repair, report publication, and ledger reservations.

@@ -189,6 +189,91 @@ work.
 
 Disposition: resolved in the corrected plan; exact-commit re-review pending.
 
+### R11 Fixed provider geography and service tier
+
+Finding: corrected commit `3effe3ff19b12123011610f0d7c9871414b00699`
+reserved only base rates while leaving `inference_geo` to the workspace
+default. Current US-only inference costs 1.1 times the standard rates, so a paid
+request could exceed its reservation. The service tier was also implicit.
+
+Required resolution: pin every paid request and immutable price policy to
+global inference and standard-only service. Require matching effective response
+facts and treat missing or different billing classification as unknown exposure
+that blocks publication and later paid work.
+
+Disposition: resolved in the second corrected plan; exact-commit re-review
+pending.
+
+### R12 Bounded spend-ledger lifecycle
+
+Finding: the corrected ledger retained every settled attempt in one record and
+recomputed the aggregate from that unbounded history. Repeated zero-billed or
+small jobs could fill the record, leaving a later paid response unable to
+settle.
+
+Required resolution: bound the ledger's bytes, policies, decisions, and active
+jobs; reserve worst-case terminal serialization space before payment; retain
+aggregate settled cost and a hash chain; keep terminal audit in each job; and
+remove known accounting-complete active entries while retaining unknown
+exposure. Add exact-cap and repeated zero-billed tests.
+
+Disposition: resolved in the second corrected plan; exact-commit re-review
+pending.
+
+### R13 Expired corrective recovery order
+
+Finding: one reconciler bullet on the corrected commit settled and released
+spend before fencing expired `primary-invalid`, contradicting the global
+job-first failure order.
+
+Required resolution: CAS the exact expired job to terminal failed first, then
+settle known primary usage, release the never-dispatched correction, complete
+accounting, and clear the claim.
+
+Disposition: resolved in the second corrected plan; exact-commit re-review
+pending.
+
+### R14 Prior-analysis reuse
+
+Finding: the corrected no-verbatim corpus included the previously accepted
+analysis while comparison treated its prose as reader-visible. Preserving valid
+prose would fail the anti-copy check, while rephrasing it could create a false
+`changed` result.
+
+Required resolution: keep validated prior-analysis prose outside the raw-source
+corpus and permit its reuse when the new source supports it. Retain the safety
+screen and strict validation for the new output.
+
+Disposition: resolved in the second corrected plan; exact-commit re-review
+pending.
+
+### R15 Exact no-verbatim normalization
+
+Finding: global whitespace collapse erased the line boundaries needed by the
+line rule, “case folding” did not select one runtime operation, and a complete
+short raw item could be copied into one model field.
+
+Required resolution: define ordered CR/LF, NFC, lowercase, line/full whitespace,
+and Unicode code-point operations against the pinned runtime. Reject exact
+whole-field equality at every nonempty length and state the shorter incidental
+overlap that deterministic validation permits.
+
+Disposition: resolved in the second corrected plan; exact-commit re-review
+pending.
+
+### R16 Background endpoint authentication
+
+Finding: the capability-bound Netlify worker was listed as owner-session
+authenticated even though admission invokes it server-to-server with only a job
+ID and raw capability.
+
+Required resolution: list it separately from browser API routes. Require
+production, published-deploy, method, origin, body, and capability guards, and
+never forward browser session, CSRF, or GitHub token material.
+
+Disposition: resolved in the second corrected plan; exact-commit re-review
+pending.
+
 ## Confirmed design decisions
 
 The reviews confirmed these parts of the exact plan:
