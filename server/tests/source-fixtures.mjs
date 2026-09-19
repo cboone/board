@@ -161,6 +161,9 @@ export function fixtureProvider(options = {}) {
           issueList.push(
             issue(item.number, {
               ...item,
+              // GitHub assigns separate database IDs to the Issue and
+              // PullRequest representations of one pull request.
+              id: 2000 + item.number,
               pull_request: {
                 url:
                   'https://api.github.com/repos/cboone/widgets/pulls/' +
