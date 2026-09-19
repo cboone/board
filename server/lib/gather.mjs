@@ -212,8 +212,46 @@ function pullJoinFacts(item) {
     updatedAt: timestamp(item.updated_at),
   };
 }
+function assigneeFacts(item) {
+  const login = text(item?.login, { max: 100 });
+  if (!login || /[\s\u0000-\u001f\u007f-\u009f]/u.test(login)) incomplete();
+  return { id: positive(item.id), login };
+}
+function canonicalAssignees(items) {
+  if (!Array.isArray(items)) incomplete();
+  const assignees = unique(
+    bounded(items, REPORT_LIMITS.referencesPerIssue).map(assigneeFacts),
+    (item) => item.id,
+  ).sort((left, right) => left.id - right.id);
+  unique(assignees, (item) => item.login.toLowerCase());
+  return assignees;
+}
+function requireConsistentAssignees(issues, repository) {
+  const loginsById = new Map([[repository.ownerId, repository.ownerLogin]]);
+  const idsByLogin = new Map([
+    [repository.ownerLogin.toLowerCase(), repository.ownerId],
+  ]);
+  for (const issue of issues)
+    for (const assignee of issue.assignees) {
+      const normalizedLogin = assignee.login.toLowerCase();
+      const knownLogin = loginsById.get(assignee.id);
+      const knownId = idsByLogin.get(normalizedLogin);
+      if (
+        (knownLogin !== undefined && knownLogin !== assignee.login) ||
+        (knownId !== undefined && knownId !== assignee.id)
+      )
+        throw new BoardError('source_unstable');
+      loginsById.set(assignee.id, assignee.login);
+      idsByLogin.set(normalizedLogin, assignee.id);
+    }
+}
 function issueFacts(item) {
-  if (item.state !== 'open' || !Array.isArray(item.labels)) incomplete();
+  if (
+    item.state !== 'open' ||
+    !Array.isArray(item.labels) ||
+    !Array.isArray(item.assignees)
+  )
+    incomplete();
   return {
     id: positive(item.id),
     number: positive(item.number),
@@ -225,7 +263,9 @@ function issueFacts(item) {
     labels: unique(item.labels.map(labelFacts), (label) => label.id),
     milestone: item.milestone === null ? null : milestoneFacts(item.milestone),
     comments: nonnegative(item.comments),
+    createdAt: timestamp(item.created_at),
     updatedAt: timestamp(item.updated_at),
+    assignees: canonicalAssignees(item.assignees),
   };
 }
 function pullFacts(item, repo) {
@@ -490,59 +530,81 @@ async function completeTree(client, repo, budget) {
   return unique(result, (item) => item.path);
 }
 
-const EXCLUDED_DIRECTORY =
-  /(^|\/)(?:node_modules|vendor|vendors|dist|build|coverage|\.git|\.next|\.cache|\.ssh|\.aws|\.azure|\.docker|\.gnupg|\.kube|\.config\/gcloud|generated|credentials?|secrets?)(?:\/|$)/iu;
+const EXCLUDED_CONTENT_DIRECTORY =
+  /(^|\/)(?:node_modules|vendor|vendors|dist|build|coverage|\.git|\.next|\.cache|generated)(?:\/|$)/iu;
+const CREDENTIAL_DIRECTORY =
+  /(^|\/)(?:\.ssh|\.aws|\.azure|\.docker|\.gnupg|\.kube|\.config\/gcloud|credentials?|secrets?)(?:\/|$)/iu;
 const EXCLUDED_FILE =
-  /(^|\/)(?:\.env[^/]*|\.git-credentials|\.npmrc|\.netrc|\.pypirc|id_(?:rsa|dsa|ecdsa|ed25519)[^/]*|\.?credentials?[^/]*|\.?secrets?[^/]*|(?:service[-_]?account|private[-_]?key|oauth[-_]?credentials)[^/]*\.json|[^/]*\.(?:pem|key|p12|pfx|jks|keystore|crt|cer))$/iu;
+  /(^|\/)(?:\.env[^/]*|\.git-credentials|\.npmrc|\.netrc|\.pypirc|id_(?:rsa|dsa|ecdsa|ed25519)[^/]*|\.?credentials?[^/]*|\.?secrets?[^/]*|(?:service[-_]?account|private[-_]?key|oauth[-_]?credentials)[^/]*\.json|[^/]*\.(?:pem|key|p12|pfx|jks|keystore|crt|cer))(?:\/|$)/iu;
 const KNOWN_CREDENTIAL_PATH =
-  /(^|\/)(?:\.codex\/auth\.json|\.claude\/\.credentials\.json|\.config\/(?:gh\/hosts\.ya?ml|glab-cli\/config\.ya?ml|netlify\/config\.json)|Library\/Preferences\/netlify\/config\.json)$/iu;
+  /(^|\/)(?:\.codex\/auth\.json|\.claude\/\.credentials\.json|\.config\/(?:gh\/hosts\.ya?ml|glab-cli\/config\.ya?ml|netlify\/config\.json)|Library\/Preferences\/netlify\/config\.json)(?:\/|$)/iu;
 const BINARY_FILE =
   /\.(?:png|jpe?g|gif|webp|ico|pdf|zip|gz|tar|woff2?|ttf|otf|mp[34]|wav|ogg|so|dylib|dll|exe|class|wasm|bin)$/iu;
-const GUIDANCE_FILE = /(^|\/)(?:readme(?:\.[^/]+)?|agents\.md|claude\.md)$/iu;
+const README_FILE = /(^|\/)readme[^/]*$/iu;
+const AGENTS_FILE = /(^|\/)agents\.md$/iu;
+const CLAUDE_FILE = /(^|\/)claude\.md$/iu;
 const CONFIG_FILE =
   /(^|\/)(?:package\.json|(?:pnpm-lock|yarn|package-lock)\.[^/]+|(?:vite|vitest|playwright|tailwind|eslint|rollup|webpack|babel|jest)\.config\.[^/]+|(?:tsconfig[^/]*\.json)|makefile|cargo\.toml|go\.mod|pyproject\.toml|deno\.jsonc?|\.github\/workflows\/[^/]+\.ya?ml)$/iu;
 
-export function selectSourceFiles(tree, issues, limits) {
-  const prose = issues
-    .map((issue) => (issue.body ?? '') + '\n' + (issue.title ?? ''))
+export const SOURCE_PATH_EXTRACTOR_VERSION = 1;
+
+export function isKnownCredentialPath(path) {
+  return (
+    CREDENTIAL_DIRECTORY.test(path) ||
+    EXCLUDED_FILE.test(path) ||
+    KNOWN_CREDENTIAL_PATH.test(path)
+  );
+}
+
+export function extractReferencedPaths(items) {
+  const prose = items
+    .map((item) => (item.body ?? '') + '\n' + (item.title ?? ''))
     .join('\n');
-  const referencedPaths = new Set();
+  const paths = new Set();
   const quotedPath =
     /[\u0060"']([^\u0060"'\r\n]+)[\u0060"']|\]\(([^()\s]+)\)/gu;
   for (const match of prose.matchAll(quotedPath)) {
     const path = (match[1] ?? match[2])
       .replace(/^\.\//u, '')
       .replace(/(?::\d+(?::\d+)?|#L\d+(?:-L\d+)?)$/u, '');
-    if (!path.includes('://') && !path.startsWith('/'))
-      referencedPaths.add(path);
+    if (!path.includes('://') && !path.startsWith('/')) paths.add(path);
   }
+  return paths;
+}
+
+export function classifySourceFileRelevance(path, referencedPaths) {
+  if (referencedPaths.has(path))
+    return { relevanceClass: 'referenced', rank: 0 };
+  if (README_FILE.test(path)) return { relevanceClass: 'guidance', rank: 1 };
+  if (AGENTS_FILE.test(path)) return { relevanceClass: 'guidance', rank: 2 };
+  if (CLAUDE_FILE.test(path)) return { relevanceClass: 'guidance', rank: 3 };
+  if (CONFIG_FILE.test(path))
+    return { relevanceClass: 'configuration', rank: 4 };
+  return null;
+}
+
+export function selectSourceFiles(tree, issues, limits) {
+  const referencedPaths = extractReferencedPaths(issues);
   let excluded = 0;
   let unselected = 0;
   const candidates = [];
-  for (const entry of [...tree].sort((a, b) =>
-    compareSourceKeys(a.path, b.path),
-  )) {
+  for (const entry of tree) {
     if (entry.type === 'commit') {
       excluded += 1;
       continue;
     }
     if (entry.type !== 'blob') continue;
     if (
-      EXCLUDED_DIRECTORY.test(entry.path) ||
-      EXCLUDED_FILE.test(entry.path) ||
-      KNOWN_CREDENTIAL_PATH.test(entry.path) ||
+      EXCLUDED_CONTENT_DIRECTORY.test(entry.path) ||
+      isKnownCredentialPath(entry.path) ||
       BINARY_FILE.test(entry.path) ||
       (entry.mode !== '100644' && entry.mode !== '100755')
     ) {
       excluded += 1;
       continue;
     }
-    const referenced = referencedPaths.has(entry.path);
-    if (
-      !GUIDANCE_FILE.test(entry.path) &&
-      !CONFIG_FILE.test(entry.path) &&
-      !referenced
-    ) {
+    const relevance = classifySourceFileRelevance(entry.path, referencedPaths);
+    if (relevance === null) {
       unselected += 1;
       continue;
     }
@@ -550,18 +612,24 @@ export function selectSourceFiles(tree, issues, limits) {
       excluded += 1;
       continue;
     }
-    candidates.push(entry);
+    candidates.push({ entry, ...relevance });
   }
+  candidates.sort(
+    (left, right) =>
+      left.rank - right.rank ||
+      compareSourceKeys(left.entry.path, right.entry.path),
+  );
   const selected = [];
   let reservedBytes = 0;
-  for (const entry of candidates) {
+  for (const candidate of candidates) {
+    const { entry, relevanceClass } = candidate;
     const bytes = entry.size ?? limits.fileBytes;
     if (
       selected.length >= limits.files ||
       reservedBytes + bytes > limits.totalFileBytes
     )
       continue;
-    selected.push(entry);
+    selected.push({ ...entry, relevanceClass });
     reservedBytes += bytes;
   }
   return {
@@ -571,10 +639,12 @@ export function selectSourceFiles(tree, issues, limits) {
   };
 }
 
-async function filesForTree(client, repo, tree, issues, budget) {
-  const policy = selectSourceFiles(tree, issues, budget.limits);
+const BINARY_CONTENT = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u;
+
+async function filesForTree(client, repo, policy, budget) {
   let total = 0;
   const files = [];
+  const omitted = [];
   for (const entry of policy.selected) {
     let blob;
     try {
@@ -591,11 +661,6 @@ async function filesForTree(client, repo, tree, issues, budget) {
     )
       incomplete();
     const size = nonnegative(blob.size);
-    if (
-      size > budget.limits.fileBytes ||
-      total + size > budget.limits.totalFileBytes
-    )
-      throw new BoardError('source_limit_exceeded');
     const encoded = blob.content.replace(/\n/gu, '');
     if (
       !/^(?:[A-Za-z\d+/]{4})*(?:[A-Za-z\d+/]{2}==|[A-Za-z\d+/]{3}=)?$/u.test(
@@ -609,17 +674,52 @@ async function filesForTree(client, repo, tree, issues, budget) {
       (entry.size !== null && entry.size !== size)
     )
       incomplete();
+    if (size > budget.limits.fileBytes) {
+      omitted.push({
+        path: entry.path,
+        blobId: entry.sha,
+        relevanceClass: entry.relevanceClass,
+        reason: 'oversized',
+      });
+      continue;
+    }
+    total += size;
+    if (total > budget.limits.totalFileBytes)
+      throw new BoardError('source_limit_exceeded');
     let content;
     try {
       content = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
     } catch {
-      incomplete();
+      omitted.push({
+        path: entry.path,
+        blobId: entry.sha,
+        relevanceClass: entry.relevanceClass,
+        reason: 'invalid-utf8',
+      });
+      continue;
     }
-    if (content.includes('\u0000')) incomplete();
-    total += size;
-    files.push({ path: entry.path, blobId: entry.sha, content });
+    if (BINARY_CONTENT.test(content)) {
+      omitted.push({
+        path: entry.path,
+        blobId: entry.sha,
+        relevanceClass: entry.relevanceClass,
+        reason: 'binary-content',
+      });
+      continue;
+    }
+    files.push({
+      path: entry.path,
+      blobId: entry.sha,
+      content,
+      relevanceClass: entry.relevanceClass,
+    });
   }
-  return { files, excluded: policy.excluded, unselected: policy.unselected };
+  return {
+    files,
+    omitted,
+    excluded: policy.excluded + omitted.length,
+    unselected: policy.unselected,
+  };
 }
 
 function referencesFrom(prose, repo) {
@@ -792,6 +892,7 @@ async function gatherPass(
     ),
     (item) => item.number,
   );
+  requireConsistentAssignees(issues, repository);
   const pullRequests = unique(
     pullItems.map((item) => pullFacts(item, repository)),
     (item) => item.number,
@@ -914,16 +1015,15 @@ async function gatherPass(
   const fileKey =
     repository.defaultTip +
     ':' +
-    sourceDigest(selected.selected.map((item) => item.path));
+    sourceDigest(
+      selected.selected.map(({ path, relevanceClass }) => ({
+        path,
+        relevanceClass,
+      })),
+    );
   let context = immutable.files.get(fileKey);
   if (!context) {
-    context = await filesForTree(
-      client,
-      repository,
-      tree,
-      contextIssues,
-      budget,
-    );
+    context = await filesForTree(client, repository, selected, budget);
     immutable.files.set(fileKey, context);
   }
   const finalRepository = await pinRepository(
@@ -946,7 +1046,11 @@ async function gatherPass(
     references,
     tree,
     files: context.files,
-    filePolicy: { excluded: context.excluded, unselected: context.unselected },
+    filePolicy: {
+      excluded: context.excluded,
+      unselected: context.unselected,
+      omitted: context.omitted,
+    },
   };
 }
 
@@ -981,9 +1085,13 @@ function buildInventory(snapshot, sync) {
         /^in[\s_-]+progress$/iu.test(item.name),
       );
       return {
+        id: issue.id,
         number: issue.number,
         title: issue.title,
         milestone: issue.milestone?.title ?? null,
+        createdAt: issue.createdAt,
+        updatedAt: issue.updatedAt,
+        assignees: issue.assignees.map(({ id, login }) => ({ id, login })),
         inProgress: prs.length
           ? 'PR #' + prs[0].number
           : branch
@@ -1044,7 +1152,7 @@ function summarize(snapshot, observedFrom, observedTo) {
   ];
   if (snapshot.filePolicy.excluded)
     limitations.push(
-      'Credential, binary, generated, vendor, dependency, or oversized files are excluded.',
+      'Credential, binary, invalid UTF-8, generated, vendor, dependency, or oversized files are excluded.',
     );
   if (snapshot.filePolicy.unselected)
     limitations.push(
@@ -1131,6 +1239,11 @@ export function createSourceOperations({
     });
     return { client, budget };
   };
+  const repositoryId = (options) => {
+    if (!Number.isSafeInteger(options.repositoryId) || options.repositoryId < 1)
+      throw new BoardError('invalid_request');
+    return options.repositoryId;
+  };
   return Object.freeze({
     async listRepositories(options) {
       const { client, budget } = prepare(options);
@@ -1140,12 +1253,25 @@ export function createSourceOperations({
         sourceAuthorization: result.sourceAuthorization,
       };
     },
+    async checkRepositoryAccess(options) {
+      const selectedRepositoryId = repositoryId(options);
+      const { client, budget } = prepare(options);
+      const repository = await pinRepository(
+        client,
+        appId,
+        ownerId,
+        selectedRepositoryId,
+        budget,
+      );
+      budget.assertActive();
+      return {
+        ...selection(repository),
+        defaultBranch: repository.defaultBranch,
+        defaultTip: repository.defaultTip,
+      };
+    },
     async checkRepository(options) {
-      if (
-        !Number.isSafeInteger(options.repositoryId) ||
-        options.repositoryId < 1
-      )
-        throw new BoardError('invalid_request');
+      const selectedRepositoryId = repositoryId(options);
       const { client, budget } = prepare(options);
       const observedFrom = new Date(now()).toISOString();
       const immutable = {
@@ -1158,7 +1284,7 @@ export function createSourceOperations({
           const parameters = {
             appId,
             ownerId,
-            repositoryId: options.repositoryId,
+            repositoryId: selectedRepositoryId,
             budget,
             immutable,
           };
