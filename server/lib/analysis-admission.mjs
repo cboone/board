@@ -66,6 +66,28 @@ function transitionTimestamp(job, now) {
     : current;
 }
 
+function boundedDispatchSignal(input) {
+  const signals = [];
+  for (const signal of [input.signal, input.budget?.signal]) {
+    if (signal && !signals.includes(signal)) signals.push(signal);
+  }
+  if (
+    typeof input.budget?.remainingMs === 'function' &&
+    Number.isSafeInteger(input.budget?.limits?.requestMs)
+  ) {
+    const remaining = Math.floor(input.budget.remainingMs());
+    signals.push(
+      remaining <= 0
+        ? AbortSignal.abort()
+        : AbortSignal.timeout(
+            Math.min(input.budget.limits.requestMs, remaining),
+          ),
+    );
+  }
+  if (signals.length === 0) return undefined;
+  return signals.length === 1 ? signals[0] : AbortSignal.any(signals);
+}
+
 function pinnedIdentity(repository) {
   const keys = [
     'id',
@@ -415,6 +437,26 @@ export function createAnalysisAdmission({
     });
   }
 
+  async function dispatchCapability(input, jobId, capability) {
+    const signal = boundedDispatchSignal(input);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await dispatchBackgroundJob({
+          origin,
+          jobId,
+          capability,
+          fetchImpl,
+          signal,
+        });
+        break;
+      } catch {
+        // The second uncertain result leaves the one durable capability for
+        // nonpaid deadline recovery; it never creates another reservation.
+      }
+    }
+    return safe(input, jobId);
+  }
+
   async function rejectReservation(input, identity, current, code) {
     const terminal = await terminate(input, current, 'budget-blocked', code);
     if (!terminal.won) return safe(input, current.value.jobId);
@@ -531,8 +573,31 @@ export function createAnalysisAdmission({
       }
       if (!PRE_PROVIDER.has(current.value.state))
         return safe(input, current.value.jobId);
-      if (current.value.state === 'dispatchable')
-        return safe(input, current.value.jobId);
+      if (current.value.state === 'dispatchable') {
+        preserveDispatchable = true;
+        const capability = createDispatchCapability(randomBytes);
+        const capabilityHash = hashDispatchCapability(capability);
+        const rotated = await jobs.applyTransition({
+          jobId: current.value.jobId,
+          budget: input.budget,
+          expectedEtag: current.etag,
+          event: {
+            type: 'dispatch-rotated',
+            at: transitionTimestamp(current.value, now),
+            deadlineAt: current.value.stateDeadlineAt,
+            previousCapabilityHash: current.value.dispatchCapabilityHash,
+            capabilityHash,
+          },
+        });
+        current = rotated;
+        if (
+          !['updated', 'recovered'].includes(rotated.status) ||
+          rotated.value.state !== 'dispatchable' ||
+          rotated.value.dispatchCapabilityHash !== capabilityHash
+        )
+          return safe(input, rotated.value.jobId);
+        return dispatchCapability(input, rotated.value.jobId, capability);
+      }
 
       const summary = await readSetupSpendSummary({
         ...spendContext(configuration, input),
@@ -608,33 +673,13 @@ export function createAnalysisAdmission({
       });
       current = installed;
       if (
-        !['updated', 'recovered'].includes(installed.status) &&
-        installed.value.dispatchCapabilityHash !== capabilityHash
-      )
-        return safe(input, installed.value.jobId);
-      if (
+        !['updated', 'recovered'].includes(installed.status) ||
         installed.value.state !== 'dispatchable' ||
         installed.value.dispatchCapabilityHash !== capabilityHash
       )
         return safe(input, installed.value.jobId);
       preserveDispatchable = true;
-
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        try {
-          await dispatchBackgroundJob({
-            origin,
-            jobId: installed.value.jobId,
-            capability,
-            fetchImpl,
-            signal: input.signal,
-          });
-          break;
-        } catch {
-          // The second uncertain result leaves the one durable capability for
-          // nonpaid deadline recovery; it never creates another reservation.
-        }
-      }
-      return safe(input, installed.value.jobId);
+      return dispatchCapability(input, installed.value.jobId, capability);
     } catch (error) {
       if (!preserveDispatchable)
         await cleanupOwnedFailure(input, identity, current.value.jobId);

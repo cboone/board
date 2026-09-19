@@ -83,6 +83,69 @@ function dispatchable(job = reserved()) {
   });
 }
 
+test('dispatch capability rotation preserves the exact live dispatch fence', () => {
+  const job = dispatchable();
+  const rotated = transitionJob(job, {
+    type: 'dispatch-rotated',
+    at: TIMES.collecting,
+    deadlineAt: job.stateDeadlineAt,
+    previousCapabilityHash: hash('a'),
+    capabilityHash: hash('9'),
+  });
+  assert.equal(rotated.state, 'dispatchable');
+  assert.equal(rotated.stateVersion, job.stateVersion + 1);
+  assert.equal(rotated.stateDeadlineAt, job.stateDeadlineAt);
+  assert.equal(rotated.dispatchCapabilityHash, hash('9'));
+  assert.deepEqual(rotated.accounting, job.accounting);
+  assert.deepEqual(rotated.attempts, job.attempts);
+
+  for (const event of [
+    {
+      type: 'dispatch-rotated',
+      at: TIMES.collecting,
+      deadlineAt: job.stateDeadlineAt,
+      previousCapabilityHash: hash('8'),
+      capabilityHash: hash('9'),
+    },
+    {
+      type: 'dispatch-rotated',
+      at: TIMES.collecting,
+      deadlineAt: job.stateDeadlineAt,
+      previousCapabilityHash: hash('a'),
+      capabilityHash: hash('a'),
+    },
+    {
+      type: 'dispatch-rotated',
+      at: '2026-09-18T12:30:00.000Z',
+      deadlineAt: job.stateDeadlineAt,
+      previousCapabilityHash: hash('a'),
+      capabilityHash: hash('9'),
+    },
+    {
+      type: 'dispatch-rotated',
+      at: TIMES.collecting,
+      deadlineAt: '2026-09-18T12:31:00.000Z',
+      previousCapabilityHash: hash('a'),
+      capabilityHash: hash('9'),
+    },
+  ]) {
+    assert.throws(() => transitionJob(job, event), {
+      code: 'service_unavailable',
+    });
+  }
+  assert.throws(
+    () =>
+      transitionJob(reserved(), {
+        type: 'dispatch-rotated',
+        at: TIMES.collecting,
+        deadlineAt: job.stateDeadlineAt,
+        previousCapabilityHash: hash('a'),
+        capabilityHash: hash('9'),
+      }),
+    { code: 'service_unavailable' },
+  );
+});
+
 function collecting(job = dispatchable(), tokenHash = hash('b')) {
   return transitionJob(job, {
     type: 'free-lease-claimed',

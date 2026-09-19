@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createAnalysisAdmission } from '../lib/analysis-admission.mjs';
+import { createJobStore } from '../lib/job-store.mjs';
 import { transitionJob } from '../lib/job-machine.mjs';
 import { deriveAnalysisJobIdentity } from '../lib/jobs.mjs';
 import { repositoryStateKey } from '../lib/report-store.mjs';
@@ -35,14 +36,15 @@ const request = (overrides = {}) => ({
   ...overrides,
 });
 
-function memoryStorage(name, log) {
+function memoryStorage(name, log, expectedBudget = budget) {
   const records = new Map();
   const lostWrites = new Set();
+  let beforeWrite = null;
   let sequence = 0;
   let writes = 0;
   return {
     async read(key, options) {
-      assert.deepEqual(options, { budget });
+      assert.deepEqual(options, { budget: expectedBudget });
       log.push({ store: name, action: 'read', key });
       const current = records.get(key);
       return current === undefined
@@ -50,9 +52,14 @@ function memoryStorage(name, log) {
         : { value: structuredClone(current.value), etag: current.etag };
     },
     async write(key, value, condition, options) {
-      assert.deepEqual(options, { budget });
+      assert.deepEqual(options, { budget: expectedBudget });
       writes += 1;
       log.push({ store: name, action: 'write', key, condition });
+      if (beforeWrite !== null) {
+        const hook = beforeWrite;
+        beforeWrite = null;
+        await hook({ key, value: structuredClone(value), condition });
+      }
       const current = records.get(key);
       if (
         (condition.onlyIfNew === true && current !== undefined) ||
@@ -70,6 +77,13 @@ function memoryStorage(name, log) {
     loseWrite(number) {
       lostWrites.add(number);
     },
+    loseNextWrite() {
+      lostWrites.add(writes + 1);
+    },
+    beforeNextWrite(hook) {
+      assert.equal(beforeWrite, null);
+      beforeWrite = hook;
+    },
     value(key) {
       return records.has(key) ? structuredClone(records.get(key).value) : null;
     },
@@ -86,11 +100,11 @@ function memoryStorage(name, log) {
   };
 }
 
-function fixture({ now = NOW, fetchImpl } = {}) {
+function fixture({ now = NOW, fetchImpl, operationBudget = budget } = {}) {
   const log = [];
-  const reportStorage = memoryStorage('reports', log);
-  const jobStorage = memoryStorage('jobs', log);
-  const spendStorage = memoryStorage('spend', log);
+  const reportStorage = memoryStorage('reports', log, operationBudget);
+  const jobStorage = memoryStorage('jobs', log, operationBudget);
+  const spendStorage = memoryStorage('spend', log, operationBudget);
   const dispatches = [];
   let randomCalls = 0;
   const resolvedFetch =
@@ -179,7 +193,30 @@ test('admission orders durable stores, dispatches only a capability, and returns
   );
 });
 
-test('identical concurrent and repeated admission never duplicate spend or dispatch', async () => {
+test('background dispatch combines request cancellation with the operation deadline', async () => {
+  const controller = new AbortController();
+  const operationBudget = Object.freeze({
+    ...budget,
+    signal: controller.signal,
+    limits: Object.freeze({ requestMs: 15_000 }),
+    remainingMs: () => 30_000,
+  });
+  let dispatchSignal;
+  const board = fixture({
+    operationBudget,
+    fetchImpl: async (_url, init) => {
+      dispatchSignal = init.signal;
+      return new Response(null, { status: 202 });
+    },
+  });
+  await board.admission.admit(request({ budget: operationBudget }));
+  assert.ok(dispatchSignal instanceof AbortSignal);
+  assert.equal(dispatchSignal.aborted, false);
+  controller.abort();
+  assert.equal(dispatchSignal.aborted, true);
+});
+
+test('identical admission serializes dispatch and reuses the reservation when resumed', async () => {
   const board = fixture();
   const input = request();
   const [first, second] = await Promise.all([
@@ -195,8 +232,8 @@ test('identical concurrent and repeated admission never duplicate spend or dispa
   const randomCalls = board.randomCalls();
   const repeated = await board.admission.admit(input);
   assert.equal(repeated.id, first.id);
-  assert.equal(board.dispatches.length, 1);
-  assert.equal(board.randomCalls(), randomCalls);
+  assert.equal(board.dispatches.length, 2);
+  assert.equal(board.randomCalls(), randomCalls + 1);
   assert.equal(
     board.spendStorage.value(SETUP_SPEND_LEDGER_KEY).accountingSequence,
     1,
@@ -205,8 +242,8 @@ test('identical concurrent and repeated admission never duplicate spend or dispa
     request({ authorizationEpoch: 3 }),
   );
   assert.equal(reauthorized.id, first.id);
-  assert.equal(board.dispatches.length, 1);
-  assert.equal(board.randomCalls(), randomCalls);
+  assert.equal(board.dispatches.length, 2);
+  assert.equal(board.randomCalls(), randomCalls + 1);
 });
 
 test('a competing idempotency key fences its inert loser and preserves the winner', async () => {
@@ -319,12 +356,14 @@ test('lost acknowledgements recover each admission boundary without duplicate ef
   );
 });
 
-test('dispatch uncertainty retries the same capability once and leaves one durable job', async () => {
+test('dispatch uncertainty rotates the capability and redispatches without another reservation', async () => {
   const calls = [];
   const board = fixture({
     fetchImpl: async (_url, init) => {
       calls.push(JSON.parse(init.body));
-      throw new Error('synthetic uncertain dispatch');
+      if (calls.length <= 2)
+        throw new Error('synthetic uncertain dispatch');
+      return new Response(null, { status: 202 });
     },
   });
   const input = request();
@@ -338,8 +377,83 @@ test('dispatch uncertainty retries the same capability once and leaves one durab
     'dispatchable',
   );
   await board.admission.admit(input);
+  assert.equal(calls.length, 3);
+  assert.notEqual(calls[2].capability, calls[0].capability);
+  assert.equal(board.randomCalls(), 2);
+  assert.equal(
+    board.spendStorage.value(SETUP_SPEND_LEDGER_KEY).accountingSequence,
+    1,
+  );
+});
+
+test('lost rotation acknowledgement redispatches only the exact recovered capability', async () => {
+  const calls = [];
+  const board = fixture({
+    fetchImpl: async (_url, init) => {
+      calls.push(JSON.parse(init.body));
+      return new Response(null, { status: 202 });
+    },
+  });
+  const input = request();
+  const admitted = await board.admission.admit(input);
+  board.jobStorage.loseNextWrite();
+
+  await board.admission.admit(input);
+
   assert.equal(calls.length, 2);
-  assert.equal(board.randomCalls(), 1);
+  assert.notEqual(calls[1].capability, calls[0].capability);
+  assert.equal(board.randomCalls(), 2);
+  assert.equal(
+    board.spendStorage.value(SETUP_SPEND_LEDGER_KEY).accountingSequence,
+    1,
+  );
+  assert.equal(
+    board.jobStorage.value(`jobs/${admitted.id}`).state,
+    'dispatchable',
+  );
+});
+
+test('an old worker claim wins the dispatch rotation race and prevents redispatch', async () => {
+  const calls = [];
+  const board = fixture({
+    fetchImpl: async (_url, init) => {
+      calls.push(JSON.parse(init.body));
+      return new Response(null, { status: 202 });
+    },
+  });
+  const input = request();
+  const admitted = await board.admission.admit(input);
+  const oldCapability = calls[0].capability;
+  const workerJobs = createJobStore({ storage: board.jobStorage });
+  const authorized = await workerJobs.authorizeDispatch({
+    jobId: admitted.id,
+    capability: oldCapability,
+    budget,
+  });
+  board.jobStorage.beforeNextWrite(async () => {
+    const claimed = await workerJobs.applyTransition({
+      jobId: admitted.id,
+      budget,
+      expectedEtag: authorized.etag,
+      event: {
+        type: 'free-lease-claimed',
+        at: NOW,
+        phase: 'collecting',
+        tokenHash: 'f'.repeat(64),
+        expiresAt: '2026-09-19T04:40:00.000Z',
+      },
+    });
+    assert.equal(claimed.status, 'updated');
+  });
+
+  await board.admission.admit(input);
+
+  assert.equal(calls.length, 1);
+  assert.equal(board.randomCalls(), 2);
+  assert.equal(
+    board.jobStorage.value(`jobs/${admitted.id}`).state,
+    'collecting',
+  );
   assert.equal(
     board.spendStorage.value(SETUP_SPEND_LEDGER_KEY).accountingSequence,
     1,

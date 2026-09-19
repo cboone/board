@@ -390,6 +390,29 @@ function dispatchInstalled(job, event) {
   return result;
 }
 
+function dispatchRotated(job, event) {
+  exact(event, [
+    'type',
+    'at',
+    'deadlineAt',
+    'previousCapabilityHash',
+    'capabilityHash',
+  ]);
+  if (
+    job.state !== 'dispatchable' ||
+    !live(job.stateDeadlineAt, event.at) ||
+    event.deadlineAt !== job.stateDeadlineAt ||
+    !hex(event.previousCapabilityHash) ||
+    event.previousCapabilityHash !== job.dispatchCapabilityHash ||
+    !hex(event.capabilityHash) ||
+    event.capabilityHash === event.previousCapabilityHash
+  )
+    fail();
+  const result = updated(job, 'dispatchable', event.at, event.deadlineAt);
+  result.dispatchCapabilityHash = event.capabilityHash;
+  return result;
+}
+
 function freeLeaseClaimed(job, event) {
   exact(event, ['type', 'at', 'phase', 'tokenHash', 'expiresAt']);
   if (
@@ -924,6 +947,9 @@ export function transitionJob(jobValue, event) {
       break;
     case 'dispatch-installed':
       candidate = dispatchInstalled(job, event);
+      break;
+    case 'dispatch-rotated':
+      candidate = dispatchRotated(job, event);
       break;
     case 'free-lease-claimed':
       candidate = freeLeaseClaimed(job, event);
