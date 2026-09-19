@@ -318,6 +318,23 @@ phase-plan documents.
     reason-only uncertainty, uncertainty with a reference, and an exact-identity
     worker refresh with omitted sections. Restoring the prior code makes valid
     reports fail with `source_incomplete` and drops saved uncertainty.
+21. **Preflight before reconciliation:** Report-job admission now strongly reads
+    the current readiness marker before either the global or repository
+    reconciler can perform a durable recovery write. The lower admission guard
+    remains in place and rereads readiness after reconciliation before any new
+    catalog, job, claim, reservation, or dispatch write. A deterministic
+    regression observes zero reconciliation calls, zero admission calls, and
+    unchanged report, job, and spend stores when the marker is absent. Removing
+    the outer guard makes the synthetic reconciliation effect run and the test
+    fail.
+22. **Saved-report catalog boundary:** The hidden review claim that
+    `current: null` catalog membership can break `/api/reports` does not match
+    the public contract. The report store filters memberships without a current
+    report before response projection, as the plan requires. The strict server
+    and browser pointer checks therefore remain unchanged. A focused operation
+    test confirms that an admitted first-generation job stays out of the saved
+    report catalog while the direct report endpoint returns its active job for
+    polling and recovery.
 
 ## Plan compliance
 
@@ -394,8 +411,10 @@ Current-tree validation includes:
   preflight reads complete;
 - refresh-continuity tests covering omitted optional report sections, nested
   uncertainty, and the exact-identity worker path;
+- admission-ordering and catalog-boundary tests covering a missing preflight
+  marker and a pending first-generation job;
 - `npm test`: 182 of 182 Vitest checks;
-- `npm run test:server`: 462 of 462 native backend checks;
+- `npm run test:server`: 464 of 464 native backend checks;
 - `npm run test:composition`: 5 of 5 composition checks;
 - `npm run test:browser:production`: 189 of 189 checks across Chromium,
   Firefox, and WebKit;
