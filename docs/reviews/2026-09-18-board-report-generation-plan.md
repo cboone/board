@@ -4,7 +4,8 @@ Date: 2026-09-18
 
 Status: corrections applied; exact-commit re-review pending. Three independent
 reviews of exact planning commit
-`976e1249f9b54776f44c0956e26bc2990e144125` found ten required corrections. The
+`976e1249f9b54776f44c0956e26bc2990e144125` found ten required corrections;
+successive exact-commit reviews found further durability and policy gaps. The
 implementation baseline is Phase 2 merge
 `370c257c49c09492426b4d8df24d37240884e908`.
 
@@ -288,7 +289,28 @@ the global head. Treat accounting-complete entry removal as idempotent
 housekeeping outside the monetary digest, and do not claim the compacted ledger
 can reproduce every historical intermediate digest.
 
-Disposition: resolved in the third corrected plan; exact-commit re-review
+Disposition: the expired pre-provider case was resolved in the third corrected
+plan. Terminal accounting recovery is tracked in R19; exact-commit re-review
+pending.
+
+### R19 Terminal accounting sweep and cross-repository proof
+
+Finding: exact commit `946891856427333744b0dc833a70d30df2340b64` swept
+expired nonterminal entries but could leave a terminal job with pending known
+accounting in the bounded active ledger. Exact commit
+`be1956f9ad3cd2fcddbc30e9d2ae63a437f17453` corrected the sweep, but its test
+wording did not require a different-repository admission and could pass through
+the same-repository reconciler without exercising the global sweep.
+
+Required resolution: run the nonpaid reconciler for every terminal entry with
+pending accounting and every expired nonterminal entry before each reservation.
+Add an explicit test in which repository A stops after its terminal job CAS and
+before ledger settlement, then repository B admission must finish A's
+ledger/accounting/claim order through the global pre-reservation sweep. It must
+settle A exactly once, mark A accounting-complete, clear A's claim last, remove
+A's active entry, and only then reserve for B.
+
+Disposition: resolved in the fourth corrected plan; exact-commit re-review
 pending.
 
 ### R18 Cross-repository active-ledger recovery
@@ -301,7 +323,9 @@ Required resolution: before every reservation, inspect all at-most-four active
 jobs and run state-specific nonpaid reconciliation for every terminal entry
 with pending accounting and every expired nonterminal entry. Leave live
 nonterminal and unknown entries untouched, and reject new paid work while a
-terminal-pending or expired entry remains unresolved.
+terminal-pending or expired entry remains unresolved. Prove the terminal case
+cross-repository so it exercises the global pre-reservation sweep rather than
+the same-repository active-job reconciler.
 
 Disposition: resolved in the third corrected plan; exact-commit re-review
 pending.

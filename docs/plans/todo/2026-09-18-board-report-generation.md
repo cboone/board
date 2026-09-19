@@ -1418,9 +1418,12 @@ Before any paid call, verify in the deployed artifact:
   global accounting head with job B, then prove A recovers from its own active
   entry's transition ID/sequence/digest without replaying settlement. Fill the
   active map with interrupted pre-provider jobs from other repositories, expire
-  them, and separately interrupt after a terminal job CAS but before its ledger
-  settlement. Prove a new admission reconciles each job/accounting/claim order
-  within the four-entry bound before reserving.
+  them, then prove a new admission reconciles each job/accounting/claim order
+  within the four-entry bound before reserving. Separately, commit repository
+  A's terminal job CAS and interrupt before its ledger settlement; prove a new
+  repository B admission uses the global pre-reservation sweep to settle A
+  exactly once, mark A accounting-complete, clear A's claim last, remove A's
+  active entry, and only then reserve for B.
 - Race identical and different idempotency keys, concurrent repositories,
   global cross-repository UUID reuse, active-job claims, source checks, catalog
   merges/repair, report publication, and ledger reservations.
