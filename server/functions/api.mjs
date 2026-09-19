@@ -21,6 +21,21 @@ import { REVIEWED_SETUP_PRICING_ATTESTATION } from '../lib/spend.mjs';
 
 export const config = { path: '/api/*' };
 
+function requiresReportOperations(request) {
+  const path = new URL(request.url).pathname;
+  return (
+    (request.method === 'GET' &&
+      ['/api/reports', '/api/analysis-availability'].includes(path)) ||
+    (request.method === 'POST' && path === '/api/setup-budget-decision') ||
+    (request.method === 'POST' &&
+      /^\/api\/repositories\/[1-9]\d*\/(?:check|report-jobs)$/u.test(path)) ||
+    (request.method === 'GET' &&
+      /^\/api\/repositories\/[1-9]\d*\/report$/u.test(path)) ||
+    (request.method === 'GET' &&
+      /^\/api\/report-jobs\/[a-f0-9]{64}$/u.test(path))
+  );
+}
+
 export function createHandler({
   env = process.env,
   storageFactory = createProductionStorage,
@@ -38,15 +53,10 @@ export function createHandler({
       const origin = readPublicOrigin(env);
       requireCanonicalOrigin(request, origin);
       const environment = readEnvironment(env);
-      const [authStorage, reportStorage, jobStorage, spendStorage] =
-        await Promise.all(
-          [
-            ['board-auth', storageFactory],
-            ['board-reports', storageFactory],
-            ['board-jobs', storageFactory],
-            ['board-spend', storageFactory],
-          ].map(([storeName, factory]) => factory({ storeName, fetchImpl })),
-        );
+      const authStorage = await storageFactory({
+        storeName: 'board-auth',
+        fetchImpl,
+      });
       const crypto = createCrypto({ keyring: environment.keyring });
       const auth = authFactory({
         config: environment,
@@ -61,35 +71,43 @@ export function createHandler({
         fetchImpl,
         now,
       });
-      const durable = createAnalysisDurableServices({
-        reportStorage,
-        jobStorage,
-        spendStorage,
-        deployId,
-        pricingAttestation: REVIEWED_SETUP_PRICING_ATTESTATION,
-      });
-      const reconciler = reconcilerFactory({ ...durable, now });
-      const admission = admissionFactory({
-        reportStorage,
-        jobStorage,
-        spendStorage,
-        deployId,
-        origin,
-        pricingAttestation: REVIEWED_SETUP_PRICING_ATTESTATION,
-        fetchImpl,
-        now,
-      });
-      const reportOperations = reportFactory({
-        reportStorage,
-        jobStorage,
-        spendStorage,
-        sourceOperations,
-        admission,
-        reconcile: reconciler.reconcile,
-        deployId,
-        pricingAttestation: REVIEWED_SETUP_PRICING_ATTESTATION,
-        now,
-      });
+      let reportOperations = null;
+      if (requiresReportOperations(request)) {
+        const [reportStorage, jobStorage, spendStorage] = await Promise.all(
+          ['board-reports', 'board-jobs', 'board-spend'].map((storeName) =>
+            storageFactory({ storeName, fetchImpl }),
+          ),
+        );
+        const durable = createAnalysisDurableServices({
+          reportStorage,
+          jobStorage,
+          spendStorage,
+          deployId,
+          pricingAttestation: REVIEWED_SETUP_PRICING_ATTESTATION,
+        });
+        const reconciler = reconcilerFactory({ ...durable, now });
+        const admission = admissionFactory({
+          reportStorage,
+          jobStorage,
+          spendStorage,
+          deployId,
+          origin,
+          pricingAttestation: REVIEWED_SETUP_PRICING_ATTESTATION,
+          fetchImpl,
+          now,
+        });
+        reportOperations = reportFactory({
+          reportStorage,
+          jobStorage,
+          spendStorage,
+          sourceOperations,
+          admission,
+          reconcile: reconciler.reconcile,
+          deployId,
+          pricingAttestation: REVIEWED_SETUP_PRICING_ATTESTATION,
+          now,
+        });
+      }
       return await createApi({
         auth,
         sourceOperations,

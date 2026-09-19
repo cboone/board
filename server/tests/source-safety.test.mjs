@@ -81,6 +81,31 @@ test('assignment placeholders are narrowly and deterministically accepted', () =
     assert.equal(isDocumentedPlaceholder(value), false, value);
 });
 
+test('assignment safety covers syntax delimiters without rejecting placeholders', () => {
+  for (const value of [
+    'call(api_key=real-value)',
+    '[client_secret: real-value]',
+    'config:password=real-value',
+    'config.auth_token=real-value',
+    'https://example.invalid/?access_token=real-value&next=1',
+  ]) {
+    const result = inspectSourceSafety(value);
+    assert.equal(result.safe, false, value);
+    assert.ok(
+      result.matches.some(
+        ({ ruleId }) => ruleId === 'credential-assignment-or-header',
+      ),
+      value,
+    );
+  }
+  for (const value of [
+    'call(api_key=example)',
+    '[client_secret: redacted]',
+    'https://example.invalid/?access_token=${TOKEN}&next=1',
+  ])
+    assert.equal(inspectSourceSafety(value).safe, true, value);
+});
+
 test('mandatory safety errors retain only safe identifiers and counts', () => {
   const unsafe = 'authorization=synthetic-sensitive-value';
   assert.throws(

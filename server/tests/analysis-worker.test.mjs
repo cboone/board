@@ -439,6 +439,8 @@ function fixture({
   pricingVerifiedAt,
   pricingValidThrough,
   pricingReviewAfterCount = null,
+  countErrorAt = null,
+  countError = new BoardError('analysis_provider_unavailable'),
   revokeDuringPaidReservationAt = null,
   revokeOnPaidBoundaryReread = null,
   revokeDuringPublicationOwnerRead = false,
@@ -582,6 +584,7 @@ function fixture({
     countTokens: async () => {
       counts += 1;
       if (counts === pricingReviewAfterCount) spend.requirePricingReview();
+      if (counts === countErrorAt) throw countError;
       return 1000;
     },
     createMessage: async (request) => {
@@ -1214,6 +1217,30 @@ test('invalid primary releases correction when its full paid window no longer re
     ['settled', 'released'],
   );
 });
+
+for (const code of [
+  'analysis_input_too_large',
+  'analysis_provider_unavailable',
+  'source_timeout',
+]) {
+  test(`corrective token counting preserves ${code}`, async () => {
+    const setup = fixture({
+      responses: [primaryResponse({ invalid: true })],
+      countErrorAt: 2,
+      countError: new BoardError(code),
+    });
+    const result = await runWorker(setup);
+    assert.equal(result.state, 'failed');
+    assert.equal(result.terminal.errorCode, code);
+    assert.equal(setup.metrics.messages(), 1);
+    assert.equal(setup.metrics.counts(), 2);
+    assert.deepEqual(
+      result.attempts.map(({ state }) => state),
+      ['settled', 'released'],
+    );
+    assert.equal(setup.spend.reservation(), null);
+  });
+}
 
 test('source failure terminates and releases both reservations before any paid call', async () => {
   const setup = fixture({ sourceError: new BoardError('source_unavailable') });

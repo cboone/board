@@ -1505,11 +1505,35 @@ export function createAnalysisWorker(input) {
       if (
         !Number.isSafeInteger(correctiveCount) ||
         correctiveCount < 0 ||
-        correctiveCount > ANALYSIS_INPUT_LIMITS.inputTokens ||
-        !paidWindow(runtime)
+        correctiveCount > ANALYSIS_INPUT_LIMITS.inputTokens
       )
         throw new BoardError('analysis_input_too_large');
-    } catch {
+    } catch (error) {
+      if (
+        !(error instanceof BoardError) ||
+        error.code !== 'analysis_output_invalid'
+      ) {
+        const owned = await finalizationOwner(
+          current,
+          1,
+          primaryFinalization.token.hash,
+          budget,
+        );
+        if (owned === null)
+          return (await reconciler.reconcile({ jobId, budget })).value;
+        return (
+          await terminateOwned(
+            owned,
+            {
+              status: 'failed',
+              errorCode: safeFailureCode(error),
+              attemptTokenHash: primary.token.hash,
+              finalizationTokenHash: primaryFinalization.token.hash,
+            },
+            budget,
+          )
+        ).value;
+      }
       return (
         await failValidation(
           current,
@@ -1520,6 +1544,17 @@ export function createAnalysisWorker(input) {
         )
       ).value;
     }
+
+    if (!paidWindow(runtime))
+      return (
+        await failValidation(
+          current,
+          1,
+          primary.token.hash,
+          primaryFinalization.token.hash,
+          budget,
+        )
+      ).value;
 
     const correctiveToken = randomToken(
       randomBytes,

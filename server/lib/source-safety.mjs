@@ -76,7 +76,7 @@ export const SOURCE_SAFETY_POLICY_V1 = freezePolicy({
   assignment: {
     id: 'credential-assignment-or-header',
     source:
-      '(?:^|[\\s{,;])(?:["\']?)(api_key|apikey|access_token|auth_token|client_secret|password|passwd|secret|private_key|authorization)(?:["\']?)\\s*(?::|=)\\s*(?:"([^"\\r\\n]{0,2048})"|\'([^\'\\r\\n]{0,2048})\'|([^,;\\r\\n]{0,2048}))',
+      '(?:^|[^A-Za-z0-9_])(?:["\']?)(api_key|apikey|access_token|auth_token|client_secret|password|passwd|secret|private_key|authorization)(?:["\']?)\\s*(?::|=)\\s*(?:"([^"\\r\\n]{0,2048})"|\'([^\'\\r\\n]{0,2048})\'|(\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}|[^,;)\\]}&\\r\\n]{0,2048}))',
     flags: 'gimu',
   },
 });
