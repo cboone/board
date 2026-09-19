@@ -1082,3 +1082,111 @@ test('late acknowledgement publication retains timely durable-pair evidence and 
     );
   }
 });
+
+test('job token authority survives browser sign-out but remains bound to the admitted epoch', async () => {
+  const ctx = setup();
+  const signed = await login(ctx);
+  const session = await ctx.auth.requireAuthorizedOwner(
+    request(signed.cookies),
+    {
+      budget: ctx.budget(),
+    },
+  );
+  const lease = await ctx.auth.acquireJobToken({
+    ownerId: 99961,
+    authorizationEpoch: session.authorizationEpoch,
+    budget: ctx.budget(),
+  });
+  assert.equal(lease.accessToken, 'synthetic-access');
+  assert.equal(lease.generation, 1);
+
+  await ctx.auth.logout({ session, budget: ctx.budget() });
+  assert.deepEqual(
+    await ctx.auth.recheckJobAuthorization({
+      ownerId: 99961,
+      authorizationEpoch: session.authorizationEpoch,
+      generation: lease.generation,
+      budget: ctx.budget(),
+    }),
+    { id: 99961, login: 'cboone' },
+  );
+  assert.equal(
+    (
+      await ctx.auth.acquireJobToken({
+        ownerId: 99961,
+        authorizationEpoch: session.authorizationEpoch,
+        budget: ctx.budget(),
+      })
+    ).generation,
+    1,
+  );
+});
+
+test('job token authority refreshes through the shared protocol and fences stale generations', async () => {
+  const ctx = setup();
+  const signed = await login(ctx);
+  const session = await ctx.auth.requireAuthorizedOwner(
+    request(signed.cookies),
+    {
+      budget: ctx.budget(),
+    },
+  );
+  await expireAccess(ctx);
+
+  const lease = await ctx.auth.acquireJobToken({
+    ownerId: 99961,
+    authorizationEpoch: session.authorizationEpoch,
+    budget: ctx.budget(),
+  });
+  assert.equal(lease.generation, 2);
+  assert.equal(lease.accessToken, 'synthetic-access');
+  assert.equal(ctx.calls.length, 3);
+  await assert.rejects(
+    ctx.auth.recheckJobAuthorization({
+      ownerId: 99961,
+      authorizationEpoch: session.authorizationEpoch,
+      generation: 1,
+      budget: ctx.budget(),
+    }),
+    { code: 'provider_unavailable' },
+  );
+  await ctx.auth.recheckJobAuthorization({
+    ownerId: 99961,
+    authorizationEpoch: session.authorizationEpoch,
+    generation: 2,
+    budget: ctx.budget(),
+  });
+});
+
+test('GitHub authorization revocation fences an admitted job without using a browser session', async () => {
+  const ctx = setup();
+  const signed = await login(ctx);
+  const session = await ctx.auth.requireAuthorizedOwner(
+    request(signed.cookies),
+    {
+      budget: ctx.budget(),
+    },
+  );
+  await ctx.auth.revokeAuthorization({
+    ownerId: 99961,
+    expectedGeneration: 1,
+    budget: ctx.budget(),
+  });
+  await assert.rejects(
+    ctx.auth.acquireJobToken({
+      ownerId: 99961,
+      authorizationEpoch: session.authorizationEpoch,
+      budget: ctx.budget(),
+    }),
+    { code: 'source_authorization_required' },
+  );
+  await assert.rejects(
+    ctx.auth.recheckJobAuthorization({
+      ownerId: 99961,
+      authorizationEpoch: session.authorizationEpoch,
+      generation: 1,
+      budget: ctx.budget(),
+    }),
+    { code: 'source_authorization_required' },
+  );
+});
