@@ -213,6 +213,7 @@ export function createApi({ auth, sourceOperations, createOperationBudget }) {
         throw error;
       }
       let output;
+      let leaseIsCurrent;
       if (isList) {
         const repositories = list(
           result?.repositories,
@@ -225,7 +226,7 @@ export function createApi({ auth, sourceOperations, createOperationBudget }) {
           )
         )
           fail();
-        await auth.recordSourceAuthorization({
+        leaseIsCurrent = await auth.recordSourceAuthorization({
           lease,
           sourceAuthorization: result.sourceAuthorization,
           budget,
@@ -233,13 +234,14 @@ export function createApi({ auth, sourceOperations, createOperationBudget }) {
         output = { repositories };
       } else {
         output = projectSummary(result?.summary, repositoryId);
-        await auth.recordSourceAuthorization({
+        leaseIsCurrent = await auth.recordSourceAuthorization({
           lease,
           sourceAuthorization: 'ready',
           budget,
         });
       }
-      await auth.recheckOwner({ session, budget });
+      await auth.recheckOwner({ session, lease, budget });
+      if (!leaseIsCurrent) throw new BoardError('provider_unavailable');
       return json(output);
     } catch (error) {
       return errorResponse(error);

@@ -926,6 +926,62 @@ test('an unconfirmed published pair is withheld until its claimant confirms stor
   assert.equal(confirmed.publicationAcknowledgedAt, ctx.now());
 });
 
+test('logout after refresh acknowledgement rejects only the revoked session', async () => {
+  const ctx = setup();
+  const first = await login(ctx);
+  const second = await login(ctx);
+  await expireAccess(ctx);
+  const firstSession = await ctx.auth.requireAuthorizedOwner(
+    request(first.cookies),
+  );
+  const secondSession = await ctx.auth.requireAuthorizedOwner(
+    request(second.cookies),
+  );
+  const write = ctx.storage.write.bind(ctx.storage);
+  let loggedOut = false;
+  ctx.storage.write = async (key, value, condition) => {
+    if (
+      key === ACCOUNT &&
+      value.state === 'active' &&
+      value.generation === 3 &&
+      value.publicationAcknowledgedAt !== undefined
+    ) {
+      const result = await write(key, value, condition);
+      if (result.modified && !loggedOut) {
+        loggedOut = true;
+        await ctx.auth.logout({ session: firstSession, budget: ctx.budget() });
+      }
+      return result;
+    }
+    return write(key, value, condition);
+  };
+
+  await assert.rejects(
+    ctx.auth.acquireToken({ session: firstSession, budget: ctx.budget() }),
+    { code: 'session_required' },
+  );
+  const confirmed = (await ctx.storage.read(ACCOUNT)).value;
+  assert.equal(confirmed.state, 'active');
+  assert.equal(confirmed.generation, 3);
+  assert.ok(confirmed.tokenEnvelope);
+  assert.ok(confirmed.publicationClaim);
+  assert.equal(confirmed.publicationAcknowledgedAt, ctx.now());
+  assert.equal(
+    (
+      await ctx.auth.acquireToken({
+        session: secondSession,
+        budget: ctx.budget(),
+      })
+    ).generation,
+    3,
+  );
+  assert.equal(
+    ctx.calls.length,
+    5,
+    'the surviving session reuses the acknowledged pair without another refresh',
+  );
+});
+
 test('late acknowledgement publication retains timely durable-pair evidence and cannot cross newer CAS fences', async () => {
   for (const fence of ['none', 'reauthorization', 'oauth', 'revocation']) {
     const ctx = setup();

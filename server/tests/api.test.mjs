@@ -81,17 +81,21 @@ async function setup(sourceOperations) {
       throw new Error('Unexpected network');
     },
   });
-  const start = await auth.startOAuth(new Request(`${ORIGIN}/api/auth/start`), {
-    budget: budget(now),
-  });
-  const state = new URL(start.location).searchParams.get('state');
-  const done = await auth.completeOAuth(
-    new Request(
-      `${ORIGIN}/api/auth/callback?state=${state}&code=synthetic-code`,
-      { headers: { Cookie: start.cookies[0].split(';')[0] } },
-    ),
-    { budget: budget(now) },
-  );
+  const authorize = async () => {
+    const start = await auth.startOAuth(
+      new Request(`${ORIGIN}/api/auth/start`),
+      { budget: budget(now) },
+    );
+    const state = new URL(start.location).searchParams.get('state');
+    return auth.completeOAuth(
+      new Request(
+        `${ORIGIN}/api/auth/callback?state=${state}&code=synthetic-code`,
+        { headers: { Cookie: start.cookies[0].split(';')[0] } },
+      ),
+      { budget: budget(now) },
+    );
+  };
+  const done = await authorize();
   const cookies = done.cookies[1].split(';')[0];
   const request = (path, method = 'GET', headers = {}) =>
     new Request(`${ORIGIN}${path}`, {
@@ -126,6 +130,7 @@ async function setup(sourceOperations) {
     crypto,
     request,
     session,
+    authorize,
     budgets,
     csrf: { Origin: ORIGIN, 'X-CSRF-Token': session.csrfToken },
     networkCalls: () => networkCalls,
@@ -334,6 +339,100 @@ test('logout during source gathering prevents the pending private summary from b
   const response = await pending;
   assert.equal(response.status, 401);
   assert.ok(!JSON.stringify(await response.json()).includes('synthetic-repo'));
+});
+
+test('new OAuth credentials prevent a pending private repository list from returning stale results', async () => {
+  const entered = deferred();
+  const gate = deferred();
+  const ctx = await setup({
+    listRepositories: async () => {
+      entered.resolve();
+      await gate.promise;
+      return { repositories: [repo], sourceAuthorization: 'ready' };
+    },
+  });
+  const pending = ctx.api(ctx.request('/api/repositories'));
+  await entered.promise;
+  await ctx.authorize();
+  gate.resolve();
+  const response = await pending;
+  assert.equal(response.status, 502);
+  const body = await response.json();
+  assert.equal(body.error.code, 'provider_unavailable');
+  assert.ok(!JSON.stringify(body).includes('synthetic-repo'));
+  const lease = await ctx.auth.acquireToken({ session: ctx.session });
+  assert.equal(lease.generation, 2);
+  assert.equal((await ctx.storage.read('account/99961')).value.state, 'active');
+});
+
+test('source authorization rejection prevents a pending private check from returning stale results', async () => {
+  const entered = deferred();
+  const gate = deferred();
+  const ctx = await setup({
+    checkRepository: async () => {
+      entered.resolve();
+      await gate.promise;
+      return { summary: summary(), sourceSnapshot: { raw: 'private-source' } };
+    },
+  });
+  const lease = await ctx.auth.acquireToken({ session: ctx.session });
+  const pending = ctx.api(
+    ctx.request('/api/repositories/17/check', 'POST', ctx.csrf),
+  );
+  await entered.promise;
+  assert.equal(await ctx.auth.noteTokenRejected({ lease }), true);
+  gate.resolve();
+  const response = await pending;
+  assert.equal(response.status, 502);
+  const body = await response.json();
+  assert.equal(body.error.code, 'provider_unavailable');
+  assert.ok(!JSON.stringify(body).includes('synthetic-repo'));
+  assert.ok(!JSON.stringify(body).includes('private-source'));
+  const bootstrap = await ctx.auth.bootstrap(ctx.request('/api/session'));
+  assert.equal(bootstrap.auth, true);
+  assert.equal(bootstrap.sourceAuthorization, 'reauthorization-required');
+});
+
+test('credentials superseded after source authorization commits are rejected by the final lease check', async () => {
+  const ctx = await setup();
+  const write = ctx.storage.write.bind(ctx.storage);
+  let sourceAuthorizationCommitted = false;
+  ctx.storage.write = async (key, value, condition) => {
+    const result = await write(key, value, condition);
+    if (
+      key === 'account/99961' &&
+      value.generation === 1 &&
+      value.sourceAuthorization === 'ready' &&
+      result.modified
+    )
+      sourceAuthorizationCommitted = true;
+    return result;
+  };
+  const read = ctx.storage.read.bind(ctx.storage);
+  let supersededDuringFinalCheck = false;
+  ctx.storage.read = async (key) => {
+    if (
+      key === ctx.session.key &&
+      sourceAuthorizationCommitted &&
+      !supersededDuringFinalCheck
+    ) {
+      supersededDuringFinalCheck = true;
+      await ctx.authorize();
+    }
+    return read(key);
+  };
+
+  const response = await ctx.api(
+    ctx.request('/api/repositories/17/check', 'POST', ctx.csrf),
+  );
+  assert.equal(sourceAuthorizationCommitted, true);
+  assert.equal(supersededDuringFinalCheck, true);
+  assert.equal(response.status, 502);
+  const body = await response.json();
+  assert.equal(body.error.code, 'provider_unavailable');
+  assert.ok(!JSON.stringify(body).includes('synthetic-repo'));
+  const lease = await ctx.auth.acquireToken({ session: ctx.session });
+  assert.equal(lease.generation, 2);
 });
 
 test('current source-token rejection is 403 while superseded rejection leaves newer credentials usable', async () => {

@@ -6,9 +6,10 @@ need clarification.
 
 Board has a static sample experience and a separate production composition for
 GitHub sign-in, eligible repository selection, and explicit source checks. Live
-production acceptance is pending. Paid analysis and saved reports follow in the
-next phase. Open `/demo` to explore a complete report, an empty backlog, or
-issues with unresolved questions. Every sample uses synthetic data.
+owner sign-in, eligible public and private source checks, sign-out, and preview
+isolation have passed. Paid analysis and saved reports follow in the next phase.
+Open `/demo` to explore a complete report, an empty backlog, or issues with
+unresolved questions. Every sample uses synthetic data.
 
 ## Try the sample reports
 

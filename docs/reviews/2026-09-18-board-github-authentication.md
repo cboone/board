@@ -28,7 +28,9 @@ the following phase.
 - Shared-token rotation allows one provider exchange. Exact conditional writes
   preserve newer authorization fences. Retained publication evidence prevents
   an unacknowledged pair from becoming usable after a delayed storage commit.
-  Storage transport and complete response bodies share the operation deadline.
+  An acknowledged pair remains available to other sessions if the initiating
+  session ends during its final check. Storage transport and complete response
+  bodies share the operation deadline.
 - Repository eligibility requires the expected personal GitHub App installation
   and actual read grants. Source gathering collects complete primary inventory,
   nested pages and issue comments, pinned tree/files, and metadata-only closed
@@ -39,7 +41,8 @@ the following phase.
 - Protected browser state contains approved metadata only and clears on logout,
   observed expiry, navigation, or failed session verification. Response
   generations independently prevent stale successful responses and old 401s
-  from changing a newer session.
+  from changing a newer session. The API also withholds source results when the
+  credential generation or authorization state changes during collection.
 - Production and fixture composition are distinct. Root fixture installs remain
   independent of the locked server package. Every nonproduction composition
   removes generated Functions and excludes the production browser graph.
@@ -63,6 +66,10 @@ Independent synthetic reproducers identified and verified corrections for:
    authorization status, and OAuth identity API version/rate-limit categories.
 8. Installation eligibility now requires every configured GitHub permission to
    be exactly `read`; a write-capable grant cannot authorize source collection.
+9. A superseded source-token lease cannot return a delayed repository list or
+   check result gathered with older credentials.
+10. A session ending after durable refresh acknowledgement cannot strip the
+    confirmed shared token pair or require unrelated sessions to reauthorize.
 
 No credential files or real repository inputs were used in these reproducers.
 
@@ -70,7 +77,7 @@ No credential files or real repository inputs were used in these reproducers.
 
 - `npm run verify`: formatting, linting, 152 report unit checks, 45 fixture
   browser checks across three engines, build, and static artifact gate passed.
-- `npm run test:server`: all 161 native backend checks passed.
+- `npm run test:server`: all 165 native backend checks passed.
 - `npm run lint:server` and `npm run audit:server` passed; the dependency audit
   reports zero vulnerabilities.
 - `npm run test:composition`: all five checks passed, including actual Vite

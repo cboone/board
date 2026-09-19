@@ -383,7 +383,7 @@ export function createAuth({
     throw new BoardError('service_unavailable');
   }
 
-  async function recheckOwner({ session, budget }) {
+  async function recheckOwner({ session, lease, budget }) {
     const record = (await read(session.key, budget))?.value;
     const account = await accountRead(budget);
     const at = now();
@@ -398,6 +398,14 @@ export function createAuth({
       account.value.authorizationEpoch !== session.authorizationEpoch
     )
       throw new BoardError('session_required');
+    if (
+      lease &&
+      (lease.ownerId !== config.ownerId ||
+        !integer(lease.generation) ||
+        account.value.generation !== lease.generation ||
+        account.value.state !== 'active')
+    )
+      throw new BoardError('provider_unavailable');
     return { id: account.value.user.id, login: account.value.user.login };
   }
 
@@ -642,6 +650,7 @@ export function createAuth({
       const publishing =
         current?.value.state === 'active' &&
         current.value.generation === generation + 1 &&
+        current.value.publicationAcknowledgedAt === undefined &&
         current.value.publicationClaim?.attemptId === attemptId;
       if (!refreshing && !publishing) return false;
       const result = await write(
@@ -774,6 +783,7 @@ export function createAuth({
           throw new BoardError('service_unavailable');
         continue;
       }
+      let publicationAcknowledged = false;
       try {
         if (!Number.isSafeInteger(record.generation + 1))
           throw new BoardError('service_unavailable');
@@ -814,6 +824,7 @@ export function createAuth({
           budget,
         );
         if (!confirmation.modified) continue;
+        publicationAcknowledged = true;
         await recheckOwner({ session, budget });
         return {
           ownerId: config.ownerId,
@@ -821,6 +832,7 @@ export function createAuth({
           generation: refreshed.generation,
         };
       } catch (error) {
+        if (publicationAcknowledged) throw error;
         // A failed exchange or publication is never replayed. An expired claim
         // remains recoverable only by requiring a new OAuth authorization.
         try {
