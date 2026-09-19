@@ -341,6 +341,29 @@ phase-plan documents.
     introducing-commit, path, rule, and line combinations. No file-wide,
     rule-wide, or value-pattern exclusion was added. The complete local
     full-history scan passes with no leaks.
+24. **Immutable report retention:** The report storage adapter no longer exposes
+    physical deletion for any report key, including immutable version objects.
+    Authentication session and OAuth cleanup remains enabled. A regression
+    rejects deletion of a valid report-version key without reaching the Blob
+    store and separately proves that a valid authentication session can still
+    be deleted.
+25. **Gathered reference projection:** Gathered references carry structured
+    `requested` provenance rather than the string-shaped unit fixture previously
+    used by report assembly. Assembly now renders `{ reference }` provenance as
+    its exact external target and same-repository `{ repoId, number, kind }`
+    provenance as `owner/repository#number`; it never copies a provenance object
+    or opaque source key into a report `url` or `ref` field. Wire validation also
+    rejects URL/reference kind swaps, malformed local provenance, and same-issue
+    references before assembly, so those defects cannot consume a corrective
+    provider attempt. Deterministic tests use both real gathered shapes and
+    require valid report-domain references.
+26. **Deployment identifier grammar:** The review claim that mixed-case Netlify
+    deploy IDs fail response projection was caused by attributing the next
+    line's policy-ID expression to the deploy field. Server and browser
+    projectors both accept a bounded deploy ID as text and independently require
+    the generated policy ID to use its lowercase grammar. Regression coverage
+    accepts `Deploy-ABC_1.2` through both projectors and rejects an uppercase
+    policy ID. No production behavior changed for this invalid finding.
 
 ## Plan compliance
 
@@ -419,8 +442,8 @@ Current-tree validation includes:
   uncertainty, and the exact-identity worker path;
 - admission-ordering and catalog-boundary tests covering a missing preflight
   marker and a pending first-generation job;
-- `npm test`: 182 of 182 Vitest checks;
-- `npm run test:server`: 464 of 464 native backend checks;
+- `npm test`: 185 of 185 Vitest checks;
+- `npm run test:server`: 465 of 465 native backend checks;
 - `npm run test:composition`: 5 of 5 composition checks;
 - `npm run test:browser:production`: 189 of 189 checks across Chromium,
   Firefox, and WebKit;
