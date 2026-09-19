@@ -663,20 +663,36 @@ export function createAnalysisJob({
   return projectAnalysisJob(job);
 }
 
+export function coarseJobState(state) {
+  if (!JOB_STATES.includes(state)) fail();
+  if (['created', 'reserved', 'dispatchable'].includes(state)) return 'queued';
+  if (['collecting', 'counting'].includes(state)) return 'gathering';
+  if (['primary-in-flight', 'corrective-in-flight'].includes(state))
+    return 'analyzing';
+  if (
+    [
+      'primary-response-complete',
+      'validating-primary',
+      'primary-invalid',
+      'corrective-response-complete',
+      'validating-corrective',
+    ].includes(state)
+  )
+    return 'validating';
+  if (['version-written', 'published'].includes(state)) return 'publishing';
+  if (state === 'succeeded') return 'succeeded';
+  if (state === 'ambiguous') return 'ambiguous';
+  return 'failed';
+}
+
 export function projectSafeJob(value) {
   const job = projectAnalysisJob(value);
   return {
     id: job.jobId,
     operation: job.operation,
-    state: job.state,
+    state: coarseJobState(job.state),
     createdAt: job.createdAt,
-    updatedAt: job.updatedAt,
-    terminal:
-      job.terminal === null
-        ? null
-        : {
-            status: job.terminal.status,
-            errorCode: job.terminal.errorCode,
-          },
+    errorCode: job.terminal?.errorCode ?? null,
+    reportId: job.state === 'succeeded' ? job.publication.reportId : null,
   };
 }

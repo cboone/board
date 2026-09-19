@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  coarseJobState,
   createAnalysisJob,
   deriveAnalysisJobIdentity,
   hashDispatchCapability,
@@ -63,10 +64,38 @@ test('inert jobs preallocate deterministic publication and accounting shapes wit
   assert.deepEqual(projectSafeJob(job), {
     id: job.jobId,
     operation: 'generate',
-    state: 'created',
+    state: 'queued',
     createdAt: input.at,
-    updatedAt: input.at,
-    terminal: null,
+    errorCode: null,
+    reportId: null,
+  });
+});
+
+test('safe job views collapse internal states and expose only terminal result facts', () => {
+  for (const [state, expected] of [
+    ['created', 'queued'],
+    ['reserved', 'queued'],
+    ['dispatchable', 'queued'],
+    ['collecting', 'gathering'],
+    ['counting', 'gathering'],
+    ['primary-in-flight', 'analyzing'],
+    ['corrective-in-flight', 'analyzing'],
+    ['primary-response-complete', 'validating'],
+    ['validating-primary', 'validating'],
+    ['primary-invalid', 'validating'],
+    ['corrective-response-complete', 'validating'],
+    ['validating-corrective', 'validating'],
+    ['version-written', 'publishing'],
+    ['published', 'publishing'],
+    ['failed', 'failed'],
+    ['budget-blocked', 'failed'],
+    ['superseded', 'failed'],
+    ['ambiguous', 'ambiguous'],
+    ['succeeded', 'succeeded'],
+  ])
+    assert.equal(coarseJobState(state), expected);
+  assert.throws(() => coarseJobState('private-provider-state'), {
+    code: 'service_unavailable',
   });
 });
 
