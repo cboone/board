@@ -71,7 +71,7 @@ const ERRORS = Object.freeze({
     'Analysis pricing must be reviewed before continuing.',
     false,
   ],
-  analysis_disabled: [
+  analysis_unavailable: [
     503,
     'Paid analysis is not enabled for this operation.',
     false,
@@ -81,7 +81,12 @@ const ERRORS = Object.freeze({
     'This analysis request identifier is already in use.',
     false,
   ],
-  job_in_progress: [409, 'Another analysis is already in progress.', true],
+  analysis_in_progress: [409, 'Another analysis is already in progress.', true],
+  report_state_changed: [
+    409,
+    'The saved report changed. Reload it and try again.',
+    true,
+  ],
   report_not_found: [404, 'The requested report does not exist.', false],
   report_catalog_full: [
     409,
