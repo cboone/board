@@ -87,12 +87,14 @@ test('generates only after an explicit click and reloads the successful report',
         method === 'GET' && path === '/api/repositories/202/report',
     ),
   ).toBe(true);
-  expect(
-    flow.calls.some(
-      ({ method, path }) =>
-        method === 'POST' && path === '/api/repositories/202/check',
-    ),
-  ).toBe(true);
+  await expect
+    .poll(() =>
+      flow.calls.some(
+        ({ method, path }) =>
+          method === 'POST' && path === '/api/repositories/202/check',
+      ),
+    )
+    .toBe(true);
   expect(
     flow.calls.filter(({ path }) => path.endsWith('/report-jobs')),
   ).toEqual([]);

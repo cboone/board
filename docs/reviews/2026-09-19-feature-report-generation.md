@@ -275,6 +275,11 @@ phase-plan documents.
     without retry, authorized worker work remains awaited, and unexpected
     failures reject with the fixed generic message that signals a platform
     retry.
+15. **Asynchronous source-check assertion:** The production browser test polls
+    for the required automatic source-check request after the empty report state
+    appears instead of assuming Firefox records that later request in the same
+    rendering turn. The assertion still requires the exact repository-check
+    method and path before generation proceeds.
 
 ## Plan compliance
 
