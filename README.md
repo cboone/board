@@ -61,10 +61,13 @@ not start analysis.
 Production source checks use read-only GitHub App authorization. Repository
 selection makes no paid calls; **Check GitHub** gathers the approved inputs
 under bounded limits and shows source provenance. During setup verification and
-paid analysis, Board sends only the approved bounded source from its server to
-Anthropic. Raw source inputs and credentials never enter browser storage or
-static artifacts, and credentials are never sent to Anthropic. Owner sessions
-remain separate from current source access.
+paid analysis, Board sends the approved bounded source content from its server
+to Anthropic and no other repository content. Raw source inputs, the Anthropic
+API key, and GitHub authorization tokens never enter browser-accessible storage
+or static artifacts. Board sends its Anthropic API key only to Anthropic for
+provider authentication. GitHub authorization tokens and owner-session
+credentials are never sent to Anthropic. Owner sessions remain separate from
+current source access.
 
 Saved-report reads remain available after a source becomes inaccessible or
 ineligible, with a clear historical/source-unavailable status and analysis

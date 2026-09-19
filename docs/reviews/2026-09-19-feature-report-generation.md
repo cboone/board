@@ -11,8 +11,9 @@ Plan:
 
 Review scope: the complete branch implementation, including the no-spend
 analysis preflight and setup-budget decision work. Local aggregate validation
-and exact-head pull request validation cover the merge candidate. This document
-intentionally omits a self-referential reviewed-through commit.
+covers the current tree. Exact-head CI, preview, and Copilot review are final
+post-commit merge gates, so this document intentionally omits a self-referential
+reviewed-through commit.
 
 ## Result
 
@@ -31,8 +32,8 @@ request.
 
 Independent review found authorization-ordering, concurrency, idempotency,
 ledger-validation, and browser-state gaps in these controls. The current
-branch addresses each finding described below. Exact-head pull request review
-reports no unresolved findings.
+branch addresses each finding described below. Exact-head pull request gates
+are checked on the final commit before merge.
 
 Phase 3 remains incomplete. The branch has not been merged or deployed, no
 Anthropic key has been read or installed for this phase, and no paid provider
@@ -288,6 +289,18 @@ phase-plan documents.
     later calls that repin current access and revalidate report state without
     another full source or provider request. The worker still recollects and
     recounts the source used for paid analysis.
+17. **Admission conflict cleanup:** A normal returned CAS conflict does not
+    enter the admission catch, but a failed strong read while classifying a
+    stale write can. Cleanup now rereads the live job and terminalizes only
+    `created` or `reserved`; a concurrent `dispatchable` winner remains owned by
+    its worker or deadline recovery. Deterministic tests cover failures after
+    both the reservation and capability-install writes. Removing the live-state
+    guard makes both tests end with an incorrect `failed` job.
+18. **Credential boundary wording:** The README now states that Board sends its
+    Anthropic API key only to Anthropic for provider authentication, while
+    GitHub authorization tokens and owner-session credentials never go to
+    Anthropic. The Anthropic API key and GitHub authorization tokens never enter
+    browser-accessible storage or static artifacts.
 
 ## Plan compliance
 
@@ -310,7 +323,7 @@ The following exit evidence remains partial or absent:
 - Paid cross-sign-out, cross-browser, and cross-device persistence has not been
   demonstrated against production storage.
 - The production inventory for the final merge has not been deployed and
-  inspected. The exact-head preview is deployed and verified as fixture-only.
+  inspected. Fixture-only preview verification remains an external merge gate.
 - Paid calibration has not produced evidence for the user's monthly and
   per-report production limits, so the separate ordinary production policy is
   intentionally not implemented.
@@ -349,7 +362,7 @@ comment-only dispositions.
 No refactor is required solely because the production and worker modules are
 large. Their responsibilities remain separated across preflight, admission,
 worker, reconciler, job, report, spend, transport, and response modules. The
-final current-tree review found no unresolved implementation defect.
+current local review found no unresolved implementation defect.
 
 ## Verification
 
@@ -363,22 +376,24 @@ Current-tree validation includes:
 - paid-boundary tests that revoke authorization as primary and corrective
   preflight reads complete;
 - `npm test`: 182 of 182 Vitest checks;
-- `npm run test:server`: 455 of 455 native backend checks;
+- `npm run test:server`: 457 of 457 native backend checks;
 - `npm run test:composition`: 5 of 5 composition checks;
 - `npm run test:browser:production`: 189 of 189 checks across Chromium,
   Firefox, and WebKit;
 - `npm run test:browser`: 45 of 45 checks across Chromium, Firefox, and WebKit;
 - root and server dependency audits with zero vulnerabilities;
-- fixture and production builds with their artifact verifiers; and
+- fixture and production builds with their artifact verifiers;
 - frontend and server lint, formatting, `actionlint`, Markdown lint, and
   `git diff --check`;
-- exact-head GitHub Actions, Netlify preview, and Copilot review with no
-  unresolved threads and `MERGEABLE` / `CLEAN` repository state;
 - exact full-history Gitleaks scanning with no leaks; and
 - the exact v3.2.0 TruffleHog workflow command with zero verified findings and
   one known indeterminate historical URI fixture from commit `0e72d14`. The
   current fixture constructs that URI at runtime and passes a strict
   current-file scan.
+
+Exact-head GitHub Actions, Netlify preview, Copilot review, unresolved threads,
+and mergeability are external merge gates rather than current-tree evidence.
+They must be clean on the final commit proposed for merge.
 
 A stricter full-history TruffleHog run with `--fail` exits on that reviewed
 historical fixture, so it is not recorded as a strict pass. No file-wide or
