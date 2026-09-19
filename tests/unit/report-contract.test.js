@@ -884,4 +884,47 @@ describe('validateReport', () => {
     report.lanes = [{ key: 'L1', name: 'Phantom', mode: 'any', issues: [1] }];
     expect(validateReport(report, inventory).valid).toBe(false);
   });
+
+  it('binds complete canonical issue IDs, timestamps, and sorted assignees', () => {
+    const { report, inventory } = pair();
+    for (const [index, source] of inventory.issues.entries()) {
+      const metadata = {
+        id: 10_000 + source.number,
+        createdAt: `2026-09-0${index + 1}T12:00:00Z`,
+        updatedAt: '2026-09-18T14:30:00Z',
+        assignees:
+          index === 0
+            ? [
+                { id: 10, login: 'cboone' },
+                { id: 20, login: 'reviewer' },
+              ]
+            : [],
+      };
+      Object.assign(source, metadata);
+      Object.assign(report.issues[index], structuredClone(metadata));
+    }
+    expect(validateReport(report, inventory).valid).toBe(true);
+
+    report.issues[0].assignees[0].login = 'invented';
+    expect(codes(report, inventory)).toContain('source_mismatch');
+  });
+
+  it('rejects partial or noncanonical assignee metadata', () => {
+    const { report, inventory } = pair();
+    Object.assign(inventory.issues[0], {
+      id: 10_001,
+      createdAt: '2026-09-01T12:00:00Z',
+      updatedAt: '2026-09-18T14:30:00Z',
+      assignees: [
+        { id: 20, login: 'reviewer' },
+        { id: 10, login: 'cboone' },
+      ],
+    });
+    Object.assign(report.issues[0], structuredClone(inventory.issues[0]));
+    expect(codes(report, inventory)).toContain('assignees');
+
+    delete inventory.issues[0].createdAt;
+    delete report.issues[0].createdAt;
+    expect(codes(report, inventory)).toContain('canonical_metadata');
+  });
 });

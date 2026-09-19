@@ -29,6 +29,25 @@ const isProgress = (value) =>
 const has = (object, key) => Object.hasOwn(object, key);
 const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 
+function validAssignees(value) {
+  if (!Array.isArray(value) || value.length > 100) return false;
+  let previous = 0;
+  for (const assignee of value) {
+    if (
+      !isObject(assignee) ||
+      Reflect.ownKeys(assignee).length !== 2 ||
+      !has(assignee, 'id') ||
+      !has(assignee, 'login') ||
+      !isNumber(assignee.id) ||
+      !isText(assignee.login) ||
+      assignee.id <= previous
+    )
+      return false;
+    previous = assignee.id;
+  }
+  return true;
+}
+
 function safeHttps(value) {
   if (
     !isText(value) ||
@@ -435,6 +454,44 @@ function validateReport(report, inventory) {
           'milestone',
           'A milestone title or explicit null is required.',
         );
+        const hasAssignmentMetadata = ['createdAt', 'assignees'].some((field) =>
+          has(issue, field),
+        );
+        if (hasAssignmentMetadata)
+          check(
+            ['createdAt', 'assignees'].every((field) => has(issue, field)),
+            path,
+            'canonical_metadata',
+            'Canonical issue creation and assignment metadata must be complete.',
+          );
+        if (has(issue, 'id'))
+          check(
+            isNumber(issue.id),
+            `${path}.id`,
+            'number',
+            'Expected a positive canonical issue ID.',
+          );
+        if (has(issue, 'createdAt'))
+          check(
+            validTimestamp(issue.createdAt),
+            `${path}.createdAt`,
+            'timestamp',
+            'Expected a calendar-valid creation timestamp.',
+          );
+        if (has(issue, 'updatedAt'))
+          check(
+            validTimestamp(issue.updatedAt),
+            `${path}.updatedAt`,
+            'timestamp',
+            'Expected a calendar-valid update timestamp.',
+          );
+        if (has(issue, 'assignees'))
+          check(
+            validAssignees(issue.assignees),
+            `${path}.assignees`,
+            'assignees',
+            'Expected unique ID-sorted canonical assignee IDs and logins.',
+          );
         if (source)
           check(
             has(issue, 'inProgress') &&
@@ -681,6 +738,14 @@ function validateReport(report, inventory) {
       for (const field of ['title', 'milestone', 'inProgress'])
         check(
           (issue[field] ?? null) === source[field],
+          `${path}.${field}`,
+          'source_mismatch',
+          `Canonical issue ${field} differs from the source inventory.`,
+        );
+      for (const field of ['id', 'createdAt', 'updatedAt', 'assignees'])
+        check(
+          has(issue, field) === has(source, field) &&
+            (!has(source, field) || same(issue[field], source[field])),
           `${path}.${field}`,
           'source_mismatch',
           `Canonical issue ${field} differs from the source inventory.`,
