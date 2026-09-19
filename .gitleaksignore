@@ -8,6 +8,8 @@ adfded52a577080f8925412ee650b218858767a0:server/tests/report-store.test.mjs:gene
 4130e045f7026eb274f2bd7dc0262ffac65a6ada:server/tests/report-operations.test.mjs:generic-api-key:362
 4130e045f7026eb274f2bd7dc0262ffac65a6ada:server/tests/report-operations.test.mjs:generic-api-key:902
 4130e045f7026eb274f2bd7dc0262ffac65a6ada:server/tests/report-operations.test.mjs:generic-api-key:926
+ef3faf6458d41441de3a2c776a0c3db488ef5622:server/tests/report-operations.test.mjs:generic-api-key:573
+ef3faf6458d41441de3a2c776a0c3db488ef5622:server/tests/report-operations.test.mjs:generic-api-key:1150
 9c1fc51c481354617418e7360e2c769db0362d7d:server/tests/report-versions.test.mjs:generic-api-key:28
 
 # The public, fixed report-catalog storage key is not a credential.
