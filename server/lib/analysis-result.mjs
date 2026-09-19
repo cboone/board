@@ -126,7 +126,8 @@ function modelAuthoredPersistedStrings(delta) {
     for (const reference of issue.after) referenceProse(reference, result);
     referenceProse(issue.uncertaintyReference, result);
   }
-  for (const lane of delta.lanes) result.push(lane.name, lane.owns, lane.note);
+  for (const lane of delta.lanes)
+    result.push(lane.key, lane.name, lane.owns, lane.note);
   for (const pick of delta.startNow) result.push(pick.why, pick.touches);
   result.push(delta.contention.rowLabel);
   for (const claim of delta.contention.claims)
@@ -303,14 +304,19 @@ function projectTrustedContext({
       if (priorVersion !== null || analysisInput.priorAnalysis !== null)
         throw unavailable();
     } else {
-      if (priorVersion === null || analysisInput.priorAnalysis === null)
-        throw unavailable();
+      if (priorVersion === null) throw unavailable();
       basis = projectSuccessfulReportVersion(priorVersion);
       if (
         basis.ownerId !== projectedJob.ownerId ||
         basis.repositoryId !== projectedJob.repositoryId ||
         basis.reportId !== projectedJob.expectedCurrentReportId
       )
+        throw unavailable();
+      const identityMatches = same(
+        basis.source.provenance.repository,
+        sourceSummary.repo,
+      );
+      if (identityMatches !== (analysisInput.priorAnalysis !== null))
         throw unavailable();
     }
 

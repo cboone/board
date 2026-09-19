@@ -806,67 +806,181 @@ function expectedEntryKeys(kind) {
     : ['kind', ...identities, 'fields', 'before', 'after'];
 }
 
-function validSnapshot(field, value) {
-  if (field === 'issue')
+const nonemptyText = (value) => typeof value === 'string' && /\S/u.test(value);
+const nullableText = (value) => value === null || nonemptyText(value);
+const positiveList = (value) =>
+  Array.isArray(value) && value.every(positiveInteger);
+const textList = (value) => Array.isArray(value) && value.every(nonemptyText);
+
+function validReference(value, { title = true } = {}) {
+  if (positiveInteger(value)) return true;
+  if (!plainObject(value)) return false;
+  const kinds = ['pr', 'branch', 'ref', 'url'].filter((kind) =>
+    Object.hasOwn(value, kind),
+  );
+  if (kinds.length !== 1) return false;
+  const kind = kinds[0];
+  const optional = title && Object.hasOwn(value, 'title') ? ['title'] : [];
+  if (kind === 'url') {
+    if (!exactKeys(value, ['url', 'label', ...optional])) return false;
     return (
-      plainObject(value) &&
-      exactKeys(value, [
-        'number',
-        'title',
-        'short',
-        'milestone',
-        'assignees',
-        'inProgress',
-        'waitingOn',
-        'blockedBecause',
-        'after',
-        'uncertainty',
-        'sameBranchAs',
-        'laneKey',
-      ]) &&
-      positiveInteger(value.number)
+      nonemptyText(value.url) &&
+      nonemptyText(value.label) &&
+      (!optional.length || nonemptyText(value.title))
     );
-  if (field === 'lane')
-    return (
-      plainObject(value) &&
-      exactKeys(value, ['key', 'name', 'mode', 'issues', 'owns', 'note']) &&
-      typeof value.key === 'string' &&
-      Array.isArray(value.issues)
-    );
-  if (field === 'start')
-    return (
-      plainObject(value) &&
-      exactKeys(value, ['issue', 'why', 'touches']) &&
-      positiveInteger(value.issue)
-    );
-  if (field === 'claim')
-    return (
-      plainObject(value) &&
-      exactKeys(value, ['name', 'query', 'issues']) &&
-      typeof value.name === 'string' &&
-      typeof value.query === 'string' &&
-      Array.isArray(value.issues)
-    );
-  if (
-    [
-      'issues',
-      'order',
-      'waitingOn',
-      'after',
-      'assignees',
-      'milestones',
-    ].includes(field)
-  )
-    return Array.isArray(value);
-  if (['sameBranchAs', 'issueNumber'].includes(field))
-    return value === null || positiveInteger(value);
+  }
+  if (!exactKeys(value, [kind, ...optional])) return false;
+  return (
+    (kind === 'pr' ? positiveInteger(value.pr) : nonemptyText(value[kind])) &&
+    (!optional.length || nonemptyText(value.title))
+  );
+}
+
+function validAssigneeList(value) {
+  if (!Array.isArray(value)) return false;
+  let previous = 0;
+  for (const assignee of value) {
+    if (
+      !exactKeys(assignee, ['id', 'login']) ||
+      !positiveInteger(assignee.id) ||
+      assignee.id <= previous ||
+      !nonemptyText(assignee.login)
+    )
+      return false;
+    previous = assignee.id;
+  }
+  return true;
+}
+
+function validUncertainty(value) {
   return (
     value === null ||
-    typeof value === 'string' ||
-    typeof value === 'number' ||
-    typeof value === 'boolean' ||
-    plainObject(value)
+    (exactKeys(value, ['reason', 'reference']) &&
+      nonemptyText(value.reason) &&
+      (value.reference === null ||
+        validReference(value.reference, { title: false })))
   );
+}
+
+function validIssueSnapshot(value) {
+  return (
+    exactKeys(value, [
+      'number',
+      'title',
+      'short',
+      'milestone',
+      'assignees',
+      'inProgress',
+      'waitingOn',
+      'blockedBecause',
+      'after',
+      'uncertainty',
+      'sameBranchAs',
+      'laneKey',
+    ]) &&
+    positiveInteger(value.number) &&
+    nonemptyText(value.title) &&
+    nullableText(value.short) &&
+    nullableText(value.milestone) &&
+    validAssigneeList(value.assignees) &&
+    nullableText(value.inProgress) &&
+    Array.isArray(value.waitingOn) &&
+    value.waitingOn.every((entry) => validReference(entry)) &&
+    nullableText(value.blockedBecause) &&
+    Array.isArray(value.after) &&
+    value.after.every((entry) => validReference(entry, { title: false })) &&
+    validUncertainty(value.uncertainty) &&
+    (value.sameBranchAs === null || positiveInteger(value.sameBranchAs)) &&
+    nullableText(value.laneKey)
+  );
+}
+
+function validLaneSnapshot(value) {
+  return (
+    exactKeys(value, ['key', 'name', 'mode', 'issues', 'owns', 'note']) &&
+    nonemptyText(value.key) &&
+    nonemptyText(value.name) &&
+    ['serial', 'head', 'any'].includes(value.mode) &&
+    positiveList(value.issues) &&
+    nullableText(value.owns) &&
+    nullableText(value.note)
+  );
+}
+
+function validStartSnapshot(value) {
+  return (
+    exactKeys(value, ['issue', 'why', 'touches']) &&
+    positiveInteger(value.issue) &&
+    nonemptyText(value.why) &&
+    nullableText(value.touches)
+  );
+}
+
+function validClaimSnapshot(value) {
+  return (
+    exactKeys(value, ['name', 'query', 'issues']) &&
+    nonemptyText(value.name) &&
+    nonemptyText(value.query) &&
+    positiveList(value.issues)
+  );
+}
+
+function validSnapshot(kind, field, value) {
+  if (field === 'issue') return validIssueSnapshot(value);
+  if (field === 'lane') return validLaneSnapshot(value);
+  if (field === 'start') return validStartSnapshot(value);
+  if (field === 'claim') return validClaimSnapshot(value);
+  if (field === 'issues') return positiveList(value);
+  if (field === 'order')
+    return kind === 'start-order' ? positiveList(value) : textList(value);
+  if (field === 'waitingOn')
+    return (
+      Array.isArray(value) && value.every((entry) => validReference(entry))
+    );
+  if (field === 'after')
+    return (
+      Array.isArray(value) &&
+      value.every((entry) => validReference(entry, { title: false }))
+    );
+  if (field === 'assignees') return validAssigneeList(value);
+  if (field === 'milestones')
+    return (
+      Array.isArray(value) &&
+      value.every(
+        (entry) =>
+          exactKeys(entry, ['title', 'label']) &&
+          nonemptyText(entry.title) &&
+          nonemptyText(entry.label),
+      )
+    );
+  if (field === 'uncertainty') return validUncertainty(value);
+  if (field === 'sameBranchAs') return value === null || positiveInteger(value);
+  if (field === 'mode') return ['serial', 'head', 'any'].includes(value);
+  if (field === 'board') return value === 'backlog-triage';
+  if (
+    ['title', 'repo', 'name', 'why', 'query', 'rowLabel', 'summary'].includes(
+      field,
+    )
+  )
+    return nonemptyText(value);
+  if (
+    [
+      'repoUrl',
+      'milestone',
+      'inProgress',
+      'blockedBecause',
+      'laneKey',
+      'short',
+      'owns',
+      'note',
+      'touches',
+      'notes.startNow',
+      'notes.blocked',
+      'notes.contention',
+    ].includes(field)
+  )
+    return nullableText(value);
+  return false;
 }
 
 /** Strictly validate a saved deterministic comparison envelope. */
@@ -1013,7 +1127,7 @@ function validateReportComparison(comparison) {
             : plainObject(item.before) &&
                 exactKeys(item.before, item.fields) &&
                 item.fields.every((field) =>
-                  validSnapshot(field, item.before[field]),
+                  validSnapshot(item.kind, field, item.before[field]),
                 ),
           `${path}.before`,
           'shape',
@@ -1025,7 +1139,7 @@ function validateReportComparison(comparison) {
             : plainObject(item.after) &&
                 exactKeys(item.after, item.fields) &&
                 item.fields.every((field) =>
-                  validSnapshot(field, item.after[field]),
+                  validSnapshot(item.kind, field, item.after[field]),
                 ),
           `${path}.after`,
           'shape',

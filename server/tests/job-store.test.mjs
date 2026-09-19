@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createJobStore } from '../lib/job-store.mjs';
-import { hashDispatchCapability } from '../lib/jobs.mjs';
+import {
+  ANALYSIS_JOB_STORAGE_LIMITS,
+  hashDispatchCapability,
+} from '../lib/jobs.mjs';
 
 const times = Object.freeze({
   created: '2026-09-18T12:00:00.000Z',
@@ -37,9 +40,11 @@ function memoryStorage() {
   let serial = 0;
   return {
     records,
+    readCount: 0,
     failAfterWrite: false,
     conflictWrite: null,
     async read(key) {
+      this.readCount += 1;
       return records.has(key) ? structuredClone(records.get(key)) : null;
     },
     async write(key, value, condition) {
@@ -225,4 +230,116 @@ test('safe polling and dispatch authorization expose no capability or internal a
     }),
     { code: 'forbidden' },
   );
+});
+
+test('preflights maximum terminal width before paid state and rejects oversized stored jobs', async () => {
+  const storage = memoryStorage();
+  const jobs = createJobStore({ storage });
+  const maximumInteger = Number.MAX_SAFE_INTEGER;
+  const created = await jobs.createOrReadJob({
+    ...request,
+    repositoryId: maximumInteger,
+    operation: 'refresh',
+    expectedCurrentReportId: hash('f'),
+    authorizationEpoch: maximumInteger,
+    admissionDeployId: String.fromCharCode(0xd800).repeat(128),
+  });
+  let current = await jobs.applyTransition({
+    jobId: created.value.jobId,
+    budget,
+    expectedEtag: created.etag,
+    event: {
+      type: 'reservation-committed',
+      at: times.reserved,
+      deadlineAt: times.deadline,
+      pricePolicyId: `p${'x'.repeat(127)}`,
+      reservationMicrousd: [maximumInteger, maximumInteger],
+      accounting: {
+        status: 'pending',
+        ledgerRevision: maximumInteger,
+        accountingSequence: maximumInteger,
+        accountingDigest: hash('a'),
+        transitionId: hash('b'),
+      },
+    },
+  });
+  current = await jobs.applyTransition({
+    jobId: created.value.jobId,
+    budget,
+    expectedEtag: current.etag,
+    event: {
+      type: 'dispatch-installed',
+      at: '2026-09-18T12:02:00.000Z',
+      deadlineAt: times.deadline,
+      capabilityHash: hash('c'),
+    },
+  });
+  current = await jobs.applyTransition({
+    jobId: created.value.jobId,
+    budget,
+    expectedEtag: current.etag,
+    event: {
+      type: 'free-lease-claimed',
+      at: '2026-09-18T12:03:00.000Z',
+      phase: 'collecting',
+      tokenHash: hash('d'),
+      expiresAt: '2026-09-18T12:10:00.000Z',
+    },
+  });
+  current = await jobs.applyTransition({
+    jobId: created.value.jobId,
+    budget,
+    expectedEtag: current.etag,
+    event: {
+      type: 'free-lease-claimed',
+      at: '2026-09-18T12:04:00.000Z',
+      phase: 'counting',
+      tokenHash: hash('d'),
+      expiresAt: '2026-09-18T12:11:00.000Z',
+    },
+  });
+  const readsBeforeRejectedPaidTransitions = storage.readCount;
+  for (const type of ['primary-started', 'corrective-started'])
+    await assert.rejects(
+      jobs.applyTransition({
+        jobId: created.value.jobId,
+        budget,
+        expectedEtag: current.etag,
+        event: { type },
+      }),
+      { code: 'service_unavailable' },
+    );
+  assert.equal(storage.readCount, readsBeforeRejectedPaidTransitions);
+  const readsBeforePaidBoundary = storage.readCount;
+  current = await jobs.applyPaidBoundaryTransition({
+    jobId: created.value.jobId,
+    budget,
+    current,
+    event: {
+      type: 'primary-started',
+      at: '2026-09-18T12:05:00.000Z',
+      freeTokenHash: hash('d'),
+      attemptTokenHash: hash('e'),
+      deadlineAt: '2026-09-18T12:15:00.000Z',
+      sourceFingerprint: hash('1'),
+    },
+  });
+  assert.equal(storage.readCount, readsBeforePaidBoundary);
+  assert.equal(current.value.state, 'primary-in-flight');
+  assert.ok(
+    Buffer.byteLength(JSON.stringify(current.value), 'utf8') <
+      ANALYSIS_JOB_STORAGE_LIMITS.recordBytes,
+  );
+
+  const key = `jobs/${created.value.jobId}`;
+  storage.records.set(key, {
+    value: {
+      ...current.value,
+      providerBody: 'x'.repeat(ANALYSIS_JOB_STORAGE_LIMITS.recordBytes),
+    },
+    etag: '"oversized"',
+  });
+  await assert.rejects(jobs.readJob({ jobId: created.value.jobId, budget }), {
+    code: 'service_unavailable',
+  });
 });

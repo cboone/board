@@ -466,6 +466,7 @@ test('projects catalog and direct report data without storage, job, or ledger in
   });
   assert.deepEqual(Object.keys(direct), [
     'repository',
+    'analyzedRepository',
     'current',
     'previous',
     'report',
@@ -479,6 +480,7 @@ test('projects catalog and direct report data without storage, job, or ledger in
     'spendMode',
   ]);
   assert.deepEqual(direct.current, catalog.items[0].current);
+  assert.deepEqual(direct.analyzedRepository, repository);
   assert.deepEqual(direct.report, seeded.version.report);
   assert.deepEqual(direct.spendMode, {
     available: true,
@@ -534,6 +536,7 @@ test('returns a stored empty state and rejects a repository with no state', asyn
     budget,
   });
   for (const key of [
+    'analyzedRepository',
     'current',
     'previous',
     'report',
@@ -785,6 +788,43 @@ test('stores only the safe source projection and records fixed failures', async 
   );
 });
 
+test('keeps an analyzed report readable after a trusted repository rename', async () => {
+  const renamedRepository = {
+    ...repository,
+    name: 'renamed-widgets',
+    fullName: 'cboone/renamed-widgets',
+    url: 'https://github.com/cboone/renamed-widgets',
+  };
+  const board = await fixture({
+    sourceOperations: {
+      async checkRepository() {
+        return { summary: sourceSummary(renamedRepository) };
+      },
+    },
+  });
+  const seeded = await seedSavedReport(board, { active: false });
+  const input = {
+    ownerId: OWNER_ID,
+    repositoryId: repository.id,
+    accessToken: 'synthetic-access-token',
+    signal: new AbortController().signal,
+    budget,
+  };
+
+  const checked = await board.operations.checkSource(input);
+  assert.deepEqual(checked.summary.repo, renamedRepository);
+
+  const direct = await board.operations.getReport({
+    ownerId: OWNER_ID,
+    repositoryId: repository.id,
+    budget,
+  });
+  assert.deepEqual(direct.repository, renamedRepository);
+  assert.deepEqual(direct.analyzedRepository, repository);
+  assert.deepEqual(direct.report, seeded.version.report);
+  assert.deepEqual(direct.source.provenance.repository, repository);
+});
+
 test('a stale source check cannot replace the newer check repository identity', async () => {
   let releaseFirst;
   const firstPending = new Promise((resolve) => {
@@ -840,6 +880,60 @@ test('a stale source check cannot replace the newer check repository identity', 
   assert.deepEqual(stored.repository, currentRepository);
   assert.equal(stored.sourceCheck.status, 'complete');
 });
+
+for (const staleCode of ['source_unavailable', 'provider_unavailable']) {
+  test(`a stale ${staleCode} result cannot override a newer successful check`, async () => {
+    let releaseFirst;
+    const firstPending = new Promise((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstStarted;
+    const firstReady = new Promise((resolve) => {
+      firstStarted = resolve;
+    });
+    let calls = 0;
+    const currentRepository = {
+      ...repository,
+      name: 'current-widgets',
+      fullName: 'cboone/current-widgets',
+      url: 'https://github.com/cboone/current-widgets',
+    };
+    const board = await fixture({
+      sourceOperations: {
+        async checkRepository() {
+          calls += 1;
+          if (calls === 1) {
+            firstStarted();
+            await firstPending;
+            throw new BoardError(staleCode);
+          }
+          return { summary: sourceSummary(currentRepository) };
+        },
+      },
+    });
+    board.reportStorage.seed(
+      repositoryStateKey(repository.id),
+      createRepositoryState(repository),
+    );
+    const input = {
+      ownerId: OWNER_ID,
+      repositoryId: repository.id,
+      accessToken: 'synthetic-access-token',
+      signal: new AbortController().signal,
+      budget,
+    };
+
+    const first = board.operations.checkSource(input);
+    await firstReady;
+    await board.operations.checkSource(input);
+    releaseFirst();
+    await assert.rejects(first, { code: 'source_unstable' });
+
+    const stored = board.reportStorage.value(repositoryStateKey(repository.id));
+    assert.deepEqual(stored.repository, currentRepository);
+    assert.equal(stored.sourceCheck.status, 'complete');
+  });
+}
 
 test('an older first source check cannot start after a newer check publishes', async () => {
   let releaseFirstPin;

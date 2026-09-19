@@ -1,4 +1,14 @@
 import { BoardError, errorResponse } from './errors.mjs';
+import {
+  projectAnalysisAvailabilityResponse,
+  projectCatalogPageResponse,
+  projectDirectReportResponse,
+  projectJobResponse,
+  projectRepositoryListResponse,
+  projectSessionResponse,
+  projectSetupDecisionResponse,
+  serializeApiResponse,
+} from './api-responses.mjs';
 import { REPORT_LIMITS } from '../../src/domain/report-contract.js';
 
 const number = (value) => Number.isSafeInteger(value) && value >= 0;
@@ -148,9 +158,13 @@ export function projectSummary(value, repositoryId) {
 }
 
 function json(value, cookies = [], status = 200) {
-  const headers = new Headers({ 'Cache-Control': 'no-store' });
+  const serialized = serializeApiResponse(value);
+  const headers = new Headers({
+    'Cache-Control': 'no-store',
+    'Content-Type': 'application/json',
+  });
   for (const cookie of cookies) headers.append('Set-Cookie', cookie);
-  return Response.json(value, { status, headers });
+  return new Response(serialized, { status, headers });
 }
 function redirect(result) {
   const headers = new Headers({
@@ -283,7 +297,9 @@ export function createApi({
       const path = url.pathname;
       const budget = createOperationBudget({ signal: request.signal });
       if (request.method === 'GET' && path === '/api/session')
-        return json(await auth.bootstrap(request, { budget }));
+        return json(
+          projectSessionResponse(await auth.bootstrap(request, { budget })),
+        );
       if (request.method === 'GET' && path === '/api/auth/start')
         return redirect(await auth.startOAuth(request, { budget }));
       if (request.method === 'GET' && path === '/api/auth/callback')
@@ -377,6 +393,12 @@ export function createApi({
             budget,
           });
         await auth.recheckOwner({ session, budget });
+        if (isReports) output = projectCatalogPageResponse(output);
+        else if (isAnalysisAvailability)
+          output = projectAnalysisAvailabilityResponse(output);
+        else if (reportMatch) output = projectDirectReportResponse(output);
+        else if (jobMatch) output = projectJobResponse(output);
+        else output = projectSetupDecisionResponse(output);
         return json(output);
       }
       const lease = await auth.acquireToken({ session, budget });
@@ -462,6 +484,8 @@ export function createApi({
       }
       await auth.recheckOwner({ session, lease, budget });
       if (!leaseIsCurrent) throw new BoardError('provider_unavailable');
+      if (isList) output = projectRepositoryListResponse(output);
+      else if (admissionMatch) output = projectJobResponse(output);
       return json(output, [], admissionMatch ? 202 : 200);
     } catch (error) {
       return errorResponse(error);

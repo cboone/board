@@ -2,6 +2,9 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { BoardError } from './errors.mjs';
 
 export const JOB_STATE_MACHINE_VERSION = 1;
+export const ANALYSIS_JOB_STORAGE_LIMITS = Object.freeze({
+  recordBytes: 8 * 1024,
+});
 export const JOB_STATES = Object.freeze([
   'created',
   'reserved',
@@ -109,6 +112,7 @@ const iso = (value) => {
 const digest = (domain, value) =>
   createHash('sha256').update(`${domain}\0${value}`).digest('hex');
 const clone = (value) => structuredClone(value);
+const byteLength = (value) => Buffer.byteLength(JSON.stringify(value), 'utf8');
 
 export function deriveAnalysisJobIdentity({
   ownerId,
@@ -574,7 +578,7 @@ export function projectAnalysisJob(value) {
     iso(value.stateDeadlineAt);
     if (Date.parse(updatedAt) >= Date.parse(value.stateDeadlineAt)) fail();
   }
-  return validateJobShape({
+  const projected = validateJobShape({
     ...clone(value),
     freeLease: projectLease(value.freeLease),
     finalizationLease: projectLease(value.finalizationLease),
@@ -590,6 +594,71 @@ export function projectAnalysisJob(value) {
     accounting: projectAccounting(value.accounting),
     terminal: projectTerminal(value.terminal, value.state),
   });
+  if (byteLength(projected) > ANALYSIS_JOB_STORAGE_LIMITS.recordBytes) fail();
+  return projected;
+}
+
+const MAXIMUM_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
+const MAXIMUM_HEX = 'f'.repeat(64);
+// JSON.stringify escapes each admitted lone surrogate to six ASCII bytes.
+const MAXIMUM_SERIALIZED_TEXT = String.fromCharCode(0xd800).repeat(128);
+
+/** Prove the widest reachable terminal record fits before paid work starts. */
+export function assertAnalysisJobTerminalCapacity(value) {
+  const job = projectAnalysisJob(value);
+  if (
+    !['counting', 'primary-invalid'].includes(job.state) ||
+    job.stateDeadlineAt === null ||
+    job.attempts.some((attempt) => attempt.reservationMicrousd === 0)
+  )
+    fail();
+  const at = job.updatedAt;
+  const deadlineAt = job.stateDeadlineAt;
+  const terminal = projectAnalysisJob({
+    ...job,
+    updatedAt: at,
+    state: 'succeeded',
+    stateVersion: MAXIMUM_SAFE_INTEGER,
+    stateDeadlineAt: null,
+    freeLease: null,
+    finalizationLease: null,
+    sourceFingerprint: MAXIMUM_HEX,
+    attempts: job.attempts.map((attempt, index) => ({
+      ...attempt,
+      state: 'settled',
+      tokenHash: String(index + 1).repeat(64),
+      startedAt: at,
+      deadlineAt,
+      completedAt: at,
+      terminalClass: MAXIMUM_SERIALIZED_TEXT,
+      terminalStopReason: MAXIMUM_SERIALIZED_TEXT,
+      inputTokens: MAXIMUM_SAFE_INTEGER,
+      cacheCreationInputTokens: MAXIMUM_SAFE_INTEGER,
+      cacheReadInputTokens: MAXIMUM_SAFE_INTEGER,
+      outputTokens: MAXIMUM_SAFE_INTEGER,
+      costMicrousd: attempt.reservationMicrousd,
+    })),
+    publication: {
+      ...job.publication,
+      candidateDigest: MAXIMUM_HEX,
+      pointerRevision: MAXIMUM_SAFE_INTEGER,
+      publishedAt: at,
+      cleanupCandidateKey: `owners/99961/repositories/${job.repositoryId}/versions/${MAXIMUM_HEX}`,
+    },
+    accounting: {
+      status: 'complete',
+      ledgerRevision: MAXIMUM_SAFE_INTEGER,
+      accountingSequence: MAXIMUM_SAFE_INTEGER,
+      accountingDigest: MAXIMUM_HEX,
+      transitionId: 'e'.repeat(64),
+    },
+    terminal: {
+      status: 'succeeded',
+      completedAt: at,
+      errorCode: null,
+    },
+  });
+  return byteLength(terminal);
 }
 
 const emptyAttempt = (number) => ({

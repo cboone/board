@@ -3,8 +3,11 @@ import test from 'node:test';
 import { ANALYSIS_INPUT_LIMITS } from '../lib/analysis-input.mjs';
 import { deriveAnalysisJobIdentity } from '../lib/jobs.mjs';
 import {
+  REPORT_STORAGE_LIMITS,
   createReportCatalog,
   createRepositoryState,
+  pageReportCatalog,
+  projectReportCatalog,
   projectRepositoryState,
   upsertCatalogRepository,
 } from '../lib/report-records.mjs';
@@ -48,6 +51,95 @@ const pointer = (repositoryId, reportId = 'b'.repeat(64)) => ({
   generatedAt: at(4),
   sourceFingerprint: 'c'.repeat(64),
 });
+
+const serializedBytes = (value) =>
+  Buffer.byteLength(JSON.stringify(value), 'utf8');
+
+function denseRepository(id, length = 249) {
+  const prefix = `r${String(id).padStart(4, '0')}-`;
+  assert.ok(length >= prefix.length && length <= 249);
+  const name = prefix + 'x'.repeat(length - prefix.length);
+  const fullName = `cboone/${name}`;
+  return {
+    id,
+    fullName,
+    name,
+    private: false,
+    url: `https://github.com/${fullName}`,
+  };
+}
+
+function denseCatalog(count, { nameLength = 249, nullCurrent = [] } = {}) {
+  const withoutCurrent = new Set(nullCurrent);
+  return {
+    schemaVersion: 1,
+    ownerId: 99961,
+    revision: count,
+    membershipRevision: count,
+    updatedAt: at(0),
+    repositories: Array.from({ length: count }, (_, index) => {
+      const id = index + 1;
+      return {
+        repositoryId: id,
+        repository: denseRepository(id, nameLength),
+        stateKey: repositoryStateKey(id),
+        createdAt: at(0),
+        current: withoutCurrent.has(id)
+          ? null
+          : {
+              reportId: 'b'.repeat(64),
+              generatedAt: at(4),
+              sourceFingerprint: 'c'.repeat(64),
+            },
+      };
+    }),
+  };
+}
+
+function renameDenseEntry(entry, length) {
+  entry.repository = {
+    ...denseRepository(entry.repositoryId, length),
+    private: entry.repository.private,
+  };
+}
+
+function exactByteCatalog({ count = 900, nullCurrent = [] } = {}) {
+  const catalog = denseCatalog(count, { nullCurrent });
+  let excess = serializedBytes(catalog) - REPORT_STORAGE_LIMITS.catalogBytes;
+  assert.ok(excess > 0);
+
+  const singleByteReductions = excess % 3;
+  for (let index = 0; index < singleByteReductions; index += 1)
+    catalog.repositories[index].repository.private = true;
+  excess -= singleByteReductions;
+
+  for (const entry of catalog.repositories) {
+    if (excess === 0) break;
+    const prefixLength = `r${String(entry.repositoryId).padStart(4, '0')}-`
+      .length;
+    const available = entry.repository.name.length - prefixLength;
+    const removed = Math.min(available, excess / 3);
+    renameDenseEntry(entry, entry.repository.name.length - removed);
+    excess -= removed * 3;
+  }
+
+  assert.equal(excess, 0);
+  assert.equal(serializedBytes(catalog), REPORT_STORAGE_LIMITS.catalogBytes);
+  return projectReportCatalog(catalog);
+}
+
+function stateWithCurrent(entry, current = entry.current) {
+  const state = createRepositoryState(entry.repository);
+  return current === null
+    ? state
+    : projectRepositoryState({
+        ...state,
+        current: {
+          ...current,
+          versionKey: `owners/99961/repositories/${entry.repositoryId}/versions/${current.reportId}`,
+        },
+      });
+}
 
 function memoryStorage(initial = []) {
   const records = new Map();
@@ -155,6 +247,89 @@ test('catalog and state creation recover only from exact lost acknowledgements',
   assert.equal(state.status, 'existing');
   assert.equal(state.state.repository.id, 17);
   assert.equal(storage.metrics.lists, 0);
+});
+
+test('catalog accepts exact entry and serialized-byte ceilings and rejects the next legal value', () => {
+  const entryLimit = projectReportCatalog(
+    denseCatalog(REPORT_STORAGE_LIMITS.catalogEntries, {
+      nameLength: 12,
+      nullCurrent: Array.from(
+        { length: REPORT_STORAGE_LIMITS.catalogEntries },
+        (_, index) => index + 1,
+      ),
+    }),
+  );
+  assert.equal(
+    entryLimit.repositories.length,
+    REPORT_STORAGE_LIMITS.catalogEntries,
+  );
+  assert.ok(serializedBytes(entryLimit) < REPORT_STORAGE_LIMITS.catalogBytes);
+  assert.throws(
+    () =>
+      upsertCatalogRepository(entryLimit, {
+        repository: repository(REPORT_STORAGE_LIMITS.catalogEntries + 1),
+        at: at(1),
+      }),
+    { code: 'report_catalog_full' },
+  );
+
+  const byteLimit = exactByteCatalog();
+  assert.equal(serializedBytes(byteLimit), REPORT_STORAGE_LIMITS.catalogBytes);
+  const overByteLimit = {
+    ...byteLimit,
+    revision: byteLimit.revision * 10,
+  };
+  assert.equal(
+    serializedBytes(overByteLimit),
+    REPORT_STORAGE_LIMITS.catalogBytes + 1,
+  );
+  assert.throws(() => projectReportCatalog(overByteLimit), {
+    code: 'service_unavailable',
+  });
+});
+
+test('catalog capacity rejects uncataloged repositories while preserving existing members', async () => {
+  const limits = [
+    projectReportCatalog(
+      denseCatalog(REPORT_STORAGE_LIMITS.catalogEntries, {
+        nameLength: 12,
+        nullCurrent: Array.from(
+          { length: REPORT_STORAGE_LIMITS.catalogEntries },
+          (_, index) => index + 1,
+        ),
+      }),
+    ),
+    exactByteCatalog(),
+  ];
+
+  for (const catalog of limits) {
+    const storage = memoryStorage([[REPORT_CATALOG_KEY, catalog]]);
+    const existing = catalog.repositories[0].repository;
+    const retained = await ensureCatalogRepository({
+      storage,
+      budget,
+      repository: existing,
+      at: at(1),
+    });
+    assert.equal(retained.status, 'unchanged');
+    assert.equal(
+      retained.catalog.membershipRevision,
+      catalog.membershipRevision,
+    );
+    assert.equal(storage.metrics.writes.length, 0);
+
+    await assert.rejects(
+      ensureCatalogRepository({
+        storage,
+        budget,
+        repository: repository(catalog.repositories.length + 1),
+        at: at(1),
+      }),
+      { code: 'report_catalog_full' },
+    );
+    assert.equal(storage.metrics.writes.length, 0);
+    assert.deepEqual(storage.value(REPORT_CATALOG_KEY), catalog);
+  }
 });
 
 test('claim, rotation and clear are CAS fenced, replayable and lost-ack safe', async () => {
@@ -373,6 +548,96 @@ test('catalog page examines fifty states, returns state-derived items and repair
   assert.equal(second.examined, 1);
   assert.deepEqual(second.items, []);
   assert.equal(second.nextCursor, null);
+});
+
+test('an over-cap summary repair is skipped while the page returns state-derived data', async () => {
+  const catalog = exactByteCatalog({ nullCurrent: [1] });
+  const initial = [[REPORT_CATALOG_KEY, catalog]];
+  for (const entry of catalog.repositories.slice(0, 50)) {
+    const current =
+      entry.repositoryId === 1
+        ? {
+            reportId: 'b'.repeat(64),
+            generatedAt: at(4),
+            sourceFingerprint: 'c'.repeat(64),
+          }
+        : entry.current;
+    initial.push([
+      repositoryStateKey(entry.repositoryId),
+      stateWithCurrent(entry, current),
+    ]);
+  }
+  const storage = memoryStorage(initial);
+
+  const page = await readCatalogPage({ storage, budget, at: at(5) });
+
+  assert.equal(page.items.length, 50);
+  assert.equal(page.items[0].current.reportId, 'b'.repeat(64));
+  assert.equal(page.repairAttempts, 1);
+  assert.equal(page.repairs, 0);
+  const retained = storage.value(REPORT_CATALOG_KEY);
+  assert.equal(retained.repositories[0].current, null);
+  assert.equal(serializedBytes(retained), REPORT_STORAGE_LIMITS.catalogBytes);
+});
+
+test('an empty filtered page keeps its cursor and a stale later-page entry repairs from state', async () => {
+  let catalog = createReportCatalog(at(0));
+  const initial = [];
+  for (let id = 1; id <= 51; id += 1) {
+    catalog = upsertCatalogRepository(catalog, {
+      repository: repository(id),
+      at: at(0),
+    });
+    const entry = catalog.repositories.find(
+      ({ repositoryId }) => repositoryId === id,
+    );
+    initial.push([
+      repositoryStateKey(id),
+      id === 51
+        ? stateWithCurrent(entry, {
+            reportId: 'b'.repeat(64),
+            generatedAt: at(4),
+            sourceFingerprint: 'c'.repeat(64),
+          })
+        : createRepositoryState(entry.repository),
+    ]);
+  }
+  initial.push([REPORT_CATALOG_KEY, catalog]);
+  const storage = memoryStorage(initial);
+
+  const first = await readCatalogPage({ storage, budget, at: at(5) });
+  assert.deepEqual(first.items, []);
+  assert.equal(first.examined, 50);
+  assert.ok(first.nextCursor);
+  assert.equal(
+    storage.value(REPORT_CATALOG_KEY).repositories[50].current,
+    null,
+  );
+
+  const second = await readCatalogPage({
+    storage,
+    budget,
+    cursor: first.nextCursor,
+    at: at(6),
+  });
+  assert.equal(second.examined, 1);
+  assert.equal(second.items.length, 1);
+  assert.equal(second.items[0].repository.id, 51);
+  assert.equal(second.repairs, 1);
+  assert.equal(
+    storage.value(REPORT_CATALOG_KEY).repositories[50].current.reportId,
+    'b'.repeat(64),
+  );
+});
+
+test('catalog paging rejects a malformed cursor', () => {
+  const catalog = upsertCatalogRepository(createReportCatalog(at(0)), {
+    repository: repository(1),
+    at: at(0),
+  });
+  assert.throws(() => pageReportCatalog(catalog, { cursor: '***' }), {
+    code: 'service_unavailable',
+  });
 });
 
 function reportVersion() {

@@ -301,8 +301,12 @@ Use these reviewed setup-calibration bounds initially:
   that upstream limit before live calibration; never assume the Netlify inbound
   limit governs an outbound provider request.
 - A structural-output floor check based on the actual issue count and required
-  lane partition. Reject a request that cannot plausibly encode all issues
-  within the output cap.
+  lane partition. Encode the smallest application-valid compact ASCII JSON
+  delta and budget one output token for every encoded byte. This is a
+  conservative visible-JSON plausibility gate, not provider billing, tokenizer
+  evidence, or a completion guarantee because adaptive thinking shares the
+  output cap. Reject a request when that budget exceeds the output cap, before
+  token counting or paid work.
 
 The token count is a free admission estimate, not a guaranteed billing bound.
 The spend ledger reserves against the documented full model context.
@@ -572,7 +576,11 @@ durable record and API response. Build saved values only through those
 projectors and reject unknown properties on read. `validateReport` remains a
 domain validator; it is not the raw-data retention boundary because it permits
 unknown fields. Enforce serialized byte caps before every write and on every
-read, including a 5 MiB maximum authenticated report envelope.
+read. Repository-state and analysis-job records each have an 8 KiB cap; their
+maximum-width valid projections are 4,407 and 6,676 bytes respectively. The
+immutable authenticated report envelope has a 5 MiB cap. Every JSON API route
+uses a response-specific recursive projector, then rejects a buffered response
+at or above 6 MiB.
 
 ### Repository state
 
@@ -959,6 +967,13 @@ release, or unknown classification never adds a field, array item, or unreserved
 byte. Reject admission or policy mutation before a provider call when either
 exact entry or serialized-byte ceiling would be exceeded.
 
+The strict current schema reaches a 193,412-byte maximum-width projection with
+four active jobs, 16 policies, 32 decisions per policy, maximum-byte deploy
+identifiers, and every mutable numeric/timestamp field at terminal width. Test
+that exact legal maximum against the 262,144-byte outer ceiling. The remaining
+headroom is deliberate corruption and schema-change defense; no valid current
+record can be padded to the outer ceiling.
+
 The initial per-attempt reservation is 5,409,600 microdollars:
 
 ```text
@@ -1326,10 +1341,16 @@ logout, expiry, revocation, or replacement session that wins the race returns
 `GET /api/repositories/:id/report` also requires only Board authentication. It
 returns the validated current report plus inventory, saved comparison,
 provenance, current/previous metadata, last source-check state, last analysis
-attempt, safe active-job view, and spend-mode availability. It never returns the
-previous full report, raw source, raw job record, dispatch/lease tokens, ledger
-internals, or provider bodies. A missing saved report returns a valid empty
-state rather than starting analysis.
+attempt, safe active-job view, and spend-mode availability. The response keeps
+the repository's last trusted live identity separate from the immutable
+identity analyzed by the current report, so a rename cannot invalidate or hide
+that report. It never returns the previous full report, raw source, raw job
+record, dispatch/lease tokens, ledger internals, or provider bodies. An existing
+repository state with no saved report returns a valid empty state. If no state
+exists yet, the route returns `report_not_found`; the browser may construct the
+same empty view only when that numeric ID appeared in the current eligible
+repository list. Its automatic source check then creates the trusted state.
+Neither path starts analysis.
 
 After that response renders, the browser automatically calls the existing
 CSRF-protected source-check route. Extend that route to sequence and store its
@@ -1403,6 +1424,10 @@ For a repository with a report:
 
 - Render the current validated report immediately, before the automatic source
   check completes.
+- Validate saved report, inventory, and provenance against the immutable
+  analyzed identity while using the last trusted live identity for navigation
+  and new eligibility checks. A successful check may update the live identity
+  after a repository rename without rewriting the saved report.
 - Show report generation time, analyzed commit/fingerprint, model/effort, input
   provenance, bounds/limitations, and saved comparison with the previous
   successful report.
@@ -1545,8 +1570,9 @@ Before any paid call, verify in the deployed artifact:
   transition ID, and ledger revision plus the ledger and active-entry revisions
   at absent, initial, maximum-width, and invalid boundaries. Prove nonmonetary
   ledger mutations change only the logical ledger revision.
-- Fill the setup ledger to each four-active-job, 16-policy, 32-decision, and
-  262,144-byte boundary using worst-width projections. Repeat definitive
+- Fill the setup ledger to each four-active-job, 16-policy, and 32-decision
+  boundary using worst-width projections. Prove the exact 193,412-byte maximum
+  legal projection remains below the 262,144-byte outer ceiling. Repeat definitive
   zero-billed refusals and very small settlements beyond those counts and prove
   accounting-complete entries are removed, aggregate settled cost and the hash
   chain remain stable, and post-dispatch settlement always fits its preallocated
@@ -1665,8 +1691,8 @@ Before any paid call, verify in the deployed artifact:
   functions, then build fixture context and prove both are removed. Assert
   `report-job.mjs` exports `config.background:true`; assert
   missing/unknown/preview/branch contexts never install or stage server code.
-- Verify buffered API responses remain under 6 MB and dispatch bodies under 256
-  KB. Bound provider streams and stored JSON independently.
+- Verify buffered API responses remain below 6 MiB and dispatch bodies under
+  256 KB. Bound provider streams and stored JSON independently.
 - Run repository formatting, frontend/backend lint, all unit and integration
   tests, browser suites in Chromium/Firefox/WebKit, fixture and production
   builds, artifact checks, dependency audit, and secret scanners.

@@ -842,9 +842,11 @@ function projectAnalysis(value) {
       attempt.number !== index + 1 ||
       !SAFE_SLUG.test(attempt.terminalClass) ||
       !integer(attempt.inputTokens) ||
+      attempt.inputTokens > SETUP_SPEND_LIMITS.attemptInputTokens ||
       attempt.cacheCreationInputTokens !== 0 ||
       attempt.cacheReadInputTokens !== 0 ||
       !integer(attempt.outputTokens) ||
+      attempt.outputTokens > SETUP_SPEND_LIMITS.attemptOutputTokens ||
       rates.inputRateMicrousd !== SETUP_SPEND_LIMITS.inputRateMicrousd ||
       rates.outputRateMicrousd !== SETUP_SPEND_LIMITS.outputRateMicrousd ||
       attempt.inferenceGeo !== ANTHROPIC_POLICY.inferenceGeo ||
@@ -891,6 +893,65 @@ function projectComparison(value) {
   return JSON.parse(canonicalStringify(value));
 }
 
+function projectSuccessfulReportPayload(
+  value,
+  { reportId, repositoryId, generatedAt },
+) {
+  inspectPlainJson(value);
+  exact(value, ['report', 'inventory', 'comparison', 'source', 'analysis']);
+  if (!HEX_64.test(reportId) || !positive(repositoryId)) fail();
+  const projectedGeneratedAt = utcTimestamp(generatedAt, {
+    milliseconds: true,
+  });
+  const validation = validateReport(value.report, value.inventory);
+  if (!validation.valid) fail();
+  const inventory = projectInventory(value.inventory);
+  const report = projectReport(value.report);
+  const comparison = projectComparison(value.comparison);
+  const source = projectSource(value.source, repositoryId, inventory);
+  const analysis = projectAnalysis(value.analysis);
+  const repository = source.provenance.repository;
+  const reportUrl = (
+    report.repoUrl ?? `https://github.com/${report.repo}`
+  ).replace(/\/$/u, '');
+  const inventoryUrl = (
+    inventory.repoUrl ?? `https://github.com/${inventory.repo}`
+  ).replace(/\/$/u, '');
+  if (
+    repository.fullName !== inventory.repo ||
+    repository.name !== inventory.repo.split('/')[1] ||
+    repository.url !== reportUrl ||
+    repository.url !== inventoryUrl ||
+    Date.parse(projectedGeneratedAt) < Date.parse(source.sync.at) ||
+    canonicalStringify(report.sync) !== canonicalStringify(source.sync) ||
+    canonicalStringify(inventory.sync) !== canonicalStringify(source.sync) ||
+    comparison.result.reportId !== reportId ||
+    comparison.result.generatedAt !== projectedGeneratedAt ||
+    canonicalStringify(comparison.result.sourceFingerprint) !==
+      canonicalStringify(source.fingerprint) ||
+    canonicalStringify(comparison.result.sync) !==
+      canonicalStringify(source.sync)
+  )
+    fail();
+  if (
+    comparison.basis !== null &&
+    (!HEX_64.test(comparison.basis.reportId) ||
+      comparison.basis.reportId === reportId ||
+      Date.parse(comparison.basis.generatedAt) >
+        Date.parse(projectedGeneratedAt))
+  )
+    fail();
+  return { report, inventory, comparison, source, analysis };
+}
+
+/**
+ * Strictly project the reader-visible portion of a successful report while
+ * retaining the immutable report identity checks used by the stored envelope.
+ */
+export function projectSuccessfulReportApiPayload(value, context) {
+  return projectSuccessfulReportPayload(value, context);
+}
+
 function projectEnvelope(value) {
   inspectPlainJson(value);
   exact(value, [
@@ -916,43 +977,20 @@ function projectEnvelope(value) {
   )
     fail();
   const generatedAt = utcTimestamp(value.generatedAt, { milliseconds: true });
-  const validation = validateReport(value.report, value.inventory);
-  if (!validation.valid) fail();
-  const inventory = projectInventory(value.inventory);
-  const report = projectReport(value.report);
-  const comparison = projectComparison(value.comparison);
-  const source = projectSource(value.source, value.repositoryId, inventory);
-  const analysis = projectAnalysis(value.analysis);
-  const repository = source.provenance.repository;
-  const reportUrl = (
-    report.repoUrl ?? `https://github.com/${report.repo}`
-  ).replace(/\/$/u, '');
-  const inventoryUrl = (
-    inventory.repoUrl ?? `https://github.com/${inventory.repo}`
-  ).replace(/\/$/u, '');
-  if (
-    repository.fullName !== inventory.repo ||
-    repository.name !== inventory.repo.split('/')[1] ||
-    repository.url !== reportUrl ||
-    repository.url !== inventoryUrl ||
-    Date.parse(generatedAt) < Date.parse(source.sync.at) ||
-    canonicalStringify(report.sync) !== canonicalStringify(source.sync) ||
-    canonicalStringify(inventory.sync) !== canonicalStringify(source.sync) ||
-    comparison.result.reportId !== value.reportId ||
-    comparison.result.generatedAt !== generatedAt ||
-    canonicalStringify(comparison.result.sourceFingerprint) !==
-      canonicalStringify(source.fingerprint) ||
-    canonicalStringify(comparison.result.sync) !==
-      canonicalStringify(source.sync)
-  )
-    fail();
-  if (
-    comparison.basis !== null &&
-    (!HEX_64.test(comparison.basis.reportId) ||
-      comparison.basis.reportId === value.reportId ||
-      Date.parse(comparison.basis.generatedAt) > Date.parse(generatedAt))
-  )
-    fail();
+  const payload = projectSuccessfulReportPayload(
+    {
+      report: value.report,
+      inventory: value.inventory,
+      comparison: value.comparison,
+      source: value.source,
+      analysis: value.analysis,
+    },
+    {
+      reportId: value.reportId,
+      repositoryId: value.repositoryId,
+      generatedAt,
+    },
+  );
   return {
     schemaVersion: value.schemaVersion,
     reportId: value.reportId,
@@ -960,11 +998,7 @@ function projectEnvelope(value) {
     ownerId: value.ownerId,
     repositoryId: value.repositoryId,
     generatedAt,
-    report,
-    inventory,
-    comparison,
-    source,
-    analysis,
+    ...payload,
   };
 }
 

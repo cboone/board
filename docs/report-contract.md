@@ -256,6 +256,12 @@ Durable data is divided among four Blob stores:
 | `board-jobs`    | Analysis state machines                               |
 | `board-spend`   | Setup and future production spending ledgers          |
 
+Repository-state and analysis-job records each have an 8 KiB serialized UTF-8
+cap. Successful immutable report envelopes have a 5 MiB cap. Before either paid
+attempt starts, Board proves the widest terminal job projection fits its cap.
+Every JSON API result passes through its route-specific recursive projector and
+must serialize below 6 MiB.
+
 A successful immutable version envelope contains its schema and report identity,
 generation time, validated `report` and independent `inventory`, comparison,
 source summary and provenance, and fixed-analysis metadata. Raw GitHub/file
@@ -269,8 +275,18 @@ fingerprint, and an internal version key. The authenticated
 returns the current `report`, `inventory`, `comparison`, `source`, and
 `analysis` values together with browser-safe current/previous pointer metadata,
 the latest source check, the last analysis attempt, any active safe job, and
-spending availability. It does not return the previous envelope's report
-content.
+spending availability. The response's `repository` is the last trusted live
+identity, while `analyzedRepository` is the immutable identity from the current
+envelope. The latter is null when no report exists. This separation keeps a
+saved report valid across a repository rename while new source checks and
+analysis use the live identity. The response does not return the previous
+envelope's report content.
+
+An existing repository state without a report returns the same response shape
+with null report fields. A repository with no stored state returns
+`report_not_found`; the browser may show the empty state only when that numeric
+ID was present in its current eligible repository response. The automatic
+source check creates the trusted state without starting paid analysis.
 
 Only a successful publication rotates the pointers. The former current becomes
 previous; a failed, ambiguous, budget-blocked, or superseded attempt leaves both

@@ -109,6 +109,20 @@ function safeFailureCode(error, fallback = 'analysis_unavailable') {
 
 const TERMINAL = new Set(TERMINAL_JOB_STATES);
 
+function sameRepositoryIdentity(left, right) {
+  return (
+    left !== null &&
+    right !== null &&
+    typeof left === 'object' &&
+    typeof right === 'object' &&
+    left.id === right.id &&
+    left.fullName === right.fullName &&
+    left.name === right.name &&
+    left.private === right.private &&
+    left.url === right.url
+  );
+}
+
 function knownUsageCostMicrousd(error) {
   if (!(error instanceof AnthropicAttemptError)) return null;
   const usage = error.usage;
@@ -162,7 +176,7 @@ function paidFailure(error, reservationMicrousd) {
       kind: 'ambiguous',
       status: 'ambiguous',
       errorCode: 'pricing_review_required',
-      knownCostMicrousd: exceedsReservation ? knownCostMicrousd : null,
+      knownCostMicrousd,
     };
   if (error instanceof AnthropicAttemptError)
     return {
@@ -222,7 +236,11 @@ function usageRecord(response, reservationMicrousd) {
     throw new AnthropicAttemptError('pricing_review_required', {
       pricingReviewRequired: true,
     });
-  if (costMicrousd > reservationMicrousd)
+  if (
+    usage.inputTokens > SETUP_SPEND_LIMITS.attemptInputTokens ||
+    usage.outputTokens > SETUP_SPEND_LIMITS.attemptOutputTokens ||
+    costMicrousd > reservationMicrousd
+  )
     throw new AnthropicAttemptError('pricing_review_required', {
       usage: {
         inputTokens: usage.inputTokens,
@@ -289,7 +307,7 @@ function assertWorkerServices({
     [auth, ['acquireJobToken', 'recheckJobAuthorization']],
     [source, ['checkRepository']],
     [anthropic, ['retrieveModel', 'countTokens', 'createMessage']],
-    [jobs, ['readJob', 'applyTransition']],
+    [jobs, ['readJob', 'applyTransition', 'applyPaidBoundaryTransition']],
     [
       reports,
       [
@@ -400,6 +418,15 @@ export function createAnalysisWorker(input) {
     });
   }
 
+  async function applyPaidBoundary(current, event, budget) {
+    return jobs.applyPaidBoundaryTransition({
+      jobId: current.value.jobId,
+      current,
+      event,
+      budget,
+    });
+  }
+
   async function liveClaim(job, budget) {
     const stored = await reports.readRepositoryState({
       repositoryId: job.repositoryId,
@@ -422,7 +449,8 @@ export function createAnalysisWorker(input) {
     const attempt = current.value.attempts[number - 1];
     if (
       attempt?.tokenHash !== attemptTokenHash ||
-      knownCostMicrousd <= attempt.reservationMicrousd
+      !Number.isSafeInteger(knownCostMicrousd) ||
+      knownCostMicrousd < 0
     )
       throw unavailable();
     const paidState =
@@ -552,12 +580,6 @@ export function createAnalysisWorker(input) {
       !(await liveClaim(fresh.value, budget))
     )
       return null;
-    await auth.recheckJobAuthorization({
-      ownerId: fresh.value.ownerId,
-      authorizationEpoch: fresh.value.authorizationEpoch,
-      generation: lease.generation,
-      budget,
-    });
     const reservation = await spend.readPaidReservation({
       jobId: fresh.value.jobId,
       at: transitionTime(fresh.value, now),
@@ -567,6 +589,12 @@ export function createAnalysisWorker(input) {
     if (!reservationMatches(fresh.value, reservation)) return null;
     if (clockMilliseconds(now) >= Date.parse(reservation.pricingValidThrough))
       throw new BoardError('pricing_review_required');
+    await auth.recheckJobAuthorization({
+      ownerId: fresh.value.ownerId,
+      authorizationEpoch: fresh.value.authorizationEpoch,
+      generation: lease.generation,
+      budget,
+    });
     return fresh;
   }
 
@@ -592,12 +620,6 @@ export function createAnalysisWorker(input) {
       !(await liveClaim(fresh.value, budget))
     )
       return null;
-    await auth.recheckJobAuthorization({
-      ownerId: fresh.value.ownerId,
-      authorizationEpoch: fresh.value.authorizationEpoch,
-      generation: lease.generation,
-      budget,
-    });
     const reservation = await spend.readPaidReservation({
       jobId: fresh.value.jobId,
       at: transitionTime(fresh.value, now),
@@ -625,6 +647,12 @@ export function createAnalysisWorker(input) {
       throw unavailable();
     if (clockMilliseconds(now) >= Date.parse(reservation.pricingValidThrough))
       throw new BoardError('pricing_review_required');
+    await auth.recheckJobAuthorization({
+      ownerId: fresh.value.ownerId,
+      authorizationEpoch: fresh.value.authorizationEpoch,
+      generation: lease.generation,
+      budget,
+    });
     return fresh;
   }
 
@@ -682,7 +710,7 @@ export function createAnalysisWorker(input) {
     if (!paidWindow(runtime)) return null;
     const token = randomToken(randomBytes, 'board-primary-attempt-v1');
     const at = transitionTime(current.value, now);
-    const result = await apply(
+    const result = await applyPaidBoundary(
       current,
       {
         type: 'primary-started',
@@ -941,10 +969,18 @@ export function createAnalysisWorker(input) {
     );
     if (!['updated', 'recovered'].includes(staged.status))
       return reconciler.reconcile({ jobId: current.value.jobId, budget });
+    const authorized = await finalizationOwner(
+      staged,
+      number,
+      finalizationTokenHash,
+      budget,
+    );
+    if (authorized === null)
+      return reconciler.reconcile({ jobId: staged.value.jobId, budget });
     try {
       await auth.recheckJobAuthorization({
-        ownerId: staged.value.ownerId,
-        authorizationEpoch: staged.value.authorizationEpoch,
+        ownerId: authorized.value.ownerId,
+        authorizationEpoch: authorized.value.authorizationEpoch,
         generation: lease.generation,
         budget,
       });
@@ -957,7 +993,7 @@ export function createAnalysisWorker(input) {
       )
         throw error;
       return terminateOwned(
-        staged,
+        authorized,
         {
           status: 'failed',
           errorCode: 'source_authorization_required',
@@ -967,14 +1003,17 @@ export function createAnalysisWorker(input) {
         budget,
       );
     }
-    const authorized = await finalizationOwner(
-      staged,
-      number,
-      finalizationTokenHash,
-      budget,
-    );
-    if (authorized === null)
-      return reconciler.reconcile({ jobId: staged.value.jobId, budget });
+    const publicationAt = transitionTime(authorized.value, now);
+    if (
+      Date.parse(publicationAt) >=
+        Date.parse(authorized.value.stateDeadlineAt) ||
+      !ownsFinalization(authorized.value, {
+        number,
+        tokenHash: finalizationTokenHash,
+        at: publicationAt,
+      })
+    )
+      return reconciler.reconcile({ jobId: authorized.value.jobId, budget });
     const written = await reports.writeImmutableReportVersion({
       versionKey: authorized.value.publication.versionKey,
       version: candidate.value,
@@ -1147,13 +1186,17 @@ export function createAnalysisWorker(input) {
       const countWindow = freeLeaseWindow(current, runtime);
       const countSignal = deadlineSignal(signal, countWindow.operationMs);
       await anthropic.retrieveModel({ signal: countSignal });
+      const priorRepository = priorVersion?.source?.provenance?.repository;
+      const currentRepository = gathered.summary?.repo;
+      const priorAnalysis =
+        priorVersion !== null &&
+        sameRepositoryIdentity(priorRepository, currentRepository)
+          ? projectPriorAnalysis(priorVersion.report)
+          : null;
       prepared = await prepareInput({
         sourceSnapshot: gathered.sourceSnapshot,
         limitations: gathered.summary.provenance.limitations,
-        priorAnalysis:
-          priorVersion === null
-            ? null
-            : projectPriorAnalysis(priorVersion.report),
+        priorAnalysis,
         requestFactory: (message) => {
           const analysisInput = JSON.parse(message.content);
           return {
@@ -1528,7 +1571,7 @@ export function createAnalysisWorker(input) {
         )
       ).value;
     const correctiveAt = transitionTime(current.value, now);
-    const correctiveStarted = await apply(
+    const correctiveStarted = await applyPaidBoundary(
       current,
       {
         type: 'corrective-started',

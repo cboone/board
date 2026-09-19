@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { ANALYSIS_INPUT_LIMITS } from '../lib/analysis-input.mjs';
+import {
+  API_RESPONSE_LIMITS,
+  projectDirectReportResponse,
+  serializeApiResponse,
+} from '../lib/api-responses.mjs';
 import { deriveAnalysisJobIdentity } from '../lib/jobs.mjs';
 import {
   REPORT_ANALYSIS_SCHEMA_VERSION,
@@ -16,7 +21,11 @@ import {
   successfulReportVersionKey,
   writeSuccessfulReportVersion,
 } from '../lib/report-versions.mjs';
-import { createInitialComparison } from '../../src/domain/report-comparison.js';
+import {
+  createInitialComparison,
+  createReportComparison,
+} from '../../src/domain/report-comparison.js';
+import { SETUP_SPEND_LIMITS } from '../lib/spend.mjs';
 
 const generatedAt = '2026-09-18T20:10:00.000Z';
 const observedFrom = '2026-09-18T20:09:58.000Z';
@@ -198,6 +207,33 @@ function reverseObjectKeys(value) {
   return value;
 }
 
+function addUnknownNestedComparisonField(candidate) {
+  const previousReport = structuredClone(candidate.report);
+  candidate.report.issues[0].waitingOn = [
+    { pr: 99, title: 'External dependency' },
+  ];
+  candidate.report.issues[0].blockedBecause =
+    'The external dependency must finish first.';
+  candidate.comparison = createReportComparison(
+    {
+      reportId: 'b'.repeat(64),
+      generatedAt: '2026-09-18T20:09:00.000Z',
+      source: { fingerprint: candidate.source.fingerprint },
+      report: previousReport,
+    },
+    {
+      reportId: candidate.reportId,
+      generatedAt: candidate.generatedAt,
+      source: { fingerprint: candidate.source.fingerprint },
+      report: candidate.report,
+    },
+  );
+  const issueChange = candidate.comparison.entries.find(
+    (entry) => entry.kind === 'issue' && entry.issueNumber === 1,
+  );
+  issueChange.after.waitingOn[0].privateMarker = 'must-not-cross';
+}
+
 test('projects the exact successful envelope and retains only bounded provenance', () => {
   const candidate = version();
   const projected = projectSuccessfulReportVersion(candidate);
@@ -241,6 +277,42 @@ test('canonical serialization and digest ignore input object insertion order', (
     successfulReportVersionDigest(candidate),
   );
   assert.equal(successfulReportVersionKey(candidate), identity.versionKey);
+});
+
+test('rejects unknown nested comparison fields at the stored-version boundary', () => {
+  const candidate = version();
+  addUnknownNestedComparisonField(candidate);
+  assert.throws(() => projectSuccessfulReportVersion(candidate), {
+    code: 'service_unavailable',
+  });
+});
+
+test('rejects unknown nested comparison fields at the API boundary', () => {
+  const candidate = version();
+  addUnknownNestedComparisonField(candidate);
+  assert.throws(
+    () =>
+      projectDirectReportResponse({
+        repository: candidate.source.provenance.repository,
+        analyzedRepository: candidate.source.provenance.repository,
+        current: {
+          reportId: candidate.reportId,
+          generatedAt: candidate.generatedAt,
+          sourceFingerprint: candidate.source.fingerprint.value,
+        },
+        previous: null,
+        report: candidate.report,
+        inventory: candidate.inventory,
+        comparison: candidate.comparison,
+        source: candidate.source,
+        analysis: candidate.analysis,
+        sourceCheck: null,
+        lastAnalysisAttempt: null,
+        activeJob: null,
+        spendMode: { available: true, mode: 'setup', reason: null },
+      }),
+    { code: 'service_unavailable' },
+  );
 });
 
 test('retains exact selected identities, hashes, bounds, and safe omission reasons', () => {
@@ -347,6 +419,20 @@ test('binds report identity, source metadata, comparison result and exact cost',
     (value) => (value.comparison.result.reportId = 'e'.repeat(64)),
     (value) => (value.source.provenance.repository.id = 18),
     (value) => (value.analysis.attempts[0].costMicrousd += 1),
+    (value) => {
+      const attempt = value.analysis.attempts[0];
+      attempt.inputTokens = SETUP_SPEND_LIMITS.attemptInputTokens + 1;
+      attempt.costMicrousd =
+        attempt.inputTokens * attempt.rates.inputRateMicrousd +
+        attempt.outputTokens * attempt.rates.outputRateMicrousd;
+    },
+    (value) => {
+      const attempt = value.analysis.attempts[0];
+      attempt.outputTokens = SETUP_SPEND_LIMITS.attemptOutputTokens + 1;
+      attempt.costMicrousd =
+        attempt.inputTokens * attempt.rates.inputRateMicrousd +
+        attempt.outputTokens * attempt.rates.outputRateMicrousd;
+    },
     (value) =>
       (value.source.provenance.analysisSelection.limits.inputTokens -= 1),
   ]) {
@@ -388,6 +474,60 @@ test('enforces the five MiB cap on canonical UTF-8, including multibyte text', (
   assert.throws(() => projectSuccessfulReportVersion(candidate), {
     code: 'service_unavailable',
   });
+});
+
+test('projects and buffers a near-five-MiB authenticated report below the API ceiling', () => {
+  const candidate = version();
+  const title = '🧭'.repeat(2000);
+  candidate.inventory.issues = [];
+  candidate.report.issues = [];
+  candidate.report.lanes = [
+    { key: 'L1', name: 'All issues', mode: 'any', issues: [] },
+  ];
+  candidate.report.startNow = [];
+  candidate.report.notes = { startNow: 'No starts selected for this fixture.' };
+  for (let number = 1; number <= 300; number += 1) {
+    const item = issue(number, title);
+    candidate.inventory.issues.push(item);
+    candidate.report.issues.push(structuredClone(item));
+    candidate.report.lanes[0].issues.push(number);
+  }
+  candidate.source.counts.openIssues = 300;
+  candidate.comparison = createInitialComparison({
+    reportId: candidate.reportId,
+    generatedAt: candidate.generatedAt,
+    source: { fingerprint: candidate.source.fingerprint },
+    report: candidate.report,
+  });
+  const storedBytes = Buffer.byteLength(JSON.stringify(candidate), 'utf8');
+  assert.ok(storedBytes > 4.5 * 1024 * 1024);
+  assert.ok(storedBytes <= SUCCESSFUL_REPORT_VERSION_MAX_BYTES);
+  projectSuccessfulReportVersion(candidate);
+
+  const response = projectDirectReportResponse({
+    repository: candidate.source.provenance.repository,
+    analyzedRepository: candidate.source.provenance.repository,
+    current: {
+      reportId: candidate.reportId,
+      generatedAt: candidate.generatedAt,
+      sourceFingerprint: candidate.source.fingerprint.value,
+    },
+    previous: null,
+    report: candidate.report,
+    inventory: candidate.inventory,
+    comparison: candidate.comparison,
+    source: candidate.source,
+    analysis: candidate.analysis,
+    sourceCheck: null,
+    lastAnalysisAttempt: null,
+    activeJob: null,
+    spendMode: { available: true, mode: 'setup', reason: null },
+  });
+  const serialized = serializeApiResponse(response);
+  assert.ok(Buffer.byteLength(serialized, 'utf8') > 4.5 * 1024 * 1024);
+  assert.ok(
+    Buffer.byteLength(serialized, 'utf8') <= API_RESPONSE_LIMITS.jsonBytes,
+  );
 });
 
 test('proves an immutable stored value only with the same digest and identities', () => {

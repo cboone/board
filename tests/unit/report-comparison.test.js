@@ -189,6 +189,27 @@ describe('report comparison states and validation', () => {
     expect(() => validateReportComparison(sparse)).not.toThrow();
     expect(validateReportComparison(sparse).valid).toBe(false);
   });
+
+  it('rejects unknown nested snapshot fields and null required text', () => {
+    const current = report();
+    current.issues[1].waitingOn = [
+      { pr: 91, title: 'Approve the public shape' },
+    ];
+    const comparison = createReportComparison(
+      version(report(), '1'),
+      version(current, '2'),
+    );
+    const issueChange = find(comparison.entries, 'issue', { issueNumber: 2 });
+    issueChange.after.waitingOn[0].privateMarker = 'must-not-cross';
+    expect(validateReportComparison(comparison).valid).toBe(false);
+
+    const requiredText = createReportComparison(
+      version(report(), '1'),
+      version({ ...report(), title: 'revised widgets backlog' }, '2'),
+    );
+    requiredText.entries[0].after.title = null;
+    expect(validateReportComparison(requiredText).valid).toBe(false);
+  });
 });
 
 describe('reader-visible report comparison', () => {

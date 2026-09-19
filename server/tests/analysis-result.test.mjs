@@ -217,12 +217,16 @@ function validatingCorrectiveJob(options) {
   });
 }
 
-function inventory(sync, title = 'Canonical issue title') {
+function inventory(
+  sync,
+  title = 'Canonical issue title',
+  selectedRepository = repository,
+) {
   return {
     board: 'backlog-triage',
     title: 'widgets backlog',
-    repo: repository.fullName,
-    repoUrl: repository.url,
+    repo: selectedRepository.fullName,
+    repoUrl: selectedRepository.url,
     sync: structuredClone(sync),
     issues: [
       {
@@ -239,12 +243,18 @@ function inventory(sync, title = 'Canonical issue title') {
   };
 }
 
-function analysisInput(sync, title, priorAnalysis = null, rawSource = null) {
+function analysisInput(
+  sync,
+  title,
+  priorAnalysis = null,
+  rawSource = null,
+  selectedRepository = repository,
+) {
   return {
     wireVersion: ANALYSIS_INPUT_WIRE_VERSION,
     repository: {
-      id: repository.id,
-      fullName: repository.fullName,
+      id: selectedRepository.id,
+      fullName: selectedRepository.fullName,
       defaultBranch: sync.branch,
       defaultTip: sync.commit,
     },
@@ -319,6 +329,8 @@ function context({
   idempotencyKey = '018f0f11-1111-7111-8111-111111111111',
   operation = 'generate',
   priorVersion = null,
+  sourceRepository = repository,
+  priorAnalysis,
   title = 'Canonical issue title',
   rawSource = 'Raw source evidence that must remain transient.',
   analysisDelta = delta(),
@@ -332,7 +344,7 @@ function context({
   };
   const sourceSummary = {
     status: 'complete',
-    repo: structuredClone(repository),
+    repo: structuredClone(sourceRepository),
     sync: structuredClone(sync),
     fingerprint: {
       algorithm: 'sha256',
@@ -361,25 +373,39 @@ function context({
     },
   };
   const expectedCurrentReportId = priorVersion?.reportId ?? null;
+  const identityMatches =
+    operation === 'refresh' &&
+    priorVersion?.source?.provenance?.repository?.id === sourceRepository.id &&
+    priorVersion.source.provenance.repository.fullName ===
+      sourceRepository.fullName &&
+    priorVersion.source.provenance.repository.name === sourceRepository.name &&
+    priorVersion.source.provenance.repository.private ===
+      sourceRepository.private &&
+    priorVersion.source.provenance.repository.url === sourceRepository.url;
+  const projectedPriorAnalysis =
+    priorAnalysis !== undefined
+      ? priorAnalysis
+      : identityMatches
+        ? {
+            issueAnalysis: [],
+            lanes: priorVersion.report.lanes,
+            startNow: priorVersion.report.startNow,
+            contention: priorVersion.report.contention ?? {},
+            notes: priorVersion.report.notes ?? {},
+          }
+        : null;
   const originalAnalysisInput = analysisInput(
     sync,
     title,
-    operation === 'refresh'
-      ? {
-          issueAnalysis: [],
-          lanes: priorVersion.report.lanes,
-          startNow: priorVersion.report.startNow,
-          contention: priorVersion.report.contention ?? {},
-          notes: priorVersion.report.notes ?? {},
-        }
-      : null,
+    projectedPriorAnalysis,
     rawSource,
+    sourceRepository,
   );
   return {
     analysisDelta,
     analysisInput: originalAnalysisInput,
     analysisSelection: analysisSelection(originalAnalysisInput),
-    inventory: inventory(sync, title),
+    inventory: inventory(sync, title, sourceRepository),
     sourceSummary,
     job: validatingJob({
       hour,
@@ -477,6 +503,46 @@ test('applies no-verbatim and output safety only to model-authored persisted tex
   );
 });
 
+test('applies every no-verbatim boundary to persisted lane keys', () => {
+  const exactSource = 'source-lane-key';
+  const exactDelta = delta();
+  exactDelta.lanes[0].key = exactSource;
+  assert.throws(
+    () =>
+      assembleSuccessfulAnalysisResult(
+        context({ rawSource: exactSource, analysisDelta: exactDelta }),
+      ),
+    { code: ANALYSIS_RESULT_CLASSIFICATION },
+  );
+
+  const sourceLine = 'b'.repeat(32);
+  const lineDelta = delta();
+  lineDelta.lanes[0].key = `x${sourceLine}y`;
+  assert.throws(
+    () =>
+      assembleSuccessfulAnalysisResult(
+        context({ rawSource: sourceLine, analysisDelta: lineDelta }),
+      ),
+    { code: ANALYSIS_RESULT_CLASSIFICATION },
+  );
+
+  const sourceWindow = Array.from({ length: 64 }, (_, index) =>
+    String.fromCodePoint(0x1f600 + (index % 32)),
+  ).join('');
+  const windowDelta = delta();
+  windowDelta.lanes[0].key = sourceWindow;
+  assert.throws(
+    () =>
+      assembleSuccessfulAnalysisResult(
+        context({
+          rawSource: `before ${sourceWindow} after`,
+          analysisDelta: windowDelta,
+        }),
+      ),
+    { code: ANALYSIS_RESULT_CLASSIFICATION },
+  );
+});
+
 test('creates unchanged and changed refresh comparisons against the exact basis', () => {
   const initialInput = context({
     analysisDelta: delta('Preserve accepted prior analysis.'),
@@ -503,6 +569,32 @@ test('creates unchanged and changed refresh comparisons against the exact basis'
     changed.comparison.entries.map(({ kind }) => kind),
     ['prose'],
   );
+});
+
+test('refreshes a renamed repository without sending prior analysis', () => {
+  const initial = assembleSuccessfulAnalysisResult(context()).value;
+  const renamedRepository = {
+    ...repository,
+    name: 'renamed-widgets',
+    fullName: 'cboone/renamed-widgets',
+    url: 'https://github.com/cboone/renamed-widgets',
+  };
+  const renamed = context({
+    hour: 13,
+    idempotencyKey: '018f0f11-4444-7444-8444-444444444444',
+    operation: 'refresh',
+    priorVersion: initial,
+    sourceRepository: renamedRepository,
+  });
+  assert.equal(renamed.analysisInput.priorAnalysis, null);
+  const refreshed = assembleSuccessfulAnalysisResult(renamed).value;
+  assert.equal(refreshed.report.repo, renamedRepository.fullName);
+  assert.equal(refreshed.comparison.basis.reportId, initial.reportId);
+
+  renamed.analysisInput.priorAnalysis = { lanes: [] };
+  assert.throws(() => assembleSuccessfulAnalysisResult(renamed), {
+    code: 'service_unavailable',
+  });
 });
 
 test('rejects a source fingerprint or refresh basis that is not the job basis', () => {

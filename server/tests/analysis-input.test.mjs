@@ -156,7 +156,10 @@ function source() {
   };
 }
 
-function requestFactory(message) {
+function requestFactory(
+  message,
+  { outputTokens = ANALYSIS_INPUT_LIMITS.outputTokens } = {},
+) {
   const shared = {
     model: 'synthetic-fixed-model',
     system: 'fixed-system',
@@ -168,7 +171,7 @@ function requestFactory(message) {
     countRequest: shared,
     messageRequest: {
       ...shared,
-      max_tokens: 16384,
+      max_tokens: outputTokens,
       inference_geo: 'global',
       service_tier: 'standard_only',
       stream: true,
@@ -422,6 +425,41 @@ test('request byte and mandatory token bounds cover exact and over-boundary case
   assert.equal(calls, 1);
 });
 
+test('structural output floor admits its exact boundary and rejects before counting below it', async () => {
+  let exactCounts = 0;
+  const exact = await prepareAnalysisInput({
+    sourceSnapshot: source(),
+    countClient() {
+      exactCounts += 1;
+      return 1000;
+    },
+    requestFactory,
+    limits: { outputTokens: 228 },
+  });
+  assert.equal(exact.analysisSelection.limits.outputTokens, 228);
+  assert.equal(exact.messageRequest.max_tokens, 228);
+  assert.equal(exactCounts, 2);
+
+  let rejectedCounts = 0;
+  await assert.rejects(
+    prepareAnalysisInput({
+      sourceSnapshot: source(),
+      countClient() {
+        rejectedCounts += 1;
+        return 1000;
+      },
+      requestFactory,
+      limits: { outputTokens: 227 },
+    }),
+    (error) => {
+      assert.equal(error.code, 'analysis_input_too_large');
+      assert.equal(error.details.ruleId, 'structural-output-floor');
+      return true;
+    },
+  );
+  assert.equal(rejectedCounts, 0);
+});
+
 test('mandatory request bytes fail before count and provider request mismatch fails closed', async () => {
   let calls = 0;
   await assert.rejects(
@@ -533,11 +571,13 @@ test('default limits name every optional, request, and token bound', () => {
     'commentBytes',
     'fileBytes',
     'inputTokens',
+    'outputTokens',
     'requestBytes',
     'totalCommentBytes',
     'totalFileBytes',
   ]);
   assert.equal(ANALYSIS_INPUT_LIMITS.requestBytes, 8_388_608);
   assert.equal(ANALYSIS_INPUT_LIMITS.inputTokens, 100_000);
+  assert.equal(ANALYSIS_INPUT_LIMITS.outputTokens, 16_384);
   assert.ok(Object.isFrozen(ANALYSIS_INPUT_LIMITS));
 });

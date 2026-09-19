@@ -16,6 +16,7 @@ import {
   projectSpendLedger,
   removeCompletedSetupJob,
   reserveSetupJob as reserveSetupJobRaw,
+  setupSpendLedgerPreflightBytes,
   updateSetupAttempt,
 } from '../lib/spend.mjs';
 
@@ -36,6 +37,82 @@ function setup() {
     pricingAttestation,
   });
   return createSetupLedger({ policyId, policy, at: at(0) });
+}
+
+const indexedId = (index) => index.toString(16).padStart(64, '0');
+
+function maximumCardinalityLedger() {
+  const deployId = (index) => {
+    const suffix = String(index).padStart(2, '0');
+    // JSON escapes each admitted lone surrogate to six ASCII bytes.
+    return `${'\ud800'.repeat(128 - suffix.length)}${suffix}`;
+  };
+  const initial = createSetupPolicy({
+    deployId: deployId(1),
+    pricingAttestation,
+  });
+  let ledger = createSetupLedger({
+    policyId: initial.policyId,
+    policy: initial.policy,
+    at: at(0),
+  });
+  for (let index = 2; index <= SETUP_SPEND_LIMITS.maxPolicies; index += 1) {
+    const nextPolicy = createSetupPolicy({
+      deployId: deployId(index),
+      pricingAttestation,
+    });
+    ledger = activateSetupPolicy(ledger, {
+      ...nextPolicy,
+      at: `2026-09-19T06:30:${String(index).padStart(2, '0')}.000Z`,
+      expectedRevision: ledger.revision,
+    });
+  }
+
+  const candidate = structuredClone(ledger);
+  let decisionIndex = 1;
+  for (const policyId of Object.keys(candidate.policies)) {
+    candidate.discussions[policyId] = {
+      status: 'acknowledged',
+      currentRevision: SETUP_SPEND_LIMITS.maxDecisionsPerPolicy,
+      triggeredAt: '2026-09-19T06:31:00.000Z',
+      triggerExposureMicrousd: SETUP_SPEND_LIMITS.capMicrousd,
+      decisions: Array.from(
+        { length: SETUP_SPEND_LIMITS.maxDecisionsPerPolicy },
+        (_, index) => ({
+          triggerRevision: index + 1,
+          decidedAt: '2026-09-19T06:31:00.000Z',
+          observedExposureMicrousd: SETUP_SPEND_LIMITS.capMicrousd,
+          decisionId: indexedId(decisionIndex++),
+          decision: 'acknowledged',
+          authorizedThroughMicrousd: SETUP_SPEND_LIMITS.capMicrousd,
+          authorizedOperations: ['generate', 'refresh'],
+        }),
+      ),
+    };
+  }
+  for (let index = 0; index < SETUP_SPEND_LIMITS.maxActiveJobs; index += 1) {
+    candidate.active[indexedId(10_000 + index)] = {
+      policyId: candidate.activePolicyId,
+      createdAt: '2026-09-19T06:31:00.000Z',
+      accountingState: 'pending',
+      lastLedgerRevision: 1,
+      lastAccountingSequence: 1,
+      lastAccountingDigest: indexedId(20_000 + index),
+      lastTransitionId: indexedId(30_000 + index),
+      attempts: Array.from(
+        { length: SETUP_SPEND_LIMITS.maximumAttempts },
+        (_, attemptIndex) => ({
+          number: attemptIndex + 1,
+          ceilingMicrousd: SETUP_SPEND_LIMITS.attemptCostMicrousd,
+          state: 'reserved',
+          actualCostMicrousd: 0,
+          unknownExposureMicrousd: 0,
+          recordedAt: null,
+        }),
+      ),
+    };
+  }
+  return projectSpendLedger(candidate);
 }
 
 test('setup policy fixes Opus 5 high-effort global standard pricing and cap', () => {
@@ -134,6 +211,65 @@ test('deploy policy activation fails closed at the immutable policy bound', () =
       }),
     { code: 'service_unavailable' },
   );
+});
+
+test('maximum-width preflight covers every cardinality before terminal accounting', () => {
+  const ledger = maximumCardinalityLedger();
+  assert.equal(
+    Object.keys(ledger.active).length,
+    SETUP_SPEND_LIMITS.maxActiveJobs,
+  );
+  assert.equal(
+    Object.keys(ledger.policies).length,
+    SETUP_SPEND_LIMITS.maxPolicies,
+  );
+  assert.ok(
+    Object.values(ledger.discussions).every(
+      ({ decisions }) =>
+        decisions.length === SETUP_SPEND_LIMITS.maxDecisionsPerPolicy,
+    ),
+  );
+  assert.equal(setupSpendLedgerPreflightBytes(ledger), 193_412);
+  assert.ok(193_412 < SETUP_SPEND_LIMITS.maxBytes);
+});
+
+test('terminal attempt accounting stays within its reserved maximum-width shape', () => {
+  const reserved = reserveSetupJob(setup(), {
+    jobId: id('a'),
+    operation: 'generate',
+    at: at(1),
+    expectedRevision: 0,
+  }).ledger;
+  const reservedBytes = setupSpendLedgerPreflightBytes(reserved);
+  const settled = updateSetupAttempt(reserved, {
+    jobId: id('a'),
+    attemptNumber: 1,
+    state: 'settled',
+    actualCostMicrousd: 1,
+    at: at(2),
+    expectedRevision: reserved.revision,
+  }).ledger;
+  assert.ok(setupSpendLedgerPreflightBytes(settled) <= reservedBytes);
+  const released = updateSetupAttempt(settled, {
+    jobId: id('a'),
+    attemptNumber: 2,
+    state: 'released',
+    at: at(3),
+    expectedRevision: settled.revision,
+  }).ledger;
+  assert.ok(setupSpendLedgerPreflightBytes(released) <= reservedBytes);
+
+  const unknown = updateSetupAttempt(reserved, {
+    jobId: id('a'),
+    attemptNumber: 1,
+    state: 'unknown',
+    actualCostMicrousd: SETUP_SPEND_LIMITS.attemptCostMicrousd + 1,
+    unknownExposureMicrousd: SETUP_SPEND_LIMITS.attemptCostMicrousd + 1,
+    pricingReviewRequired: true,
+    at: at(2),
+    expectedRevision: reserved.revision,
+  }).ledger;
+  assert.ok(setupSpendLedgerPreflightBytes(unknown) <= reservedBytes);
 });
 
 test('reviewed pricing attestation and deploy bind every active policy fact', () => {

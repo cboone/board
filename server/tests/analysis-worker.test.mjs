@@ -48,20 +48,26 @@ function clock(value = Date.parse('2026-09-19T04:00:00.000Z')) {
   });
 }
 
-function faultController(boundary, outcome) {
+function faultController(boundary, outcome, attempt = null) {
   if (boundary === null && outcome === null)
     return Object.freeze({ before() {}, after() {}, count: () => 0 });
   assert.equal(typeof boundary, 'string');
   assert.ok(['absent', 'committed'].includes(outcome));
   let count = 0;
-  const interrupt = (position, candidate) => {
-    if (count !== 0 || position !== outcome || candidate !== boundary) return;
+  const interrupt = (position, candidate, event = null) => {
+    if (
+      count !== 0 ||
+      position !== outcome ||
+      candidate !== boundary ||
+      (attempt !== null && event?.number !== attempt)
+    )
+      return;
     count += 1;
     throw new Error(`synthetic ${outcome} ${boundary}`);
   };
   return Object.freeze({
-    before: (candidate) => interrupt('absent', candidate),
-    after: (candidate) => interrupt('committed', candidate),
+    before: (candidate, event) => interrupt('absent', candidate, event),
+    after: (candidate, event) => interrupt('committed', candidate, event),
     count: () => count,
   });
 }
@@ -102,33 +108,46 @@ function dispatchableJob({
   });
 }
 
-function jobService(initial, { afterTransition, fault } = {}) {
+function jobService(initial, { afterRead, afterTransition, fault } = {}) {
   let value = structuredClone(initial);
   let revision = 1;
-  return Object.freeze({
-    readJob: async ({ jobId }) =>
-      value.jobId === jobId
-        ? { value: structuredClone(value), etag: `etag-${revision}` }
-        : null,
-    applyTransition: async ({ jobId, expectedEtag, event }) => {
-      assert.equal(jobId, value.jobId);
-      if (expectedEtag !== `etag-${revision}`)
-        return {
-          status: 'conflict',
-          value: structuredClone(value),
-          etag: `etag-${revision}`,
-        };
-      fault?.before(event.type);
-      value = transitionJob(value, event);
-      revision += 1;
-      afterTransition?.(event);
-      fault?.after(event.type);
+  const readJob = async ({ jobId }) => {
+    if (value.jobId !== jobId) return null;
+    const result = {
+      value: structuredClone(value),
+      etag: `etag-${revision}`,
+    };
+    afterRead?.(structuredClone(value));
+    return result;
+  };
+  const writeTransition = async ({ jobId, current, event }) => {
+    assert.equal(jobId, value.jobId);
+    if (current.etag !== `etag-${revision}`)
       return {
-        status: 'updated',
+        status: 'conflict',
         value: structuredClone(value),
         etag: `etag-${revision}`,
       };
+    fault?.before(event.type, event);
+    value = transitionJob(value, event);
+    revision += 1;
+    afterTransition?.(event);
+    fault?.after(event.type, event);
+    return {
+      status: 'updated',
+      value: structuredClone(value),
+      etag: `etag-${revision}`,
+    };
+  };
+  return Object.freeze({
+    readJob,
+    applyTransition: async ({ jobId, expectedEtag, event }) => {
+      const current = await readJob({ jobId });
+      if (expectedEtag !== current.etag)
+        return { status: 'conflict', ...current };
+      return writeTransition({ jobId, current, event });
     },
+    applyPaidBoundaryTransition: writeTransition,
     value: () => structuredClone(value),
   });
 }
@@ -235,6 +254,7 @@ function spendService(
     paidPolicyExpiryAt = null,
     pricingVerifiedAt = '2026-09-18T04:00:00.000Z',
     pricingValidThrough = '2026-09-20T04:00:00.000Z',
+    afterPaidRead = null,
   } = {},
 ) {
   let reservation = {
@@ -325,6 +345,7 @@ function spendService(
       const value = readReservation(jobId);
       if (value === null) return null;
       paidReads += 1;
+      afterPaidRead?.(paidReads);
       if (
         paidReads === paidPolicyExpiryAt ||
         Date.parse(at) < Date.parse(pricingVerifiedAt) ||
@@ -406,6 +427,8 @@ function fixture({
   afterRotate = null,
   sourceAdvance = 0,
   authAdvance = 0,
+  recheckAdvanceAt = null,
+  recheckAdvance = 0,
   replaceCollectingClaimAfterAuth = false,
   countClaimAdvance = 0,
   prepareAdvance = 0,
@@ -416,20 +439,48 @@ function fixture({
   pricingVerifiedAt,
   pricingValidThrough,
   pricingReviewAfterCount = null,
+  revokeDuringPaidReservationAt = null,
+  revokeOnPaidBoundaryReread = null,
+  revokeDuringPublicationOwnerRead = false,
   messageClient = null,
   reconcileBeforeErrorAt = null,
   faultBoundary = null,
   faultOutcome = null,
+  faultAttempt = null,
+  sourceRepository = repository,
 } = {}) {
   const time = clock();
-  const fault = faultController(faultBoundary, faultOutcome);
+  const fault = faultController(faultBoundary, faultOutcome, faultAttempt);
   const job = dispatchableJob({
     now: time.now(),
     operation,
     expectedCurrentReportId: current?.reportId ?? null,
   });
+  let authorizationRevoked = false;
+  let publicationReadRevoked = false;
+  let rechecks = 0;
   const jobs = jobService(job, {
     fault,
+    afterRead: (value) => {
+      if (
+        (revokeOnPaidBoundaryReread === 1 &&
+          rechecks === 1 &&
+          value.state === 'counting') ||
+        (revokeOnPaidBoundaryReread === 2 &&
+          rechecks === 2 &&
+          value.state === 'primary-invalid')
+      )
+        authorizationRevoked = true;
+      if (
+        revokeDuringPublicationOwnerRead &&
+        !publicationReadRevoked &&
+        value.publication.candidateDigest !== null &&
+        ['validating-primary', 'validating-corrective'].includes(value.state)
+      ) {
+        publicationReadRevoked = true;
+        authorizationRevoked = true;
+      }
+    },
     afterTransition: (event) => {
       if (event.type === 'corrective-started')
         time.advance(correctiveStartAdvance);
@@ -450,11 +501,13 @@ function fixture({
     paidPolicyExpiryAt,
     pricingVerifiedAt,
     pricingValidThrough,
+    afterPaidRead: (number) => {
+      if (number === revokeDuringPaidReservationAt) authorizationRevoked = true;
+    },
     afterSettle: (number) => {
       if (number === 1) time.advance(afterSettleAdvance);
     },
   });
-  let rechecks = 0;
   const auth = Object.freeze({
     acquireJobToken: async () => {
       time.advance(authAdvance);
@@ -483,7 +536,11 @@ function fixture({
     },
     recheckJobAuthorization: async () => {
       rechecks += 1;
-      if ((revokeBeforeWrite || revokeBeforeCorrection) && rechecks === 2)
+      if (rechecks === recheckAdvanceAt) time.advance(recheckAdvance);
+      if (
+        authorizationRevoked ||
+        ((revokeBeforeWrite || revokeBeforeCorrection) && rechecks === 2)
+      )
         throw new BoardError('source_authorization_required');
       return { id: 99961, login: 'cboone' };
     },
@@ -499,10 +556,11 @@ function fixture({
       if (sourceError) throw sourceError;
       return {
         summary: {
+          repo: sourceRepository,
           fingerprint: { value: hash('d') },
           provenance: { limitations: [] },
         },
-        sourceSnapshot: { inventory: { repo: repository.fullName } },
+        sourceSnapshot: { inventory: { repo: sourceRepository.fullName } },
       };
     },
   });
@@ -542,6 +600,7 @@ function fixture({
     },
   });
   let random = 1;
+  const priorAnalyses = [];
   const worker = createAnalysisWorker({
     ...services,
     auth,
@@ -551,9 +610,13 @@ function fixture({
     deployId: 'deploy-1',
     now: time.now,
     randomBytes: () => Buffer.alloc(32, random++),
-    prepareInput: async ({ countClient }) => {
+    prepareInput: async ({ countClient, priorAnalysis }) => {
       time.advance(prepareAdvance);
-      const analysisInput = { repository: { id: repository.id } };
+      priorAnalyses.push(structuredClone(priorAnalysis));
+      const analysisInput = {
+        repository: { id: repository.id },
+        priorAnalysis,
+      };
       await countClient({
         messages: [{ role: 'user', content: JSON.stringify(analysisInput) }],
       });
@@ -591,6 +654,7 @@ function fixture({
       rechecks: () => rechecks,
       sourceCalls: () => sourceCalls,
       sourceBudgetDeadline: () => sourceBudgetDeadline,
+      priorAnalyses: () => structuredClone(priorAnalyses),
       faults: () => fault.count(),
     },
   };
@@ -673,6 +737,40 @@ function assertUnknownAccounting(job, setup) {
   );
 }
 
+function assertCorrectiveUnknownAccounting(job, setup) {
+  assert.equal(job.state, 'ambiguous');
+  assert.equal(job.accounting.status, 'unknown');
+  assert.deepEqual(
+    job.attempts.map(({ state }) => state),
+    ['settled', 'unknown'],
+  );
+  const reservation = setup.spend.reservation();
+  assert.equal(reservation.accounting.status, 'unknown');
+  assert.deepEqual(job.accounting, reservation.accounting);
+  assert.deepEqual(
+    reservation.attempts.map(({ state }) => state),
+    ['settled', 'unknown'],
+  );
+  assert.equal(reservation.attempts[0].actualCostMicrousd, primaryCostMicrousd);
+  assert.equal(reservation.attempts[1].actualCostMicrousd, 0);
+  assert.equal(
+    reservation.attempts[1].unknownExposureMicrousd,
+    job.attempts[1].reservationMicrousd,
+  );
+}
+
+function assertCorrectiveKnownAccounting(job, setup) {
+  assert.equal(job.state, 'failed');
+  assert.equal(job.accounting.status, 'complete');
+  assert.deepEqual(
+    job.attempts.map(({ state }) => state),
+    ['settled', 'settled'],
+  );
+  assert.equal(job.attempts[0].costMicrousd, primaryCostMicrousd);
+  assert.equal(job.attempts[1].costMicrousd, primaryCostMicrousd);
+  assert.equal(setup.spend.reservation(), null);
+}
+
 function assertGeneratedReport(job, setup) {
   const state = setup.reports.state();
   assert.equal(job.state, 'succeeded');
@@ -723,10 +821,33 @@ function refreshHistory() {
         contention: {},
         notes: {},
       },
+      source: { provenance: { repository } },
     },
     retainedEnvelope: { reportId: displacedReportId, retained: true },
   };
 }
+
+test('a renamed repository refresh omits advisory prior analysis', async () => {
+  const history = refreshHistory();
+  const renamedRepository = {
+    ...repository,
+    name: 'renamed-widgets',
+    fullName: 'cboone/renamed-widgets',
+    url: 'https://github.com/cboone/renamed-widgets',
+  };
+  const setup = fixture({
+    operation: 'refresh',
+    current: history.current,
+    previous: history.previous,
+    priorEnvelope: history.priorEnvelope,
+    retainedEnvelopes: [history.retainedEnvelope],
+    sourceRepository: renamedRepository,
+  });
+
+  const result = await runWorker(setup);
+  assertRefreshedReport(result, setup, history);
+  assert.deepEqual(setup.metrics.priorAnalyses(), [null]);
+});
 
 test('full worker success publishes once and duplicate delivery performs no paid work', async () => {
   const setup = fixture();
@@ -828,6 +949,59 @@ for (const outcome of ['absent', 'committed']) {
     assertKnownAccounting(recovered.value, setup);
     assertNoReport(setup);
     await assertNoAdditionalPaidCall(setup, 1);
+  });
+}
+
+for (const outcome of ['absent', 'committed']) {
+  test(`corrective-started ${outcome} write recovery never replays paid work`, async () => {
+    const setup = fixture({
+      responses: [primaryResponse({ invalid: true })],
+      faultBoundary: 'corrective-started',
+      faultOutcome: outcome,
+    });
+    await expectFault(setup, 'corrective-started', outcome);
+    assert.equal(
+      setup.jobs.value().state,
+      outcome === 'absent' ? 'primary-invalid' : 'corrective-in-flight',
+    );
+    assert.equal(setup.metrics.messages(), 1);
+
+    advanceToStateDeadline(setup);
+    const recovered = await reconcileJob(setup);
+    if (outcome === 'absent') assertKnownAccounting(recovered.value, setup);
+    else assertCorrectiveUnknownAccounting(recovered.value, setup);
+    assertNoReport(setup);
+    await assertNoAdditionalPaidCall(setup, 1);
+  });
+}
+
+for (const outcome of ['absent', 'committed']) {
+  test(`corrective response-completed ${outcome} write recovery accounts two provider responses`, async () => {
+    const setup = fixture({
+      responses: [
+        primaryResponse({ invalid: true }),
+        primaryResponse({ invalid: true }),
+      ],
+      faultBoundary: 'response-completed',
+      faultOutcome: outcome,
+      faultAttempt: 2,
+    });
+    await expectFault(setup, 'response-completed', outcome);
+    assert.equal(
+      setup.jobs.value().state,
+      outcome === 'absent'
+        ? 'corrective-in-flight'
+        : 'corrective-response-complete',
+    );
+    assert.equal(setup.metrics.messages(), 2);
+
+    advanceToStateDeadline(setup);
+    const recovered = await reconcileJob(setup);
+    if (outcome === 'absent')
+      assertCorrectiveUnknownAccounting(recovered.value, setup);
+    else assertCorrectiveKnownAccounting(recovered.value, setup);
+    assertNoReport(setup);
+    await assertNoAdditionalPaidCall(setup, 2);
   });
 }
 
@@ -986,6 +1160,36 @@ test('definitive invalid primary can use one corrective attempt and publish', as
     result.attempts.map(({ state }) => state),
     ['settled', 'settled'],
   );
+});
+
+test('invalid primary and corrective refresh output preserves both saved pointers', async () => {
+  const history = refreshHistory();
+  const setup = fixture({
+    operation: 'refresh',
+    current: history.current,
+    previous: history.previous,
+    priorEnvelope: history.priorEnvelope,
+    retainedEnvelopes: [history.retainedEnvelope],
+    responses: [
+      primaryResponse({ invalid: true }),
+      primaryResponse({ invalid: true }),
+    ],
+  });
+
+  const result = await runWorker(setup);
+  assert.equal(result.state, 'failed');
+  assert.equal(result.terminal.errorCode, 'analysis_output_invalid');
+  assert.deepEqual(setup.reports.state().current, history.current);
+  assert.deepEqual(setup.reports.state().previous, history.previous);
+  assert.equal(setup.reports.state().activeJob, null);
+  assert.equal(setup.reports.versions.has(history.current.versionKey), true);
+  assert.equal(setup.reports.versions.has(history.previous.versionKey), true);
+  assert.equal(
+    setup.reports.versions.has(result.publication.versionKey),
+    false,
+  );
+  assert.equal(setup.reports.versions.size, 2);
+  assertCorrectiveKnownAccounting(result, setup);
 });
 
 test('invalid primary releases correction when its full paid window no longer remains', async () => {
@@ -1278,6 +1482,30 @@ test('returned primary usage above its reservation requires pricing review', asy
   assert.equal(setup.metrics.messages(), 1);
 });
 
+test('primary usage above its output-token ceiling retains known exposure without publication', async () => {
+  const response = primaryResponse();
+  response.usage.outputTokens = SETUP_SPEND_LIMITS.attemptOutputTokens + 1;
+  const expectedCostMicrousd =
+    response.usage.inputTokens * SETUP_SPEND_LIMITS.inputRateMicrousd +
+    response.usage.outputTokens * SETUP_SPEND_LIMITS.outputRateMicrousd;
+  assert.ok(expectedCostMicrousd < SETUP_SPEND_LIMITS.attemptCostMicrousd);
+  const setup = fixture({ responses: [response] });
+  const result = await runWorker(setup);
+  const reservation = setup.spend.reservation();
+  assert.equal(result.state, 'ambiguous');
+  assert.equal(result.terminal.errorCode, 'pricing_review_required');
+  assert.equal(
+    reservation.attempts[0].actualCostMicrousd,
+    expectedCostMicrousd,
+  );
+  assert.equal(
+    reservation.attempts[0].unknownExposureMicrousd,
+    SETUP_SPEND_LIMITS.attemptCostMicrousd,
+  );
+  assert.equal(setup.spend.pricingReviewRequired(), true);
+  assert.equal(setup.reports.versions.size, 0);
+});
+
 test('a terminal expiry race cannot reduce a known over-ceiling primary cost', async () => {
   const response = overReservationResponse();
   const expectedCostMicrousd =
@@ -1419,6 +1647,36 @@ test('returned corrective usage above its reservation requires pricing review', 
   assert.equal(setup.metrics.messages(), 2);
 });
 
+test('corrective usage above its input-token ceiling retains known exposure without publication', async () => {
+  const response = primaryResponse();
+  response.usage.inputTokens = SETUP_SPEND_LIMITS.attemptInputTokens + 1;
+  response.usage.outputTokens = 0;
+  const expectedCostMicrousd =
+    response.usage.inputTokens * SETUP_SPEND_LIMITS.inputRateMicrousd;
+  assert.ok(expectedCostMicrousd < SETUP_SPEND_LIMITS.attemptCostMicrousd);
+  const setup = fixture({
+    responses: [primaryResponse({ invalid: true }), response],
+  });
+  const result = await runWorker(setup);
+  const reservation = setup.spend.reservation();
+  assert.equal(result.state, 'ambiguous');
+  assert.equal(result.terminal.errorCode, 'pricing_review_required');
+  assert.deepEqual(
+    result.attempts.map(({ state }) => state),
+    ['settled', 'unknown'],
+  );
+  assert.equal(
+    reservation.attempts[1].actualCostMicrousd,
+    expectedCostMicrousd,
+  );
+  assert.equal(
+    reservation.attempts[1].unknownExposureMicrousd,
+    SETUP_SPEND_LIMITS.attemptCostMicrousd,
+  );
+  assert.equal(setup.spend.pricingReviewRequired(), true);
+  assert.equal(setup.reports.versions.size, 0);
+});
+
 test('authorization revocation before correction releases its unused reservation', async () => {
   const setup = fixture({
     responses: [primaryResponse({ invalid: true })],
@@ -1437,6 +1695,55 @@ test('authorization revocation before correction releases its unused reservation
   );
   assert.equal(setup.metrics.messages(), 1);
   assert.equal(setup.spend.reservation(), null);
+});
+
+test('authorization revocation during the primary spend proof blocks paid dispatch', async () => {
+  const setup = fixture({ revokeDuringPaidReservationAt: 1 });
+  const result = await runWorker(setup);
+  assert.equal(result.state, 'failed');
+  assert.equal(result.terminal.errorCode, 'source_authorization_required');
+  assert.deepEqual(
+    result.attempts.map(({ state }) => state),
+    ['released', 'released'],
+  );
+  assert.equal(setup.metrics.messages(), 0);
+  assert.equal(setup.spend.reservation(), null);
+});
+
+test('authorization revocation during the corrective spend proof blocks its dispatch', async () => {
+  const setup = fixture({
+    responses: [primaryResponse({ invalid: true })],
+    revokeDuringPaidReservationAt: 2,
+  });
+  const result = await runWorker(setup);
+  assert.equal(result.state, 'failed');
+  assert.equal(result.terminal.errorCode, 'source_authorization_required');
+  assert.deepEqual(
+    result.attempts.map(({ state }) => state),
+    ['settled', 'released'],
+  );
+  assert.equal(setup.metrics.messages(), 1);
+  assert.equal(setup.spend.reservation(), null);
+});
+
+test('primary paid-boundary CAS performs no job read after final authorization', async () => {
+  const setup = fixture({ revokeOnPaidBoundaryReread: 1 });
+  const result = await runWorker(setup);
+  assert.equal(result.state, 'succeeded');
+  assert.equal(setup.metrics.messages(), 1);
+});
+
+test('corrective paid-boundary CAS performs no job read after final authorization', async () => {
+  const setup = fixture({
+    responses: [
+      primaryResponse({ invalid: true }),
+      primaryResponse({ valid: true }),
+    ],
+    revokeOnPaidBoundaryReread: 2,
+  });
+  const result = await runWorker(setup);
+  assert.equal(result.state, 'succeeded');
+  assert.equal(setup.metrics.messages(), 2);
 });
 
 test('a pricing gate raised by another reserved job blocks the corrective paid boundary', async () => {
@@ -1532,6 +1839,29 @@ test('authorization revocation before immutable write preserves the saved report
     setup.reports.versions.has(result.publication.versionKey),
     false,
   );
+});
+
+test('authorization revocation during finalization ownership blocks the immutable write', async () => {
+  const setup = fixture({ revokeDuringPublicationOwnerRead: true });
+  const result = await runWorker(setup);
+  assert.equal(result.state, 'failed');
+  assert.equal(result.terminal.errorCode, 'source_authorization_required');
+  assert.equal(setup.metrics.messages(), 1);
+  assert.equal(setup.metrics.rechecks(), 2);
+  assert.equal(setup.reports.versions.size, 0);
+  assert.equal(setup.reports.state().current, null);
+});
+
+test('final authorization expiry blocks the immutable write', async () => {
+  const setup = fixture({
+    recheckAdvanceAt: 2,
+    recheckAdvance: 300_000,
+  });
+  const result = await runWorker(setup);
+  assert.notEqual(result.state, 'succeeded');
+  assert.equal(setup.metrics.rechecks(), 2);
+  assert.equal(setup.reports.versions.size, 0);
+  assert.equal(setup.reports.state().current, null);
 });
 
 function reconciliationSetup(job, time) {

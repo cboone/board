@@ -87,6 +87,41 @@ const digest = (domain, value) =>
     .digest('hex');
 const clone = (value) => structuredClone(value);
 const byteLength = (value) => Buffer.byteLength(JSON.stringify(value), 'utf8');
+const MAXIMUM_WIDTH_INTEGER = Number.MAX_SAFE_INTEGER;
+const MAXIMUM_WIDTH_TIMESTAMP = '9999-12-31T23:59:59.999Z';
+
+function maximumWidthLedger(value) {
+  const projected = clone(value);
+  projected.revision = MAXIMUM_WIDTH_INTEGER;
+  projected.settledMicrousd = MAXIMUM_WIDTH_INTEGER;
+  projected.accountingSequence = MAXIMUM_WIDTH_INTEGER;
+  projected.pricingReviewRequired = false;
+  for (const entry of Object.values(projected.active)) {
+    entry.lastLedgerRevision = MAXIMUM_WIDTH_INTEGER;
+    entry.lastAccountingSequence = MAXIMUM_WIDTH_INTEGER;
+    for (const attempt of entry.attempts) {
+      attempt.actualCostMicrousd = MAXIMUM_WIDTH_INTEGER;
+      attempt.unknownExposureMicrousd = MAXIMUM_WIDTH_INTEGER;
+      attempt.recordedAt = MAXIMUM_WIDTH_TIMESTAMP;
+    }
+  }
+  for (const discussion of Object.values(projected.discussions)) {
+    discussion.status = 'acknowledged';
+    discussion.currentRevision = MAXIMUM_WIDTH_INTEGER;
+    discussion.triggerExposureMicrousd = MAXIMUM_WIDTH_INTEGER;
+    for (const decision of discussion.decisions) {
+      decision.triggerRevision = MAXIMUM_WIDTH_INTEGER;
+      decision.observedExposureMicrousd = MAXIMUM_WIDTH_INTEGER;
+      decision.authorizedThroughMicrousd = MAXIMUM_WIDTH_INTEGER;
+      decision.decision = 'acknowledged';
+    }
+  }
+  return projected;
+}
+
+function preflightBytes(value) {
+  return byteLength(maximumWidthLedger(value));
+}
 
 function deploymentPolicyId(pricingAttestation, deployId) {
   if (!text(deployId, 128)) fail();
@@ -479,7 +514,11 @@ export function projectSpendLedger(value) {
     active,
     discussions,
   };
-  if (byteLength(projected) > SETUP_SPEND_LIMITS.maxBytes) fail();
+  if (
+    byteLength(projected) > SETUP_SPEND_LIMITS.maxBytes ||
+    preflightBytes(projected) > SETUP_SPEND_LIMITS.maxBytes
+  )
+    fail();
   exposureMicrousd(projected);
   const requiresPricingReview = Object.values(active).some((entry) =>
     entry.attempts.some(
@@ -490,6 +529,10 @@ export function projectSpendLedger(value) {
   );
   if (requiresPricingReview && !projected.pricingReviewRequired) fail();
   return projected;
+}
+
+export function setupSpendLedgerPreflightBytes(value) {
+  return preflightBytes(projectSpendLedger(value));
 }
 
 function setupPolicyValue(pricingAttestation, deployId) {

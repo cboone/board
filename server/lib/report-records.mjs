@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { BoardError } from './errors.mjs';
 
 export const REPORT_STORAGE_LIMITS = Object.freeze({
+  repositoryStateBytes: 8 * 1024,
   catalogEntries: 1000,
   catalogBytes: 1_048_576,
   catalogPage: 50,
@@ -242,7 +243,7 @@ export function projectRepositoryState(value) {
   const current = projectReportPointer(value.current, repository.id);
   const previous = projectReportPointer(value.previous, repository.id);
   if (current && previous && current.reportId === previous.reportId) fail();
-  return {
+  const projected = {
     ...clone(value),
     repository,
     current,
@@ -251,6 +252,9 @@ export function projectRepositoryState(value) {
     sourceCheck: projectSourceCheck(value.sourceCheck, repository.id),
     lastAnalysisAttempt: projectLastAttempt(value.lastAnalysisAttempt),
   };
+  if (byteLength(projected) > REPORT_STORAGE_LIMITS.repositoryStateBytes)
+    fail();
+  return projected;
 }
 
 export function createRepositoryState(repository) {

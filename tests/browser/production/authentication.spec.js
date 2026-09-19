@@ -93,6 +93,28 @@ test('lists eligible repositories separately from saved unavailable boards', asy
   await expect(page.getByLabel('Repository')).toHaveValue('');
 });
 
+test('authorizes the owner by numeric ID when the display login changes', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  flow.boards.set(202, savedBoard());
+  flow.session = async () => ({
+    status: 200,
+    data: {
+      auth: true,
+      user: { id: 99961, login: 'cboone-renamed' },
+      csrfToken: flow.csrfToken,
+      sourceAuthorization: 'ready',
+    },
+  });
+
+  await page.goto('/repositories/202');
+  await expect(page.getByText('Signed in as @cboone-renamed')).toBeVisible();
+  await expect(page.locator('#saved-report')).toContainText(
+    'Define the report boundary',
+  );
+});
+
 test('loads a saved report before its automatic free source check completes', async ({
   page,
 }) => {

@@ -77,6 +77,82 @@ test('generates only after an explicit click and reloads the successful report',
   ).toEqual({ local: [], session: [] });
 });
 
+test('enables first-use generation after an unverified session completes a source check', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  flow.sourceAuthorization = 'unverified';
+  flow.boards.set(202, emptyBoard());
+
+  await page.goto('/repositories/202');
+  await expect(
+    page.getByRole('button', { name: 'Generate report' }),
+  ).toBeEnabled();
+});
+
+test('keeps a saved report readable and refreshable across a repository rename', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  const analyzedRepository = {
+    ...repositories[1],
+    name: 'sample-board-before-rename',
+    fullName: 'cboone/sample-board-before-rename',
+    url: 'https://github.com/cboone/sample-board-before-rename',
+  };
+  let reportReads = 0;
+  flow.report = async () => {
+    reportReads += 1;
+    return {
+      status: 200,
+      data:
+        reportReads === 1
+          ? savedBoard(analyzedRepository)
+          : savedBoard(analyzedRepository, {
+              repository: repositories[1],
+            }),
+    };
+  };
+  flow.check = async () => ({
+    status: 200,
+    data: sourceSummary(repositories[1], 'e'.repeat(64)),
+  });
+  flow.admission = async () => ({
+    status: 202,
+    data: { job: safeJob('queued', { operation: 'refresh' }) },
+  });
+
+  await page.goto('/repositories/202');
+  await expect(page.locator('#selected-repository-title')).toContainText(
+    repositories[1].fullName,
+  );
+  await expect(page.getByText('GitHub changes were detected')).toBeVisible();
+  await expect(page.locator('#saved-report')).toContainText(
+    'Define the report boundary',
+  );
+
+  await page.reload();
+  await expect(page.locator('#saved-report')).toContainText(
+    'Define the report boundary',
+  );
+  await expect(page.locator('#selected-repository-title')).toContainText(
+    repositories[1].fullName,
+  );
+  await page.getByRole('button', { name: 'Refresh report' }).click();
+  await expect
+    .poll(
+      () =>
+        flow.calls.filter(
+          ({ method, path }) =>
+            method === 'POST' && path === '/api/repositories/202/report-jobs',
+        ).length,
+    )
+    .toBe(1);
+  expect(
+    flow.calls.find(({ path }) => path.endsWith('/report-jobs')).body,
+  ).toMatchObject({ operation: 'refresh', expectedCurrentReportId: reportId });
+});
+
 test('resumes an admitted first-generation job even when the catalog has no current report', async ({
   page,
 }) => {
@@ -451,6 +527,54 @@ test('restores analysis availability after a successful source check', async ({
   ).toBe(true);
 });
 
+test('restores refresh when a historical repository becomes eligible again', async ({
+  page,
+}) => {
+  const flow = await mockApi(page);
+  flow.sourceAuthorization = 'installation-required';
+  flow.repositories = [repositories[0]];
+  const historical = savedBoard(repositories[1], {
+    sourceCheck: {
+      sequence: 2,
+      startedAt: '2026-09-18T20:12:00.000Z',
+      completedAt: '2026-09-18T20:12:01.000Z',
+      status: 'source-unavailable',
+      summary: null,
+      errorCode: 'source_unavailable',
+    },
+    spendMode: {
+      available: false,
+      mode: 'disabled',
+      reason: 'source_unavailable',
+    },
+  });
+  flow.boards.set(202, historical);
+  flow.catalog = {
+    items: [
+      {
+        repository: repositories[1],
+        current: historical.current,
+        sourceStatus: 'source-unavailable',
+        activeJob: null,
+      },
+    ],
+    nextCursor: null,
+  };
+  flow.check = async () => ({
+    status: 200,
+    data: sourceSummary(repositories[1]),
+  });
+
+  await page.goto('/repositories/202');
+  await expect(page.locator('#saved-report')).toContainText(
+    'Define the report boundary',
+  );
+  await expect(
+    page.getByRole('button', { name: 'Refresh report' }),
+  ).toBeEnabled();
+  await expect(page.getByText('matches the latest complete')).toBeVisible();
+});
+
 test('keeps an unavailable historical report readable and disables paid analysis', async ({
   page,
 }) => {
@@ -556,6 +680,47 @@ test('bounds and restarts catalog pagination once after membership changes', asy
   expect(calls).toBe(2);
 });
 
+test('accepts exactly twenty catalog pages in one pass', async ({ page }) => {
+  const flow = await mockApi(page);
+  const cursors = [];
+  flow.reports = async (cursor) => {
+    cursors.push(cursor);
+    return {
+      status: 200,
+      data: {
+        items: [],
+        nextCursor: cursors.length === 20 ? null : `catalog-${cursors.length}`,
+      },
+    };
+  };
+
+  await page.goto('/');
+  await expect(page.getByLabel('Repository')).toBeVisible();
+  expect(cursors).toHaveLength(20);
+  expect(cursors[0]).toBeNull();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
+test('stops after twenty pages in both catalog passes', async ({ page }) => {
+  const flow = await mockApi(page);
+  const cursors = [];
+  flow.reports = async (cursor) => {
+    cursors.push(cursor);
+    return {
+      status: 200,
+      data: { items: [], nextCursor: `catalog-${cursors.length}` },
+    };
+  };
+
+  await page.goto('/');
+  await expect(page.getByRole('alert')).toContainText(
+    'saved report list changed while loading',
+  );
+  expect(cursors).toHaveLength(40);
+  expect(cursors[0]).toBeNull();
+  expect(cursors[20]).toBeNull();
+});
+
 test('cancels old polling when navigating to another repository', async ({
   page,
 }) => {
@@ -603,6 +768,32 @@ test('rejects unexpected report fields before untrusted content reaches the rend
   await expect(page.getByRole('alert')).toContainText('incomplete response');
   await expect(page.locator('#saved-report')).toHaveCount(0);
   await expect(page.getByText('private-source-sentinel')).toHaveCount(0);
+});
+
+test('requires the exact persisted analysis output limit', async ({ page }) => {
+  const flow = await mockApi(page);
+  flow.boards.set(202, savedBoard());
+  await page.goto('/repositories/202');
+  await expect(page.locator('#saved-report')).toContainText(
+    'Define the report boundary',
+  );
+
+  for (const mutate of [
+    (limits) => delete limits.outputTokens,
+    (limits) => {
+      limits.outputTokens = 16_383;
+    },
+    (limits) => {
+      limits.privateMarker = 'must-not-cross';
+    },
+  ]) {
+    const malformed = savedBoard();
+    mutate(malformed.source.provenance.analysisSelection.limits);
+    flow.boards.set(202, malformed);
+    await page.reload();
+    await expect(page.getByRole('alert')).toContainText('incomplete response');
+    await expect(page.locator('#saved-report')).toHaveCount(0);
+  }
 });
 
 test('rejects contradictory persisted source and analysis attempt states', async ({

@@ -2,6 +2,7 @@ import { BoardError } from './errors.mjs';
 import { canonicalStringify } from './fingerprint.mjs';
 import { projectJobMachine, transitionJob } from './job-machine.mjs';
 import {
+  assertAnalysisJobTerminalCapacity,
   createAnalysisJob,
   deriveAnalysisJobIdentity,
   matchesDispatchCapability,
@@ -9,6 +10,7 @@ import {
 } from './jobs.mjs';
 
 const HEX_64 = /^[a-f0-9]{64}$/u;
+const PAID_BOUNDARY_EVENTS = new Set(['primary-started', 'corrective-started']);
 const unavailable = () => new BoardError('service_unavailable');
 const same = (left, right) =>
   canonicalStringify(left) === canonicalStringify(right);
@@ -47,6 +49,34 @@ function assertTuple(
 
 export function createJobStore({ storage }) {
   if (!validStorage(storage)) throw unavailable();
+
+  async function writeTransition({ jobId, current, event, budget }) {
+    if (['primary-started', 'corrective-started'].includes(event?.type))
+      assertAnalysisJobTerminalCapacity(current.value);
+    const candidate = transitionJob(current.value, event);
+    let write;
+    try {
+      write = await storage.write(
+        keyFor(jobId),
+        candidate,
+        { onlyIfMatch: current.etag },
+        { budget },
+      );
+      if (write?.modified === true)
+        return {
+          status: 'updated',
+          value: candidate,
+          etag: write.etag,
+        };
+    } catch {
+      // Resolve one uncertain conditional write without replaying the event.
+    }
+    const observed = await readStored(storage, jobId, budget);
+    if (!observed) throw unavailable();
+    return same(observed.value, candidate)
+      ? { status: 'recovered', ...observed }
+      : { status: 'conflict', ...observed };
+  }
 
   async function readJob({ jobId, budget }) {
     return readStored(storage, jobId, budget);
@@ -126,33 +156,40 @@ export function createJobStore({ storage }) {
   }
 
   async function applyTransition({ jobId, event, budget, expectedEtag }) {
+    if (PAID_BOUNDARY_EVENTS.has(event?.type)) throw unavailable();
     const current = await readStored(storage, jobId, budget);
     if (!current) throw new BoardError('report_not_found');
     if (expectedEtag !== undefined && current.etag !== expectedEtag)
       return { status: 'conflict', ...current };
-    const candidate = transitionJob(current.value, event);
-    let write;
-    try {
-      write = await storage.write(
-        keyFor(jobId),
-        candidate,
-        { onlyIfMatch: current.etag },
-        { budget },
-      );
-      if (write?.modified === true)
-        return {
-          status: 'updated',
-          value: candidate,
-          etag: write.etag,
-        };
-    } catch {
-      // Resolve one uncertain conditional write without replaying the event.
-    }
-    const observed = await readStored(storage, jobId, budget);
-    if (!observed) throw unavailable();
-    return same(observed.value, candidate)
-      ? { status: 'recovered', ...observed }
-      : { status: 'conflict', ...observed };
+    return writeTransition({ jobId, current, event, budget });
+  }
+
+  /**
+   * Cross a paid boundary from a previously proved strong-read snapshot. All
+   * validation is synchronous, so the conditional write is the next awaited
+   * operation after the caller's final authorization and spending proofs.
+   */
+  async function applyPaidBoundaryTransition({
+    jobId,
+    current,
+    event,
+    budget,
+  }) {
+    if (
+      !current ||
+      typeof current !== 'object' ||
+      typeof current.etag !== 'string' ||
+      !PAID_BOUNDARY_EVENTS.has(event?.type)
+    )
+      throw unavailable();
+    const value = projectJobMachine(current.value);
+    if (value.jobId !== jobId) throw unavailable();
+    return writeTransition({
+      jobId,
+      current: { value, etag: current.etag },
+      event,
+      budget,
+    });
   }
 
   async function safeJob({ jobId, ownerId, budget }) {
@@ -180,6 +217,7 @@ export function createJobStore({ storage }) {
     readJob,
     createOrReadJob,
     applyTransition,
+    applyPaidBoundaryTransition,
     safeJob,
     authorizeDispatch,
   });

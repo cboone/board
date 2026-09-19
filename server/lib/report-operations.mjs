@@ -394,8 +394,13 @@ export function createReportOperations({
       }
     }
     const envelope = stored.envelope;
+    const analyzedRepository =
+      envelope === null
+        ? null
+        : projectRepositoryIdentity(envelope.source.provenance.repository);
     return {
       repository: stored.state.repository,
+      analyzedRepository,
       current: pointer(stored.state.current),
       previous: pointer(stored.state.previous),
       report: envelope?.report ?? null,
@@ -535,8 +540,14 @@ export function createReportOperations({
               status: unavailableSource ? 'source-unavailable' : 'failed',
               errorCode: unavailableSource ? 'source_unavailable' : error.code,
             });
-          } catch {
-            // A newer source-check sequence or storage failure owns the state.
+          } catch (completionError) {
+            if (
+              completionError instanceof BoardError &&
+              completionError.code === 'source_unstable'
+            )
+              throw completionError;
+            // A storage failure cannot safely replace the original source
+            // failure with storage details.
           }
         }
       }

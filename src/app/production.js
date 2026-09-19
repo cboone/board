@@ -141,7 +141,8 @@ function validSession(value) {
     Object.hasOwn(value.user, 'id') &&
     Object.hasOwn(value.user, 'login') &&
     value.user.id === 99961 &&
-    value.user.login === 'cboone' &&
+    isText(value.user.login, 100) &&
+    /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,98}[A-Za-z0-9])?$/u.test(value.user.login) &&
     isText(value.csrfToken, 256) &&
     value.csrfToken.length >= 32 &&
     sourceStates.has(value.sourceAuthorization)
@@ -213,7 +214,6 @@ function validSummary(value, selected) {
     value.status === 'complete' &&
     validRepository(value.repo) &&
     value.repo.id === selected.id &&
-    value.repo.fullName === selected.fullName &&
     isObject(value.sync) &&
     Object.keys(value.sync).every((key) =>
       ['at', 'timeZone', 'branch', 'commit', 'openPullRequests'].includes(key),
@@ -804,8 +804,10 @@ function validAnalysisSelection(value) {
       'totalFileBytes',
       'requestBytes',
       'inputTokens',
+      'outputTokens',
     ]) ||
     !Object.values(value.limits).every(isCount) ||
+    value.limits.outputTokens !== 16_384 ||
     !Array.isArray(value.limitations) ||
     value.limitations.length > 256 ||
     !value.limitations.every((entry) => strictText(entry, 128))
@@ -1037,6 +1039,7 @@ function parseAnalysisAvailability(value) {
 function parseDirectReport(value) {
   const required = [
     'repository',
+    'analyzedRepository',
     'current',
     'report',
     'inventory',
@@ -1054,6 +1057,12 @@ function parseDirectReport(value) {
   if (
     !strictExact(value, required, optional) ||
     !validRepository(value.repository) ||
+    !(
+      value.analyzedRepository === null ||
+      validRepository(value.analyzedRepository)
+    ) ||
+    (value.analyzedRepository !== null &&
+      value.analyzedRepository.id !== value.repository.id) ||
     !validSpendMode(value.spendMode) ||
     !(value.activeJob === null || validJob(value.activeJob)) ||
     !validSourceCheck(value.sourceCheck ?? null, value.repository.id) ||
@@ -1072,6 +1081,7 @@ function parseDirectReport(value) {
       value.inventory !== null ||
       value.source !== null ||
       value.analysis !== null ||
+      value.analyzedRepository !== null ||
       value.activeJob?.operation === 'refresh'
     )
       throw new ApiError('invalid_response');
@@ -1081,11 +1091,16 @@ function parseDirectReport(value) {
       !validStrictReport(value.report) ||
       !validStrictInventory(value.inventory) ||
       !validateReport(value.report, value.inventory).valid ||
-      !validSavedSource(value.source, value.repository, value.inventory) ||
+      value.analyzedRepository === null ||
+      !validSavedSource(
+        value.source,
+        value.analyzedRepository,
+        value.inventory,
+      ) ||
       !validAnalysis(value.analysis) ||
       value.current.sourceFingerprint !== value.source.fingerprint.value ||
-      value.report.repo !== value.repository.fullName ||
-      value.inventory.repo !== value.repository.fullName ||
+      value.report.repo !== value.analyzedRepository.fullName ||
+      value.inventory.repo !== value.analyzedRepository.fullName ||
       stableJson(value.report.sync) !== stableJson(value.source.sync) ||
       stableJson(value.inventory.sync) !== stableJson(value.source.sync)
     )
@@ -1108,6 +1123,10 @@ function parseDirectReport(value) {
   }
   return {
     repository: copyRepository(value.repository),
+    analyzedRepository:
+      value.analyzedRepository === null
+        ? null
+        : copyRepository(value.analyzedRepository),
     current: value.current === null ? null : { ...value.current },
     previous: previous === null ? null : { ...previous },
     report: value.report,
@@ -1491,6 +1510,7 @@ export function mountProduction(mount) {
   function localEmptyBoard(repository, spendMode) {
     return {
       repository: copyRepository(repository),
+      analyzedRepository: null,
       current: null,
       previous: null,
       report: null,
@@ -1569,8 +1589,14 @@ export function mountProduction(mount) {
         }),
       );
       if (!currentView(stamp, repositoryId)) return;
-      state.selected = board.repository;
-      state.board = board;
+      const listedRepository = state.repositories.find(
+        ({ id }) => id === board.repository.id,
+      );
+      state.selected = listedRepository ?? board.repository;
+      state.board = {
+        ...board,
+        repository: copyRepository(state.selected),
+      };
       state.pending = null;
       state.job = board.activeJob;
       state.admissionRetry = null;
@@ -1642,6 +1668,17 @@ export function mountProduction(mount) {
           limitations: [...data.provenance.limitations],
         },
       };
+      const currentRepository = copyRepository(data.repo);
+      state.sourceAuthorization = 'ready';
+      state.selected = currentRepository;
+      state.repositories = [
+        ...state.repositories.filter(
+          (repository) => repository.id !== currentRepository.id,
+        ),
+        currentRepository,
+      ].sort((left, right) => left.id - right.id);
+      if (state.board)
+        state.board = { ...state.board, repository: currentRepository };
       state.freshness = {
         status:
           state.board?.current?.sourceFingerprint === data.fingerprint.value

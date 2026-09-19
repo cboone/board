@@ -29,7 +29,14 @@ export const ANALYSIS_INPUT_LIMITS = Object.freeze({
   totalFileBytes: SOURCE_LIMITS.totalFileBytes,
   requestBytes: 8 * 1024 * 1024,
   inputTokens: 100000,
+  outputTokens: 16_384,
 });
+
+// The minimum delta is ASCII. Budget one output token for every encoded byte so
+// admission does not depend on an unpublished tokenizer compression ratio.
+// Adaptive thinking shares the cap, so this remains a plausibility guard for
+// visible JSON rather than a promise that the complete response will fit.
+const STRUCTURAL_OUTPUT_BYTES_PER_BUDGETED_TOKEN = 1;
 
 /** Input preparation errors contain no provider-bound source text. */
 export class AnalysisInputError extends BoardError {
@@ -126,10 +133,49 @@ const checkedLimits = (overrides) => {
     if (!Number.isSafeInteger(value) || value < 0)
       throw new AnalysisInputError('source_incomplete', { limit: name });
   }
-  if (limits.requestBytes < 1 || limits.inputTokens < 1)
+  if (
+    limits.requestBytes < 1 ||
+    limits.inputTokens < 1 ||
+    limits.outputTokens < 1
+  )
     throw new AnalysisInputError('source_incomplete');
   return Object.freeze(limits);
 };
+
+function structuralOutputFloorTokens(issueCatalog) {
+  const issueIds = issueCatalog.map(({ id }) => id);
+  const minimumDelta = {
+    summary: 'x',
+    issueAnalysis: [],
+    lanes:
+      issueIds.length === 0
+        ? []
+        : [
+            {
+              key: 'x',
+              name: 'x',
+              mode: 'any',
+              issues: issueIds,
+              owns: '',
+              note: '',
+            },
+          ],
+    startNow: [],
+    contention: { rowLabel: '', claims: [] },
+    notes: { startNow: 'x', blocked: '', contention: '' },
+  };
+  return Math.ceil(
+    Buffer.byteLength(JSON.stringify(minimumDelta), 'utf8') /
+      STRUCTURAL_OUTPUT_BYTES_PER_BUDGETED_TOKEN,
+  );
+}
+
+function assertStructuralOutputFloor(mandatory, limits) {
+  if (structuralOutputFloorTokens(mandatory.issueCatalog) > limits.outputTokens)
+    throw new AnalysisInputError('analysis_input_too_large', {
+      ruleId: 'structural-output-floor',
+    });
+}
 
 function issueProgress(snapshot, issue) {
   const fromInventory = snapshot.inventory?.issues?.find(
@@ -492,7 +538,7 @@ function withCandidates(mandatory, candidates) {
   };
 }
 
-function requestPair(input, requestFactory) {
+function requestPair(input, requestFactory, outputTokens) {
   deepFreeze(input);
   const message = Object.freeze({
     role: 'user',
@@ -500,7 +546,7 @@ function requestPair(input, requestFactory) {
   });
   let pair;
   try {
-    pair = requestFactory(message);
+    pair = requestFactory(message, { outputTokens });
   } catch {
     throw new AnalysisInputError('analysis_provider_unavailable');
   }
@@ -540,6 +586,8 @@ function requestPair(input, requestFactory) {
     )
       throw new AnalysisInputError('analysis_provider_unavailable');
   }
+  if (messageRequest.max_tokens !== outputTokens)
+    throw new AnalysisInputError('analysis_provider_unavailable');
   return Object.freeze({
     input,
     message,
@@ -550,9 +598,12 @@ function requestPair(input, requestFactory) {
   });
 }
 
-const defaultRequestFactory = (message) => ({
+const defaultRequestFactory = (
+  message,
+  { outputTokens = ANALYSIS_INPUT_LIMITS.outputTokens } = {},
+) => ({
   countRequest: { messages: [message] },
-  messageRequest: { messages: [message] },
+  messageRequest: { messages: [message], max_tokens: outputTokens },
 });
 
 const withinRequestBound = (pair, limit) =>
@@ -663,6 +714,7 @@ export async function prepareAnalysisInput({
     limitations,
     priorAnalysis,
   );
+  assertStructuralOutputFloor(mandatory, limits);
   const issues = [...sourceSnapshot.issues].sort((left, right) =>
     numericOrder(left.number, right.number),
   );
@@ -692,6 +744,7 @@ export async function prepareAnalysisInput({
         requestPair(
           withCandidates(mandatory, candidates.slice(0, length)),
           requestFactory,
+          limits.outputTokens,
         ),
       );
     return built.get(length);

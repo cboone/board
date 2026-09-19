@@ -34,6 +34,8 @@ const pointer = (repositoryId, id = reportId) => ({
   generatedAt: at(4),
   sourceFingerprint: 'c'.repeat(64),
 });
+const serializedBytes = (value) =>
+  Buffer.byteLength(JSON.stringify(value), 'utf8');
 
 test('repository state claims, rotates and clears one exact job while preserving current and previous', () => {
   const initial = createRepositoryState(repository(17));
@@ -268,4 +270,103 @@ test('membership-changing cursors and unknown durable properties fail closed', (
       }),
     { code: 'service_unavailable' },
   );
+});
+
+test('repository state bounds the maximum legal record and rejects malformed byte boundaries', () => {
+  const maximumInteger = Number.MAX_SAFE_INTEGER;
+  const maximumRepository = {
+    id: maximumInteger,
+    fullName: `cboone/${'r'.repeat(249)}`,
+    name: 'r'.repeat(249),
+    private: true,
+    url: `https://github.com/cboone/${'r'.repeat(249)}`,
+  };
+  const maximumPointer = (id, fingerprint) => ({
+    reportId: id,
+    versionKey: `owners/99961/repositories/${maximumInteger}/versions/${id}`,
+    generatedAt: at(9),
+    sourceFingerprint: fingerprint,
+  });
+  const maximum = projectRepositoryState({
+    ...createRepositoryState(maximumRepository),
+    revision: maximumInteger,
+    current: maximumPointer('a'.repeat(64), 'b'.repeat(64)),
+    previous: maximumPointer('c'.repeat(64), 'd'.repeat(64)),
+    activeJob: {
+      jobId: 'e'.repeat(64),
+      operation: 'refresh',
+      expectedCurrentReportId: 'a'.repeat(64),
+      admittedAt: at(1),
+    },
+    sourceCheck: {
+      sequence: maximumInteger,
+      startedAt: at(1),
+      completedAt: at(9),
+      status: 'complete',
+      summary: {
+        status: 'complete',
+        repositoryId: maximumInteger,
+        fingerprint: 'f'.repeat(64),
+        sync: {
+          at: at(8),
+          branch: String.fromCharCode(0xd800).repeat(256),
+          commit: '1'.repeat(64),
+          openPullRequests: maximumInteger,
+        },
+        counts: Object.fromEntries(
+          [
+            'openIssues',
+            'openPullRequests',
+            'milestones',
+            'labels',
+            'branches',
+            'unmergedBranches',
+            'issueComments',
+            'treeEntries',
+            'selectedFiles',
+          ].map((key) => [key, maximumInteger]),
+        ),
+      },
+      errorCode: null,
+    },
+    lastAnalysisAttempt: {
+      jobId: '2'.repeat(64),
+      operation: 'refresh',
+      status: 'budget-blocked',
+      completedAt: at(9),
+      errorCode: 'analysis_provider_rate_limited',
+    },
+  });
+  assert.equal(serializedBytes(maximum), 4407);
+  assert.ok(
+    serializedBytes(maximum) < REPORT_STORAGE_LIMITS.repositoryStateBytes,
+  );
+
+  const emptyMalformed = { ...maximum, rawIssueBody: '' };
+  const padding =
+    REPORT_STORAGE_LIMITS.repositoryStateBytes -
+    serializedBytes(emptyMalformed);
+  assert.ok(padding > 0);
+  const exactBoundary = {
+    ...maximum,
+    rawIssueBody: 'x'.repeat(padding),
+  };
+  assert.equal(
+    serializedBytes(exactBoundary),
+    REPORT_STORAGE_LIMITS.repositoryStateBytes,
+  );
+  assert.throws(() => projectRepositoryState(exactBoundary), {
+    code: 'service_unavailable',
+  });
+  const overBoundary = {
+    ...exactBoundary,
+    rawIssueBody: `${exactBoundary.rawIssueBody}x`,
+  };
+  assert.equal(
+    serializedBytes(overBoundary),
+    REPORT_STORAGE_LIMITS.repositoryStateBytes + 1,
+  );
+  assert.throws(() => projectRepositoryState(overBoundary), {
+    code: 'service_unavailable',
+  });
 });

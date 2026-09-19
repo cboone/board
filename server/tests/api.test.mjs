@@ -25,7 +25,7 @@ function summary() {
   const at = '2026-09-18T12:00:00.000Z';
   return {
     status: 'complete',
-    repo,
+    repo: structuredClone(repo),
     sync: {
       at,
       timeZone: 'UTC',
@@ -601,6 +601,15 @@ test('malformed source summaries and unknown provider exceptions return sanitize
 test('saved report reads and setup decisions stay on Board storage without acquiring a GitHub token', async () => {
   const calls = [];
   const jobId = 'd'.repeat(64);
+  const spendMode = { available: true, mode: 'setup', reason: null };
+  const job = {
+    id: jobId,
+    operation: 'generate',
+    state: 'queued',
+    createdAt: '2026-09-18T12:00:00.000Z',
+    errorCode: null,
+    reportId: null,
+  };
   const decision = {
     policyId: 'setup-v1',
     discussionRevision: 1,
@@ -616,21 +625,33 @@ test('saved report reads and setup decisions stay on Board storage without acqui
     },
     async getReport(input) {
       calls.push(['report', input]);
-      return { marker: 'private-report' };
+      return {
+        repository: repo,
+        analyzedRepository: null,
+        current: null,
+        previous: null,
+        report: null,
+        inventory: null,
+        comparison: null,
+        source: null,
+        analysis: null,
+        sourceCheck: null,
+        lastAnalysisAttempt: null,
+        activeJob: null,
+        spendMode,
+      };
     },
     async getAnalysisAvailability(input) {
       calls.push(['availability', input]);
-      return {
-        spendMode: { available: true, mode: 'setup', reason: null },
-      };
+      return { spendMode };
     },
     async pollJob(input) {
       calls.push(['job', input]);
-      return { marker: 'private-job' };
+      return { job };
     },
     async decideSetupBudget(input) {
       calls.push(['decision', input]);
-      return { ok: true };
+      return { status: 'updated', spendMode };
     },
   };
   const ctx = await setup(undefined, reportOperations);
@@ -652,10 +673,24 @@ test('saved report reads and setup decisions stay on Board storage without acqui
     await Promise.all(responses.map((response) => response.json())),
     [
       { items: [], nextCursor: null },
-      { marker: 'private-report' },
-      { spendMode: { available: true, mode: 'setup', reason: null } },
-      { marker: 'private-job' },
-      { ok: true },
+      {
+        repository: repo,
+        analyzedRepository: null,
+        current: null,
+        previous: null,
+        report: null,
+        inventory: null,
+        comparison: null,
+        source: null,
+        analysis: null,
+        sourceCheck: null,
+        lastAnalysisAttempt: null,
+        activeJob: null,
+        spendMode,
+      },
+      { spendMode },
+      { job },
+      { status: 'updated', spendMode },
     ],
   );
   assert.ok(responses.every((response) => response.status === 200));

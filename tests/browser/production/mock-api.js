@@ -68,6 +68,7 @@ export function sourceSummary(
 export function emptyBoard(repository = repositories[1], overrides = {}) {
   return {
     repository,
+    analyzedRepository: null,
     current: null,
     previous: null,
     report: null,
@@ -135,6 +136,7 @@ export function savedBoard(repository = repositories[1], overrides = {}) {
   });
   return {
     repository,
+    analyzedRepository: repository,
     current: {
       reportId,
       generatedAt,
@@ -208,6 +210,7 @@ export function savedBoard(repository = repositories[1], overrides = {}) {
             totalFileBytes: 2097152,
             requestBytes: 8388608,
             inputTokens: 100000,
+            outputTokens: 16384,
           },
           limited: false,
           limitations: [],

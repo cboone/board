@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { transitionJob } from '../lib/job-machine.mjs';
 import {
+  ANALYSIS_JOB_STORAGE_LIMITS,
+  assertAnalysisJobTerminalCapacity,
   coarseJobState,
   createAnalysisJob,
   deriveAnalysisJobIdentity,
@@ -21,6 +24,8 @@ const input = {
   at: '2026-09-18T12:00:00.000Z',
   deadlineAt: '2026-09-18T12:02:00.000Z',
 };
+const serializedBytes = (value) =>
+  Buffer.byteLength(JSON.stringify(value), 'utf8');
 
 test('global idempotency identity is stable and repository-independent while report keys remain repository-bound', () => {
   const first = deriveAnalysisJobIdentity(input);
@@ -254,4 +259,84 @@ test('projector rejects impossible attempt, state, lease, terminal and publicati
     assert.throws(() => projectAnalysisJob(candidate), {
       code: 'service_unavailable',
     });
+});
+
+test('job records bound maximum terminal width and reject malformed byte boundaries', () => {
+  const maximumInteger = Number.MAX_SAFE_INTEGER;
+  const maximumHash = 'f'.repeat(64);
+  let job = createAnalysisJob({
+    ...input,
+    repositoryId: maximumInteger,
+    operation: 'refresh',
+    expectedCurrentReportId: maximumHash,
+    authorizationEpoch: maximumInteger,
+    admissionDeployId: String.fromCharCode(0xd800).repeat(128),
+    at: '9999-12-31T23:59:59.990Z',
+    deadlineAt: '9999-12-31T23:59:59.999Z',
+  });
+  job = transitionJob(job, {
+    type: 'reservation-committed',
+    at: '9999-12-31T23:59:59.991Z',
+    deadlineAt: '9999-12-31T23:59:59.999Z',
+    pricePolicyId: `p${'x'.repeat(127)}`,
+    reservationMicrousd: [maximumInteger, maximumInteger],
+    accounting: {
+      status: 'pending',
+      ledgerRevision: maximumInteger,
+      accountingSequence: maximumInteger,
+      accountingDigest: 'a'.repeat(64),
+      transitionId: 'b'.repeat(64),
+    },
+  });
+  job = transitionJob(job, {
+    type: 'dispatch-installed',
+    at: '9999-12-31T23:59:59.992Z',
+    deadlineAt: '9999-12-31T23:59:59.999Z',
+    capabilityHash: 'c'.repeat(64),
+  });
+  job = transitionJob(job, {
+    type: 'free-lease-claimed',
+    at: '9999-12-31T23:59:59.993Z',
+    phase: 'collecting',
+    tokenHash: 'd'.repeat(64),
+    expiresAt: '9999-12-31T23:59:59.998Z',
+  });
+  job = transitionJob(job, {
+    type: 'free-lease-claimed',
+    at: '9999-12-31T23:59:59.994Z',
+    phase: 'counting',
+    tokenHash: 'd'.repeat(64),
+    expiresAt: '9999-12-31T23:59:59.998Z',
+  });
+
+  const maximumTerminalBytes = assertAnalysisJobTerminalCapacity(job);
+  assert.equal(maximumTerminalBytes, 6676);
+  assert.ok(maximumTerminalBytes < ANALYSIS_JOB_STORAGE_LIMITS.recordBytes);
+
+  const emptyMalformed = { ...job, providerBody: '' };
+  const padding =
+    ANALYSIS_JOB_STORAGE_LIMITS.recordBytes - serializedBytes(emptyMalformed);
+  assert.ok(padding > 0);
+  const exactBoundary = {
+    ...job,
+    providerBody: 'x'.repeat(padding),
+  };
+  assert.equal(
+    serializedBytes(exactBoundary),
+    ANALYSIS_JOB_STORAGE_LIMITS.recordBytes,
+  );
+  assert.throws(() => projectAnalysisJob(exactBoundary), {
+    code: 'service_unavailable',
+  });
+  const overBoundary = {
+    ...exactBoundary,
+    providerBody: `${exactBoundary.providerBody}x`,
+  };
+  assert.equal(
+    serializedBytes(overBoundary),
+    ANALYSIS_JOB_STORAGE_LIMITS.recordBytes + 1,
+  );
+  assert.throws(() => projectAnalysisJob(overBoundary), {
+    code: 'service_unavailable',
+  });
 });
