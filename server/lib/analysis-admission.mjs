@@ -482,7 +482,9 @@ export function createAnalysisAdmission({
       await cleanupTerminal(input, identity, current, true);
       return;
     }
-    if (!PRE_PROVIDER.has(current.value.state)) return;
+    // A dispatchable job may belong to a concurrent admission that won the
+    // capability CAS. Its worker or deadline recovery now owns the job.
+    if (!['created', 'reserved'].includes(current.value.state)) return;
     const terminal = await terminate(
       input,
       current,
@@ -666,8 +668,10 @@ export function createAnalysisAdmission({
         }
       }
       if (!reservationMatches(current.value, reservation)) throw unavailable();
-      if (current.value.state !== 'reserved')
+      if (current.value.state !== 'reserved') {
+        if (current.value.state === 'dispatchable') preserveDispatchable = true;
         return safe(input, current.value.jobId);
+      }
 
       const capability = createDispatchCapability(randomBytes);
       const capabilityHash = hashDispatchCapability(capability);
@@ -683,13 +687,13 @@ export function createAnalysisAdmission({
         },
       });
       current = installed;
+      if (installed.value.state === 'dispatchable') preserveDispatchable = true;
       if (
         !['updated', 'recovered'].includes(installed.status) ||
         installed.value.state !== 'dispatchable' ||
         installed.value.dispatchCapabilityHash !== capabilityHash
       )
         return safe(input, installed.value.jobId);
-      preserveDispatchable = true;
       return dispatchCapability(input, installed.value.jobId, capability);
     } catch (error) {
       if (!preserveDispatchable)

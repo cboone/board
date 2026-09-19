@@ -42,12 +42,17 @@ function memoryStorage(name, log, expectedBudget = budget) {
   const records = new Map();
   const lostWrites = new Set();
   let beforeWrite = null;
+  let failRead = false;
   let sequence = 0;
   let writes = 0;
   return {
     async read(key, options) {
       assert.deepEqual(options, { budget: expectedBudget });
       log.push({ store: name, action: 'read', key });
+      if (failRead) {
+        failRead = false;
+        throw new Error('synthetic read failure');
+      }
       const current = records.get(key);
       return current === undefined
         ? null
@@ -86,6 +91,10 @@ function memoryStorage(name, log, expectedBudget = budget) {
       assert.equal(beforeWrite, null);
       beforeWrite = hook;
     },
+    failNextRead() {
+      assert.equal(failRead, false);
+      failRead = true;
+    },
     value(key) {
       return records.has(key) ? structuredClone(records.get(key).value) : null;
     },
@@ -106,6 +115,7 @@ function fixture({
   now = NOW,
   fetchImpl,
   operationBudget = budget,
+  onRandomBytes = () => {},
   preflightReadiness = Object.freeze({
     requireReady: async () => Object.freeze({ ready: true }),
   }),
@@ -132,6 +142,7 @@ function fixture({
     fetchImpl: resolvedFetch,
     randomBytes: (size) => {
       randomCalls += 1;
+      onRandomBytes({ call: randomCalls, size });
       return Buffer.alloc(size, randomCalls);
     },
     now: () => now,
@@ -255,6 +266,10 @@ test('identical admission serializes dispatch and reuses the reservation when re
   assert.equal(first.id, second.id);
   assert.equal(board.dispatches.length, 1);
   assert.equal(
+    board.jobStorage.value(`jobs/${first.id}`).state,
+    'dispatchable',
+  );
+  assert.equal(
     board.spendStorage.value(SETUP_SPEND_LEDGER_KEY).accountingSequence,
     1,
   );
@@ -274,6 +289,59 @@ test('identical admission serializes dispatch and reuses the reservation when re
   assert.equal(board.dispatches.length, 2);
   assert.equal(board.randomCalls(), randomCalls + 1);
 });
+
+for (const boundary of ['reservation-committed', 'dispatch-installed']) {
+  test(`a failed ${boundary} conflict read preserves the concurrent dispatch winner`, async () => {
+    const input = request();
+    const jobId = identity(input).jobId;
+    let winner;
+    const advanceWinner = async ({ value }) => {
+      assert.equal(
+        value.state,
+        boundary === 'reservation-committed' ? 'reserved' : 'dispatchable',
+      );
+      winner = await board.admission.admit(input);
+      board.jobStorage.failNextRead();
+    };
+    const board = fixture({
+      onRandomBytes: ({ call }) => {
+        if (boundary === 'dispatch-installed' && call === 1)
+          board.jobStorage.beforeNextWrite(advanceWinner);
+      },
+    });
+    if (boundary === 'reservation-committed') {
+      board.jobStorage.beforeNextWrite(async ({ value }) => {
+        assert.equal(value.state, 'created');
+        board.jobStorage.beforeNextWrite(advanceWinner);
+      });
+    }
+
+    await assert.rejects(board.admission.admit(input), {
+      code: 'service_unavailable',
+    });
+
+    assert.equal(winner.state, 'queued');
+    assert.equal(board.dispatches.length, 1);
+    assert.equal(
+      board.randomCalls(),
+      boundary === 'reservation-committed' ? 1 : 2,
+    );
+    assert.equal(board.jobStorage.value(`jobs/${jobId}`).state, 'dispatchable');
+    assert.equal(
+      board.reportStorage.value(repositoryStateKey(17)).activeJob.jobId,
+      jobId,
+    );
+    assert.deepEqual(
+      Object.keys(board.spendStorage.value(SETUP_SPEND_LEDGER_KEY).active),
+      [jobId],
+    );
+    const capability = JSON.parse(board.dispatches[0].init.body).capability;
+    const authorized = await createJobStore({
+      storage: board.jobStorage,
+    }).authorizeDispatch({ jobId, capability, budget });
+    assert.equal(authorized.value.state, 'dispatchable');
+  });
+}
 
 test('a competing idempotency key fences its inert loser and preserves the winner', async () => {
   const board = fixture();
