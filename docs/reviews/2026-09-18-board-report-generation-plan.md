@@ -345,9 +345,31 @@ monetary sequence/digest advance only on accounting transitions. Copy the
 resulting revision into each active entry and then the job before active-entry
 removal. Cover absent, initial, maximum-width, invalid, nonmonetary-mutation, and
 lost-ack recovery values after another job advances the global head in strict
-schema, serialization-boundary, and concurrency tests.
+schema, ordered admission/recovery, serialization-boundary, and concurrency
+tests.
 
 Disposition: resolved in the sixth corrected plan; exact-commit re-review
+pending.
+
+### R21 Unknown accounting status
+
+Finding: exact commit `5d0847e6c5cc9d48edcbb67a48f38295cb8c4f2d`
+defined job accounting status `complete` only for fully known exposure and
+`unknown` for retained conservative exposure, while the generic ambiguity order
+and expired in-flight recovery still marked accounting complete after moving an
+attempt to unknown. That conflict could permit removal or misclassification of
+an unresolved active ledger entry.
+
+Required resolution: mark accounting `complete` only when all exposure is known
+and removable; mark it `unknown` and retain the active entry whenever
+conservative unknown exposure remains. Keep accounting `pending` between the
+terminal job CAS and separate ledger/job-accounting CAS operations. Apply those
+distinctions to the generic cross-store order, expired in-flight and
+incomplete-usage paths, and cover exact status plus entry retention/removal in
+recovery tests. An unreserved terminal job instead moves directly to `complete`
+with nullable accounting facts and no ledger mutation.
+
+Disposition: resolved in the seventh corrected plan; exact-commit re-review
 pending.
 
 ## Confirmed design decisions

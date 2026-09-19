@@ -1070,9 +1070,10 @@ The synchronous admission route performs these steps in order:
    terminally fence the losing inert job before returning and avoid any
    reservation for it.
 6. CAS the applicable ledger to reserve every possible attempt, then CAS the
-   job to `reserved` with the exact policy, ledger revision, and accounting
-   digest. If reservation is rejected, terminally fence the job as
-   `budget-blocked` before clearing its repository claim.
+   job to `reserved` with the exact policy and resulting ledger revision,
+   accounting sequence, accounting digest, and transition ID. If reservation
+   is rejected, terminally fence the job as `budget-blocked` before clearing its
+   repository claim.
 7. Generate a raw cryptographic dispatch capability in memory. In one
    `onlyIfMatch` write, move the exact reserved job to `dispatchable` and install
    the capability hash and generation. If the write loses, discard the raw
@@ -1103,13 +1104,14 @@ after a strong read proves that no worker has claimed the job. When a `created`,
 `reserved`, `dispatchable`, `collecting`, or `counting` job cannot be resumed,
 recovery first CAS-fences that exact job and lease as terminal. It then
 CAS-releases any still-reserved exact ledger attempts, CAS-marks the job's
-accounting complete with the resulting ledger revision and digest, and finally
-CAS-clears only its matching repository claim. A `created` job can have no
-reservation, so its ledger step is conditional. If the terminal job CAS loses
-to a paid transition, recovery releases nothing and reconciles the newly read
-state. A new explicit Generate/Refresh action is required after terminal
-cleanup. A report GET or job poll never creates a new reservation or dispatches
-a new paid attempt.
+accounting complete with the resulting ledger revision, accounting sequence,
+accounting digest, and transition ID, and finally CAS-clears only its matching
+repository claim. A `created` job can have no reservation, so its ledger step is
+conditional and its nullable accounting facts remain empty. If the terminal
+job CAS loses to a paid transition, recovery releases nothing and reconciles
+the newly read state. A new explicit Generate/Refresh action is required after
+terminal cleanup. A report GET or job poll never creates a new reservation or
+dispatches a new paid attempt.
 
 The worker performs:
 
@@ -1134,12 +1136,18 @@ The worker performs:
 
 All failure and ambiguity paths use the same cross-store order: CAS the job to a
 terminal state first so no provider transition remains; update the ledger
-second to settle, release, or retain unknown exposure; mark job accounting
-complete; and clear this job's repository claim last. Successful publication
-orders the immutable version and job digest before the pointer, retains the
-claim through ledger settlement, and clears it only after the job is succeeded.
-No path releases a reservation while its job can still cross a paid boundary,
-and no path admits a replacement job before the prior accounting is durable.
+second to settle, release, or retain unknown exposure; then mark job accounting
+`complete` when every attempt is known or `unknown` while conservative exposure
+remains in the active ledger; and clear this job's repository claim last. A
+terminal job with a prior reservation leaves accounting `pending` until the
+separate ledger CAS and job-accounting CAS finish. An unreserved `created` or
+reservation-rejected terminal job moves directly from `unreserved` to
+`complete` with nullable accounting facts and no ledger mutation. Successful
+publication orders the immutable version and job digest before the pointer,
+retains the claim through ledger settlement, and clears it only after the job is
+succeeded. No path releases a reservation while its job can still cross a paid
+boundary, and no path admits a replacement job before the prior accounting is
+durable.
 
 Implement one bounded nonpaid reconciler invoked at the start of every worker,
 authenticated job poll and report read, identical admission, and any admission
@@ -1153,14 +1161,15 @@ Anthropic.
 - An unexpired primary/corrective in-flight state remains untouched. After its
   hard deadline, CAS the exact state/token to `ambiguous`, move that attempt's
   full ceiling to unknown, release only never-dispatched attempts, mark
-  accounting complete, and clear the matching repository claim.
+  accounting `unknown` while retaining its active ledger entry, and clear the
+  matching repository claim.
 - An unexpired response-complete state remains untouched until its state
   deadline, and an unexpired validating state remains untouched until its
   finalization-token deadline. After the applicable expiry, first check the
   deterministic version. A matching exact version advances to
   `version-written`; without one, fence as failed, settle durable complete
   usage, and release never-dispatched attempts. Incomplete usage becomes
-  unknown.
+  unknown, sets job accounting `unknown`, and retains its active ledger entry.
 - An unexpired `primary-invalid` with live finalization ownership remains
   untouched; only that owner may settle attempt one and fence the corrective
   attempt. After finalization expiry, reconciliation first CAS-fences the exact
@@ -1464,7 +1473,9 @@ Before any paid call, verify in the deployed artifact:
   rejection, wrong operations, the authorized ceiling boundary, the 32-decision
   bound, a new policy's separate gate, and lifetime exposure preservation.
 - Cover successful settlement, output-rejected settlement, unused retry
-  release, classifier refusal handling, unknown reservation retention, and
+  release, classifier refusal handling, unknown reservation retention, exact
+  `unreserved` to `complete`, `pending` to `complete`, and `pending` to `unknown`
+  job-accounting transitions, active-entry removal versus retention, and
   reconciliation after each interruption point.
 - Interrupt after job creation, repository claim, reservation, dispatch,
   source collection, each paid-boundary write, each complete response, primary
