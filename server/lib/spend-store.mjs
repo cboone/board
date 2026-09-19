@@ -290,6 +290,39 @@ export async function readSetupSpendReservation(input) {
   });
 }
 
+/** Strong-read the complete bounded set of active setup reservations. */
+export async function listSetupSpendReservations(input) {
+  const selected = select(input);
+  const current = await readLedger(selected);
+  if (current === null) throw unavailable();
+  return Object.freeze(
+    Object.entries(current.ledger.active)
+      .sort(([left], [right]) => left.localeCompare(right, 'en'))
+      .map(([jobId, entry]) =>
+        Object.freeze({
+          jobId,
+          policyId: entry.policyId,
+          reservationMicrousd: Object.freeze(
+            entry.attempts.map((attempt) => attempt.ceilingMicrousd),
+          ),
+          attempts: Object.freeze(
+            entry.attempts.map((attempt) =>
+              Object.freeze({
+                number: attempt.number,
+                ceilingMicrousd: attempt.ceilingMicrousd,
+                state: attempt.state,
+                actualCostMicrousd: attempt.actualCostMicrousd,
+                unknownExposureMicrousd: attempt.unknownExposureMicrousd,
+                recordedAt: attempt.recordedAt,
+              }),
+            ),
+          ),
+          accounting: entryAccounting(entry),
+        }),
+      ),
+  );
+}
+
 /** Reserve both fixed attempts, revalidating the cross-store claim after CAS conflicts. */
 export async function reserveSetupSpend(input) {
   const selected = select(input);

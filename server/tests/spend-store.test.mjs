@@ -6,6 +6,7 @@ import {
   applySetupDiscussionDecision,
   ensureSetupSpendLedger,
   fenceSetupReservation,
+  listSetupSpendReservations,
   markSetupAttemptUnknown,
   readSetupSpendReservation,
   readSetupSpendSummary,
@@ -281,6 +282,12 @@ test('reservation and attempt accounting are idempotent across lost acknowledgem
 test('reservation reads expose exact immutable worker accounting without creating entries', async () => {
   const storage = memoryStorage();
   await setup(storage);
+  assert.deepEqual(
+    await listSetupSpendReservations({
+      ...context(storage),
+    }),
+    [],
+  );
   assert.equal(
     await readSetupSpendReservation({
       ...context(storage),
@@ -325,6 +332,12 @@ test('reservation reads expose exact immutable worker accounting without creatin
   assert.equal(Object.isFrozen(reserved.attempts), true);
   assert.equal(Object.isFrozen(reserved.attempts[0]), true);
   assert.equal(storage.metrics.writes, writes + 1);
+  const active = await listSetupSpendReservations({
+    ...context(storage),
+  });
+  assert.equal(Object.isFrozen(active), true);
+  assert.equal(Object.isFrozen(active[0]), true);
+  assert.deepEqual(active, [{ jobId: id('a'), ...reserved }]);
 
   await settleSetupAttempt({
     ...context(storage),
@@ -363,6 +376,13 @@ test('reservation reads expose exact immutable worker accounting without creatin
       ...context(storage),
       deployId: 'another-deploy',
       jobId: id('a'),
+    }),
+    { code: 'service_unavailable' },
+  );
+  await assert.rejects(
+    listSetupSpendReservations({
+      ...context(storage),
+      deployId: 'another-deploy',
     }),
     { code: 'service_unavailable' },
   );
