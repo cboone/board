@@ -403,6 +403,8 @@ export function projectCatalogPageResponse(value) {
     exact(item, ['repository', 'current', 'sourceStatus', 'activeJob']);
     const projectedRepository = repository(item.repository);
     const current = pointer(item.current);
+    // The public catalog discovers saved reports. Storage filters repository
+    // memberships without a current report before they reach this boundary.
     if (
       current === null ||
       seen.has(projectedRepository.id) ||

@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createAnalysisAdmission } from '../lib/analysis-admission.mjs';
 import { ANALYSIS_INPUT_LIMITS } from '../lib/analysis-input.mjs';
+import { createAnalysisPreflightReadiness } from '../lib/analysis-preflight-readiness.mjs';
 import { createAnalysisReconciler } from '../lib/analysis-reconciler.mjs';
+import { ANTHROPIC_POLICY } from '../lib/anthropic.mjs';
 import { BoardError } from '../lib/errors.mjs';
 import { transitionJob } from '../lib/job-machine.mjs';
 import { createAnalysisJob, deriveAnalysisJobIdentity } from '../lib/jobs.mjs';
@@ -76,6 +78,28 @@ const activeIdentity = deriveAnalysisJobIdentity({
   repositoryId: repository.id,
   idempotencyKey: '123e4567-e89b-42d3-a456-426614174001',
 });
+
+async function markAnalysisReady(spendStorage) {
+  const readiness = createAnalysisPreflightReadiness({
+    storage: spendStorage,
+    deployId: 'deploy-1',
+  });
+  return readiness.write({
+    budget,
+    facts: {
+      model: ANTHROPIC_POLICY.model,
+      effort: ANTHROPIC_POLICY.effort,
+      modelMaxInputTokens: ANALYSIS_INPUT_LIMITS.inputTokens,
+      modelMaxOutputTokens: ANTHROPIC_POLICY.maxTokens,
+      configuredInputTokens: ANALYSIS_INPUT_LIMITS.inputTokens,
+      configuredOutputTokens: ANTHROPIC_POLICY.maxTokens,
+      inputTokens: 1200,
+      countRequestBytes: 4096,
+      messageRequestBytes: 4200,
+      verifiedAt: NOW,
+    },
+  });
+}
 
 function memoryStorage() {
   const records = new Map();
@@ -539,6 +563,64 @@ test('keeps a saved catalog entry when its claimed job is missing', async () => 
     sourceFingerprint: seeded.version.source.fingerprint.value,
   });
   assert.equal(catalog.items[0].activeJob, null);
+});
+
+test('filters first-generation membership while the direct report exposes its active job', async () => {
+  const board = await fixture();
+  const pending = createAnalysisJob({
+    ownerId: OWNER_ID,
+    repositoryId: repository.id,
+    idempotencyKey: '123e4567-e89b-42d3-a456-426614174009',
+    operation: 'generate',
+    expectedCurrentReportId: null,
+    authorizationEpoch: 2,
+    admissionDeployId: 'deploy-1',
+    at: NOW,
+    deadlineAt: '2026-09-19T12:15:00.000Z',
+  });
+  await ensureCatalogRepository({
+    storage: board.reportStorage,
+    budget,
+    repository,
+    at: NOW,
+  });
+  await readOrCreateRepositoryState({
+    storage: board.reportStorage,
+    budget,
+    repository,
+  });
+  await claimRepositoryJob({
+    storage: board.reportStorage,
+    budget,
+    repositoryId: repository.id,
+    jobId: pending.jobId,
+    operation: pending.operation,
+    expectedCurrentReportId: pending.expectedCurrentReportId,
+    admittedAt: pending.createdAt,
+  });
+  board.jobStorage.seed(`jobs/${pending.jobId}`, pending);
+
+  const catalog = await board.operations.listReports({
+    ownerId: OWNER_ID,
+    cursor: null,
+    budget,
+  });
+  assert.deepEqual(catalog, { items: [], nextCursor: null });
+
+  const direct = await board.operations.getReport({
+    ownerId: OWNER_ID,
+    repositoryId: repository.id,
+    budget,
+  });
+  assert.equal(direct.current, null);
+  assert.deepEqual(direct.activeJob, {
+    id: pending.jobId,
+    operation: 'generate',
+    state: 'queued',
+    createdAt: NOW,
+    errorCode: null,
+    reportId: null,
+  });
 });
 
 test('returns a stored empty state and rejects a repository with no state', async () => {
@@ -1038,8 +1120,51 @@ test('creates state after a successful first check without persisting its snapsh
   assert.equal(board.reportStorage.value(REPORT_CATALOG_KEY), null);
 });
 
-test('delegates admission after reconciliation with a bounded fixed deadline', async () => {
+test('missing preflight blocks reconciliation and every durable admission effect', async () => {
+  const board = await fixture({
+    reconcile: async () => {
+      await board.jobStorage.write(
+        'synthetic/reconciliation-effect',
+        { changed: true },
+        { onlyIfNew: true },
+        { budget },
+      );
+    },
+  });
+  const before = {
+    reports: structuredClone([...board.reportStorage.records]),
+    jobs: structuredClone([...board.jobStorage.records]),
+    spend: structuredClone([...board.spendStorage.records]),
+  };
+
+  await assert.rejects(
+    board.operations.admitJob({
+      ownerId: OWNER_ID,
+      authorizationEpoch: 2,
+      repository: {
+        ...repository,
+        defaultBranch: 'main',
+        defaultTip: 'a'.repeat(40),
+      },
+      request: {
+        idempotencyKey: '123e4567-e89b-42d3-a456-426614174001',
+        operation: 'generate',
+        expectedCurrentReportId: null,
+      },
+      budget,
+    }),
+    { code: 'analysis_preflight_required' },
+  );
+  assert.deepEqual(board.reconciliations, []);
+  assert.deepEqual(board.admissions, []);
+  assert.deepEqual([...board.reportStorage.records], before.reports);
+  assert.deepEqual([...board.jobStorage.records], before.jobs);
+  assert.deepEqual([...board.spendStorage.records], before.spend);
+});
+
+test('delegates admission after readiness and reconciliation with a bounded fixed deadline', async () => {
   const board = await fixture();
+  await markAnalysisReady(board.spendStorage);
   const response = await board.operations.admitJob({
     ownerId: OWNER_ID,
     authorizationEpoch: 2,
@@ -1227,6 +1352,7 @@ test('global admission sweep completes another repository before reserving and d
     ['reserved', 'reserved'],
   );
 
+  await markAnalysisReady(spendStorage);
   writes.length = 0;
   const dispatches = [];
   let randomCalls = 0;

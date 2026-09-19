@@ -604,6 +604,7 @@ export function createReportOperations({
     const request = admissionRequest(input.request);
     if (!positive(input.repository?.id))
       throw new BoardError('invalid_request');
+    await preflight.requireReady({ budget: input.budget });
     await reconcile({ ownerId: input.ownerId, budget: input.budget });
     await reconcile({
       ownerId: input.ownerId,
