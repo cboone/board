@@ -9,11 +9,10 @@ Pull request: [#23](https://github.com/cboone/board/pull/23)
 Plan:
 [Analysis, report persistence, and refresh](../plans/todo/2026-09-18-board-report-generation.md)
 
-Review scope: the current branch and working tree, including the no-spend
+Review scope: the complete branch implementation, including the no-spend
 analysis preflight and setup-budget decision work. Local aggregate validation
-covers the current working tree. Exact-head pull request checks and review
-remain pending until the changes are committed and pushed, so this document
-intentionally omits a reviewed-through commit.
+and exact-head pull request validation cover the merge candidate. This document
+intentionally omits a self-referential reviewed-through commit.
 
 ## Result
 
@@ -32,8 +31,8 @@ request.
 
 Independent review found authorization-ordering, concurrency, idempotency,
 ledger-validation, and browser-state gaps in these controls. The current
-working tree addresses each finding described below. Exact-head pull request
-review must still confirm the committed result before merge.
+branch addresses each finding described below. Exact-head pull request review
+reports no unresolved findings.
 
 Phase 3 remains incomplete. The branch has not been merged or deployed, no
 Anthropic key has been read or installed for this phase, and no paid provider
@@ -301,10 +300,8 @@ The following exit evidence remains partial or absent:
 - No deployed public or private report has crossed the paid boundary.
 - Paid cross-sign-out, cross-browser, and cross-device persistence has not been
   demonstrated against production storage.
-- The production and preview inventories for the final merge have not been
-  deployed and inspected.
-- Exact-head CI, Copilot review, unresolved-thread review, and mergeability must
-  be rechecked after the pending changes are committed and pushed.
+- The production inventory for the final merge has not been deployed and
+  inspected. The exact-head preview is deployed and verified as fixture-only.
 - Paid calibration has not produced evidence for the user's monthly and
   per-report production limits, so the separate ordinary production policy is
   intentionally not implemented.
@@ -366,6 +363,8 @@ Current-tree validation includes:
 - fixture and production builds with their artifact verifiers; and
 - frontend and server lint, formatting, `actionlint`, Markdown lint, and
   `git diff --check`;
+- exact-head GitHub Actions, Netlify preview, and Copilot review with no
+  unresolved threads and `MERGEABLE` / `CLEAN` repository state;
 - exact full-history Gitleaks scanning with no leaks; and
 - the exact v3.2.0 TruffleHog workflow command with zero verified findings and
   one known indeterminate historical URI fixture from commit `0e72d14`. The
@@ -378,26 +377,23 @@ detector-wide exclusion was added. The shared action's missing released strict
 mode and precise, redacted fixture allowlist are tracked in
 [cboone/gh-actions#123](https://github.com/cboone/gh-actions/issues/123).
 
-The final review must also verify signature presence for every new commit. Local
-signature trust may remain unavailable in the sandbox; that limitation must be
-reported separately from the presence of each commit's `gpgsig` block.
+Every branch commit contains a `gpgsig` block. Local signature trust remains
+unavailable in the sandbox; that limitation is separate from signature
+presence.
 
 ## Remaining Phase 3 work
 
-1. Create a signed logical commit for the current capability-review fixes, push
-   it to PR #23, and resolve exact-head CI, review, unresolved-thread, and
-   mergeability findings.
-2. Obtain the user's explicit merge approval, merge with a signed merge commit,
+1. Obtain the user's explicit merge approval, merge with a signed merge commit,
    and verify the automatic production deploy from that exact merge, including
    two Functions, zero Edge Functions, production guards, protected routes, and
    fixture-only previews.
-3. Complete the pre-key free checks. Then have the owner install the
+2. Complete the pre-key free checks. Then have the owner install the
    production-only `ANTHROPIC_API_KEY` through the Netlify UI without exposing
    or reading it back.
-4. Run the ordered public, private, and refresh calibration and acceptance
+3. Run the ordered public, private, and refresh calibration and acceptance
    within the $25 setup cap and $20 discussion gate. Record only sanitized
    usage, cost, validity, and runtime evidence.
-5. Present measured monthly-cap and per-report-cap options. After the user's
+4. Present measured monthly-cap and per-report-cap options. After the user's
    decision, implement and deploy the versioned ordinary production policy.
-6. Verify post-policy behavior and complete the worktree and branch cleanup
+5. Verify post-policy behavior and complete the worktree and branch cleanup
    required by the plan.
