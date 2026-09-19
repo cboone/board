@@ -274,6 +274,37 @@ never forward browser session, CSRF, or GitHub token material.
 Disposition: resolved in the second corrected plan; exact-commit re-review
 pending.
 
+### R17 Concurrent ledger lost-ack proof
+
+Finding: exact commit `80a41328a5e5b81fab0d0bbbf20f33f5827832e9`
+stored only one global accounting digest. If job A lost its settlement response
+and job B advanced that digest first, A could no longer prove its committed
+transition from the bounded ledger entry.
+
+Required resolution: preallocate and atomically update a fixed transition ID,
+sequence, and digest in each active entry as well as the global chain. Recover a
+lost acknowledgement from those per-entry facts even after another job advances
+the global head. Treat accounting-complete entry removal as idempotent
+housekeeping outside the monetary digest, and do not claim the compacted ledger
+can reproduce every historical intermediate digest.
+
+Disposition: resolved in the third corrected plan; exact-commit re-review
+pending.
+
+### R18 Cross-repository active-ledger recovery
+
+Finding: the bounded capacity sweep handled terminal active entries but not an
+expired pre-provider job belonging to another repository. Such entries could
+retain reservations and fill the four-entry ledger indefinitely.
+
+Required resolution: before every reservation, inspect all at-most-four active
+jobs and run state-specific nonpaid reconciliation for expired entries. Leave
+live and unknown entries untouched, and reject new paid work while an expired
+entry remains unresolved.
+
+Disposition: resolved in the third corrected plan; exact-commit re-review
+pending.
+
 ## Confirmed design decisions
 
 The reviews confirmed these parts of the exact plan:

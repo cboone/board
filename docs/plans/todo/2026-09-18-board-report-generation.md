@@ -887,6 +887,7 @@ accountingSequence, accountingDigest
 active
   <job-id>
     policyId, createdAt, accountingState
+    lastAccountingSequence, lastAccountingDigest, lastTransitionId
     attempts[]
       number, ceilingMicrousd, state
       actualCostMicrousd, unknownExposureMicrousd, recordedAt
@@ -975,18 +976,26 @@ free.
 
 Each accounting CAS increments `accountingSequence` and replaces
 `accountingDigest` with a domain-separated hash of the previous digest and the
-canonical job/attempt transition. The job stores the resulting sequence,
-revision, and digest, plus its complete per-attempt audit. Resolve a lost ledger
-acknowledgement by matching the active attempt state and digest. After the job
-is durably accounting-complete, CAS-remove its active ledger entry only when it
+canonical job/attempt transition. The same CAS copies that transition's fixed
+ID, resulting sequence, and digest into its active entry. The job then stores
+the resulting sequence, revision, digest, and transition ID plus its complete
+per-attempt audit. Resolve a lost ledger acknowledgement against the per-entry
+transition fields even when another job has since advanced the global digest.
+Preallocate their maximum serialized widths at reservation. After the job is
+durably accounting-complete, CAS-remove its active ledger entry only when it
 contains no unknown attempt. Preserve an entry with unknown exposure until
-authoritative owner billing evidence resolves it. Thus the ledger retains only
-active or unresolved exposure, while job records retain terminal history.
+authoritative owner billing evidence resolves it. Entry removal is idempotent
+housekeeping outside the monetary accounting sequence and digest; a strong read
+that proves absence resolves its lost acknowledgement. Thus the ledger retains
+only active or unresolved exposure, while job records retain terminal history.
 
-Before a new reservation, reconcile every non-unknown terminal entry in the
-bounded `active` map and remove every entry whose job already proves complete;
-do not admit new paid work while an earlier known terminal entry remains
-unresolved. Setup exposure permits at most two simultaneously fully reserved
+Before every new reservation, inspect all at-most-four active entries and their
+jobs. Run the state-specific nonpaid reconciler for each expired entry,
+including pre-provider `reserved`, `dispatchable`, `collecting`, and `counting`
+jobs from other repositories; remove entries whose jobs prove known accounting
+complete. Leave live paid/pre-provider work and unresolved unknown exposure
+untouched. Do not admit new paid work while an expired entry remains
+unreconciled. Setup exposure permits at most two simultaneously fully reserved
 jobs and at most four full-ceiling unknown attempts, so the four-entry bound is
 compatible with the cap. A future production policy must define its own
 compatible active-entry and byte bounds before it can be enabled.
@@ -999,9 +1008,12 @@ attempts contribute zero. An unknown attempt contributes at least its full
 reviewed ceiling and any larger known lower bound. Integer overflow, duplicate
 or inconsistent accounting transitions, an actual cost above its ceiling, a
 capacity invariant failure, or a policy mismatch sets `pricingReviewRequired`
-and blocks later paid work without reducing recorded exposure. A bounded
-operator audit can reconstruct the hash chain from retained job records; normal
-admission does not list the job store.
+and blocks later paid work without reducing recorded exposure. The rolling
+digest is a CAS continuity and lost-ack coordination head, not a claim that the
+compacted ledger contains full history. A paged operator audit can cross-check
+aggregate settled cost against retained bounded per-job attempt records without
+running in normal admission; it need not reconstruct every historical
+intermediate digest.
 
 Production ledgers are disabled during setup. After calibration, a separate
 versioned production policy will define a positive monthly USD cap, a maximum
@@ -1401,6 +1413,12 @@ Before any paid call, verify in the deployed artifact:
   accounting-complete entries are removed, aggregate settled cost and the hash
   chain remain stable, and post-dispatch settlement always fits its preallocated
   record.
+- Commit job A's accounting transition while losing its response, advance the
+  global accounting head with job B, then prove A recovers from its own active
+  entry's transition ID/sequence/digest without replaying settlement. Fill the
+  active map with interrupted pre-provider jobs from other repositories, expire
+  them, and prove a new admission reconciles their job/accounting/claim order
+  within the four-entry bound before reserving.
 - Race identical and different idempotency keys, concurrent repositories,
   global cross-repository UUID reuse, active-job claims, source checks, catalog
   merges/repair, report publication, and ledger reservations.
