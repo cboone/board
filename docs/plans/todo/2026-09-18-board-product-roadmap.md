@@ -2,22 +2,16 @@
 
 ## Status and authority
 
-Product requirements established as of 2026-09-18. Phase 1 is merged and verified.
-Phase 2 planning passed independent review against that baseline in its distinct
-worktree. Its implementation passes local verification and independent final
-review. Its reviewed production composition is deployed with passing anonymous
-route, header, origin, and OAuth transaction-storage checks. Isolated and
-automatic PR fixture deploys prove fixture routes and zero Functions. Live owner
-sign-in, public and private source checks, sign-out, and the provider's zero Edge
-Functions summary pass. Current-head PR checks, merge, and the automatic
-production deployment remain Phase 2 operational steps; the deployment check
-follows the merge.
-Analysis, report storage, and complete report production acceptance remain to be
-delivered. This is the living roadmap for
-the complete product, not authorization to
-assume unanswered spending or service-configuration choices. Production usage
-limits will be proposed using setup calibration evidence before ordinary paid
-production usage is enabled.
+Product requirements established as of 2026-09-18. Phases 1 and 2 are merged
+and verified. Phase 2 owner acceptance passed for public and private source
+checks, sign-out, and zero Edge Functions. Its exact reviewed head, verified
+merge, and automatic production deployment are recorded below. Phase 3 has a
+detailed analysis, persistence, recovery, and spending-control plan in its
+distinct worktree. Analysis, report storage, and complete report production
+acceptance remain to be delivered. This is the living roadmap for the complete
+product, not authorization to assume unanswered spending or service-
+configuration choices. Production usage limits will be proposed using setup
+calibration evidence before ordinary paid production usage is enabled.
 
 The definitive requirements are the original
 [project prompt](../project-prompt.md), the original `publish-report-board`
@@ -81,12 +75,11 @@ verified; its branch and worktree are removed.
 - The Phase 1 plan and branch review record actual local verification. CI and
   secret scanning passed the final submitted head. These results do not
   establish live-service or production acceptance.
-- Netlify configuration builds `dist`. The reviewed Phase 2 composition is live
-  in production, while nonproduction deploys remain fixture-only with no
-  Functions. Current-head PR review and merge remain. Verify the resulting
-  automatic production deployment afterward as an operational check.
+- Netlify configuration builds `dist`. The merged Phase 2 composition is live
+  in production from exact merge `370c257c49c09492426b4d8df24d37240884e908`,
+  while nonproduction deploys remain fixture-only with no Functions.
 - Foundation issues #12 through #17 are reconciled with agreed scope. Scaffold
-  issue #13 and fixture quality issue #14 are completed. Issue #16 is complete
+  issue #13 and fixture quality issue #14 are completed. Issue #16 is closed
   after its hosted-site, owner-source, sign-out, and preview-isolation acceptance
   conditions passed; #12, #15, and #17 retain later report and product
   acceptance.
@@ -224,8 +217,9 @@ with the original source under
 Its [skill and references](https://github.com/cboone/agent-harness-plugins/tree/046f1389caf53d6ec8c81e8c88b927a40d154b79/plugins/publish-report-board/skills/publish-report-board),
 [template](https://github.com/cboone/agent-harness-plugins/blob/046f1389caf53d6ec8c81e8c88b927a40d154b79/plugins/publish-report-board/templates/backlog-triage.html),
 and [validator](https://github.com/cboone/agent-harness-plugins/blob/046f1389caf53d6ec8c81e8c88b927a40d154b79/plugins/publish-report-board/scripts/report-board)
-establish the baseline. The installed template and validator byte-match the canonical files
-at revision `046f1389caf53d6ec8c81e8c88b927a40d154b79`. Record that source in
+establish the baseline. The installed template and validator byte-match the
+canonical files at revision `046f1389caf53d6ec8c81e8c88b927a40d154b79`.
+Record that source in
 the port's developer documentation so later upstream changes do not silently
 redefine application behavior.
 
@@ -301,6 +295,8 @@ not itself make Board the source of truth for issue state.
 Record the user's answers here with their consequences. Do not silently inherit
 the older roadmap's claimed decisions or the README's predictions.
 
+<!-- markdownlint-disable MD013 -->
+
 | ID  | Decision                                                                                                                                                                              | Why it matters                                                                                                                 | Status                              |
 | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- |
 | Q01 | Only the user's GitHub account (`cboone`), with eligible `cboone/*` repositories; exclude forks, archives, organizations, and other users                                             | Enforce account and repository eligibility server-side across all real-data operations                                         | Confirmed by user                   |
@@ -315,6 +311,8 @@ the older roadmap's claimed decisions or the README's predictions.
 | Q10 | New Netlify site, preferred tracker-boards.netlify.app or similar available name; custom domain later; no self-hosting guide for this release                                         | Owned tracker-boards site has reviewed production deployment, GitHub connection, and owner/source acceptance                   | Confirmed by user; site accepted    |
 | Q11 | Original report plus sign-in, repo selection, generation/refresh, freshness, progress/errors, and provenance; report deletion deferred                                                | User confirms this covers initial needs; no additional report types or optional application features are required              | Confirmed by user                   |
 | Q12 | Saved reports stay viewable to the authorized account when the source is archived, transferred, deleted, or inaccessible; mark historical/source-unavailable and disable new analysis | Keep both retained reports until explicit deletion; saved-report retrieval is independent of current source eligibility/access | Confirmed by user                   |
+
+<!-- markdownlint-enable MD013 -->
 
 The model is settled as `claude-opus-5`. Select the runtime, session storage,
 report store, and input bounds using the confirmed requirements and current
@@ -466,21 +464,23 @@ verification, and the server dependency audit pass. These local checks use
 synthetic data; the separate live acceptance below establishes owner sign-in and
 GitHub source access. Anthropic setup spending remains zero.
 
-Reviewed commit `9295a3a169f0294f475e0fad2da7f6e45bf80101` is live as production
-deploy `6aadcfbcf08a71c73059a8be`. The native function manifest specifies Node24,
-runtime API version 2, and `/api/*`; live anonymous routing/security headers,
-protected-route 401 responses, encrypted OAuth transaction storage/PKCE,
-sanitized invalid callback, and immutable-origin rejection pass. On September
-18, 2026, owner sign-in, one eligible public repository source check, one
-eligible private repository source check, and sign-out passed against this
-deployed composition.
+Final signed feature head `ef3934d41977807a2e6b3a763cc1c02ac5c5d83e`
+passed the complete CI matrix and independent review. PR #22 merged as signed,
+GitHub-verified merge `370c257c49c09492426b4d8df24d37240884e908`.
+Automatic production deploy `6aaddca5bf99630008491b49` is ready from that
+exact merge on `main`. The native function manifest specifies Node24, runtime
+API version 2, and `/api/*`; complete live security headers, anonymous and
+protected routes, encrypted OAuth transaction storage/PKCE, sanitized invalid
+callback cleanup, and immutable-origin rejection pass. On September 18, 2026,
+owner sign-in, one eligible public repository source check, one eligible private
+repository source check, and sign-out passed.
 
 Manual fixture draft `6aadcd18b83e9e153b9c7bbf` is ready in
 `deploy-preview` context. The provider reports zero Functions, and live fixture
 routes/CSP plus the fixture-only API JSON `404` pass. Fresh staging contained no
 Edge Functions. The owner confirmed that the provider deploy summary showed
-`Edge Functions: 0`. Automatic PR #22 preview
-`6aadd047dd098e0008ba0705` is also ready in `deploy-preview` context with
+`Edge Functions: 0`. Final PR #22 preview `6aaddaf81b0a15000836bc03`
+is also ready in `deploy-preview` context from the exact reviewed head with
 explicit provider inventory of zero Functions. Live fixture/CSP and static API
 JSON `404` checks pass.
 
@@ -502,11 +502,18 @@ authorized-account operation and must not be rejected solely because the source
 has since become ineligible or inaccessible.
 
 The live owner, eligible public repository, eligible private repository,
-sign-out, and preview Edge Functions acceptance gates pass. Remaining work is
-current-head PR CI and review, then merge and verification of the resulting
-automatic production deployment.
+sign-out, and preview Edge Functions acceptance gates pass. Current-head PR CI,
+review, merge, automatic production verification, issue closure, and branch and
+worktree cleanup are complete.
 
 ### Phase 3: Analysis, report persistence, and refresh
+
+The [detailed phase plan](2026-09-18-board-report-generation.md) fixes the Opus
+5/high-effort wire contract, deterministic optional context selection,
+source-bound assembly, durable report catalog and current/previous rotation,
+at-most-once paid state machine, setup spending ledger, authenticated recovery,
+and Generate/Refresh browser flow. It begins from the verified Phase 2 merge;
+Anthropic setup spend remains $0 until its deployment and paid-call gates pass.
 
 Implement Anthropic and the agreed fixed model configuration, bounded input
 collection, validated analysis, comparison with the previous successful report,

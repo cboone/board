@@ -3,14 +3,15 @@
 The production site is
 [tracker-boards.netlify.app](https://tracker-boards.netlify.app), site ID
 `9ddf762e-9c92-44da-8636-e03913200664`, in the owned `cboone` Netlify account.
-The reviewed authentication/source-check composition is deployed from signed
-commit `9295a3a169f0294f475e0fad2da7f6e45bf80101`, deploy ID
-`6aadcfbcf08a71c73059a8be`. The site API independently reports that deployment
-ready in production context with one Function. The project is connected through
-Netlify's GitHub provider to `cboone/board`, production branch `main`, build
-`npm run build`, and publish directory `dist`. On September 18, 2026, live owner
-sign-in, an eligible public repository source check, an eligible private
-repository source check, and sign-out all passed.
+The reviewed authentication/source-check composition is deployed from signed,
+GitHub-verified merge `370c257c49c09492426b4d8df24d37240884e908`,
+automatic deploy ID `6aaddca5bf99630008491b49`. The site API independently
+reports that deployment ready in production context with one Function. The
+project is connected through Netlify's GitHub provider to `cboone/board`,
+production branch `main`, build `npm run build`, and publish directory `dist`.
+On September 18, 2026, live owner sign-in, an eligible public repository source
+check, an eligible private repository source check, sign-out, and the provider
+summary's zero Edge Functions count all passed.
 No custom domain or self-hosting guide is required for this release.
 
 ## Owner-controlled GitHub App setup
@@ -111,9 +112,9 @@ directory contained no Edge Functions. On September 18, 2026, the owner
 confirmed that the Netlify deploy summary reported `Edge Functions: 0` for the
 acceptance preview.
 
-Automatic PR #22 preview `6aadd047dd098e0008ba0705` is independently reported
-ready in `deploy-preview` context from commit
-`c6f5831b07ffe33c18fecfacfcbe285b234cdf9b`, with an explicit provider
+Final PR #22 preview `6aaddaf81b0a15000836bc03` is independently reported
+ready in `deploy-preview` context from reviewed signed head
+`ef3934d41977807a2e6b3a763cc1c02ac5c5d83e`, with an explicit provider
 inventory of zero Functions. Its fixture/CSP and static API JSON `404` checks
 pass. This verifies repository-linked preview composition separately from the
 manual draft.
