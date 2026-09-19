@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   readEnvironment,
   readPublicOrigin,
+  requirePublishedDeploy,
   requireProductionContext,
   requireCanonicalOrigin,
 } from '../lib/environment.mjs';
@@ -53,6 +54,20 @@ test('public guards reject unknown deployment contexts and noncanonical HTTPS or
       code: 'forbidden',
     });
   requireProductionContext({ deploy: { context: 'production' } });
+  for (const context of [
+    { deploy: { context: 'production' } },
+    { deploy: { context: 'production', published: false, id: 'deploy-1' } },
+    { deploy: { context: 'production', published: true, id: '../deploy' } },
+  ])
+    assert.throws(() => requirePublishedDeploy(context), {
+      code: 'forbidden',
+    });
+  assert.equal(
+    requirePublishedDeploy({
+      deploy: { context: 'production', published: true, id: 'deploy-1' },
+    }),
+    'deploy-1',
+  );
   for (const origin of [
     'http://example.com',
     'https://user@example.com',

@@ -12,6 +12,13 @@ export function requireProductionContext(context) {
     throw new BoardError('forbidden');
 }
 
+export function requirePublishedDeploy(context) {
+  requireProductionContext(context);
+  if (context.deploy.published !== true || !identifier(context.deploy.id))
+    throw new BoardError('forbidden');
+  return context.deploy.id;
+}
+
 export function readPublicOrigin(env) {
   try {
     const value = env.BOARD_APP_ORIGIN;
