@@ -235,9 +235,8 @@ test('staged authored functions resolve dependencies and reject preview before p
     assert.equal((await preflightResponse.json()).error.code,'forbidden');
     const workerModule=await import(workerEntry);
     assert.deepEqual(workerModule.config,{background:true});
-    const workerResponse=await workerModule.default(new Request('https://tracker-boards.netlify.app/.netlify/functions/report-job',{method:'POST'}),{deploy:{context:'deploy-preview'}});
-    assert.equal(workerResponse.status,403);
-    assert.equal((await workerResponse.json()).error.code,'forbidden');
+    const workerResult=await workerModule.default(new Request('https://tracker-boards.netlify.app/.netlify/functions/report-job',{method:'POST'}),{deploy:{context:'deploy-preview'}});
+    assert.equal(workerResult,undefined);
     assert.equal(providerCalls,0);
     const {REPORT_LIMITS}=await import(${JSON.stringify(pathToFileURL(resolve(directory, 'server/.generated/src/domain/report-contract.js')).href)});
     assert.equal(REPORT_LIMITS.issues,1000);

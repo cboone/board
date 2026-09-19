@@ -98,6 +98,12 @@ reconciliation, then uses the reconciled ETag for its conditional free-work
 claim. A replay or concurrent capability rotation therefore stops before
 source or provider work.
 
+Netlify acknowledges a background Function request with an immediate `202` and
+discards the handler's return value. The handler therefore completes with no
+value for expected invalid or forbidden entry attempts, awaits authorized work,
+and rejects unexpected failures with a fixed generic message so the platform
+can retry without exposing internal details.
+
 Primary files: `server/lib/anthropic.mjs`,
 `server/lib/analysis-admission.mjs`, `server/lib/analysis-worker.mjs`,
 `server/lib/analysis-reconciler.mjs`, and
@@ -262,6 +268,13 @@ phase-plan documents.
     conflicts safely. A paused-worker regression rotates the capability during
     reconciliation and observes no source, model, counting, preflight, or
     Messages activity.
+14. **Background acknowledgement semantics:** Netlify itself emits the immediate
+    `202` and discards handler return values, so there was no production
+    acknowledgement-timing defect. The handler now expresses its actual
+    lifecycle as `Promise<void>`: expected invalid or forbidden attempts resolve
+    without retry, authorized worker work remains awaited, and unexpected
+    failures reject with the fixed generic message that signals a platform
+    retry.
 
 ## Plan compliance
 

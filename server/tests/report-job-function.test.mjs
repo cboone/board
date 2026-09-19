@@ -81,8 +81,7 @@ test('background entry rejects unpublished and malformed invocations before secr
     { deploy: { context: 'branch-deploy' } },
     { deploy: { context: 'production', published: false, id: 'deploy-1' } },
   ]) {
-    const response = await handler(invocation(), context);
-    assert.equal(response.status, 403);
+    assert.equal(await handler(invocation(), context), undefined);
   }
   for (const request of [
     invocation('https://other.example/.netlify/functions/report-job'),
@@ -92,8 +91,7 @@ test('background entry rejects unpublished and malformed invocations before secr
       body: JSON.stringify({ jobId: 'bad', capability: CAPABILITY }),
     }),
   ]) {
-    const response = await handler(request, published);
-    assert.ok([400, 403].includes(response.status));
+    assert.equal(await handler(request, published), undefined);
   }
   assert.equal(secretReads, 0);
   assert.equal(storeOpens, 0);
@@ -128,8 +126,7 @@ test('a valid-shaped wrong capability opens only the job store and reads no secr
     },
   });
 
-  const response = await handler(invocation(), published);
-  assert.equal(response.status, 403);
+  assert.equal(await handler(invocation(), published), undefined);
   assert.equal(secretReads, 0);
   assert.deepEqual(storeNames, ['board-jobs']);
 });
@@ -168,8 +165,7 @@ test('a replayed valid capability opens only the job store after dispatch ends',
     },
   });
 
-  const response = await handler(invocation(), published);
-  assert.equal(response.status, 403);
+  assert.equal(await handler(invocation(), published), undefined);
   assert.equal(authorizationCalls, 1);
   assert.equal(secretReads, 0);
   assert.deepEqual(storeNames, ['board-jobs']);
@@ -181,6 +177,14 @@ test('background entry composes isolated stores and passes only the parsed capab
   let anthropicKey;
   let workerInput;
   let runInput;
+  let markRunStarted;
+  let releaseRun;
+  const runStarted = new Promise((resolve) => {
+    markRunStarted = resolve;
+  });
+  const runBlocked = new Promise((resolve) => {
+    releaseRun = resolve;
+  });
   const env = {
     BOARD_APP_ORIGIN: ORIGIN,
     BOARD_OWNER_ID: '99961',
@@ -212,15 +216,29 @@ test('background entry composes isolated stores and passes only the parsed capab
       return {
         async run(input_) {
           runInput = input_;
+          markRunStarted();
+          await runBlocked;
         },
       };
     },
   });
 
   const request = invocation();
-  const response = await handler(request, published);
-  assert.equal(response.status, 204);
-  assert.equal(response.headers.get('cache-control'), 'no-store');
+  let completed = false;
+  const completion = handler(request, published);
+  void completion.then(
+    () => {
+      completed = true;
+    },
+    () => {
+      completed = true;
+    },
+  );
+  await runStarted;
+  await Promise.resolve();
+  assert.equal(completed, false);
+  releaseRun();
+  assert.equal(await completion, undefined);
   assert.deepEqual(storeNames.sort(), [
     'board-auth',
     'board-jobs',

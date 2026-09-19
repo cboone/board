@@ -13,13 +13,16 @@ import {
   requireCanonicalOrigin,
   requirePublishedDeploy,
 } from '../lib/environment.mjs';
-import { BoardError, errorResponse } from '../lib/errors.mjs';
+import { BoardError } from '../lib/errors.mjs';
 import { createSourceOperations } from '../lib/gather.mjs';
 import { createJobStore } from '../lib/job-store.mjs';
 import { createOperationBudget } from '../lib/source-limits.mjs';
 import { REVIEWED_SETUP_PRICING_ATTESTATION } from '../lib/spend.mjs';
 import { createProductionStorage } from '../lib/storage.mjs';
 
+// Netlify sends the caller an immediate 202 for a background Function and
+// discards the handler return value. Awaiting the worker preserves rejection as
+// the platform retry signal; expected completion resolves with no value.
 export const config = { background: true };
 
 export function createHandler({
@@ -52,7 +55,8 @@ export function createHandler({
       requireCanonicalOrigin(request, origin);
       invocation = await parseBackgroundInvocation(request, origin);
     } catch (error) {
-      return errorResponse(error);
+      if (error instanceof BoardError) return;
+      throw new Error('Board background execution failed.');
     }
 
     try {
@@ -68,7 +72,7 @@ export function createHandler({
         budget,
       });
       if (current.value.admissionDeployId !== deployId)
-        return errorResponse(new BoardError('forbidden'));
+        throw new BoardError('forbidden');
 
       const environment = readEnvironment(env);
       const analysisEnvironment = readAnalysisEnvironment(env);
@@ -111,16 +115,12 @@ export function createHandler({
         signal: request.signal,
         invocationStartedAt,
       });
-      return new Response(null, {
-        status: 204,
-        headers: { 'Cache-Control': 'no-store' },
-      });
     } catch (error) {
       if (
         error instanceof BoardError &&
         ['forbidden', 'invalid_request'].includes(error.code)
       )
-        return errorResponse(error);
+        return;
       throw new Error('Board background execution failed.');
     }
   };
