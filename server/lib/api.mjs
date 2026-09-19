@@ -303,10 +303,17 @@ export function createApi({
         request.method === 'GET' &&
         /^\/api\/report-jobs\/([a-f0-9]{64})$/.exec(path);
       const isReports = request.method === 'GET' && path === '/api/reports';
+      const isAnalysisAvailability =
+        request.method === 'GET' && path === '/api/analysis-availability';
       const isDecision =
         request.method === 'POST' && path === '/api/setup-budget-decision';
       const reportRoute =
-        isReports || reportMatch || admissionMatch || jobMatch || isDecision;
+        isReports ||
+        isAnalysisAvailability ||
+        reportMatch ||
+        admissionMatch ||
+        jobMatch ||
+        isDecision;
       if (
         (!isList && !isLogout && !sourceMatch && !reportRoute) ||
         (!isReports && url.search) ||
@@ -332,12 +339,23 @@ export function createApi({
         const result = await auth.logout({ session, budget });
         return json({ ok: true }, result.cookies);
       }
-      if (isReports || reportMatch || jobMatch || isDecision) {
+      if (
+        isReports ||
+        isAnalysisAvailability ||
+        reportMatch ||
+        jobMatch ||
+        isDecision
+      ) {
         let output;
         if (isReports)
           output = await reportOperations.listReports({
             ownerId: session.ownerId,
             cursor: url.searchParams.get('cursor'),
+            budget,
+          });
+        else if (isAnalysisAvailability)
+          output = await reportOperations.getAnalysisAvailability({
+            ownerId: session.ownerId,
             budget,
           });
         else if (reportMatch)

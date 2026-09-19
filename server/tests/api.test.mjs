@@ -618,6 +618,12 @@ test('saved report reads and setup decisions stay on Board storage without acqui
       calls.push(['report', input]);
       return { marker: 'private-report' };
     },
+    async getAnalysisAvailability(input) {
+      calls.push(['availability', input]);
+      return {
+        spendMode: { available: true, mode: 'setup', reason: null },
+      };
+    },
     async pollJob(input) {
       calls.push(['job', input]);
       return { marker: 'private-job' };
@@ -631,6 +637,7 @@ test('saved report reads and setup decisions stay on Board storage without acqui
   const responses = [
     await ctx.api(ctx.request('/api/reports?cursor=opaque-cursor')),
     await ctx.api(ctx.request('/api/repositories/17/report')),
+    await ctx.api(ctx.request('/api/analysis-availability')),
     await ctx.api(ctx.request(`/api/report-jobs/${jobId}`)),
     await ctx.api(
       ctx.request(
@@ -646,6 +653,7 @@ test('saved report reads and setup decisions stay on Board storage without acqui
     [
       { items: [], nextCursor: null },
       { marker: 'private-report' },
+      { spendMode: { available: true, mode: 'setup', reason: null } },
       { marker: 'private-job' },
       { ok: true },
     ],
@@ -667,11 +675,12 @@ test('saved report reads and setup decisions stay on Board storage without acqui
     [
       ['list', 99961, 'opaque-cursor'],
       ['report', 99961, 17],
+      ['availability', 99961, null],
       ['job', 99961, jobId],
       ['decision', 99961, null],
     ],
   );
-  assert.deepEqual(calls[3][1].decision, decision);
+  assert.deepEqual(calls[4][1].decision, decision);
   assert.ok(calls.every(([, input]) => ctx.budgets.includes(input.budget)));
 });
 
@@ -760,6 +769,7 @@ test('report routes reject malformed URLs, JSON, CSRF and operation tuples befor
   const cases = [
     ctx.request('/api/reports?cursor=one&cursor=two'),
     ctx.request('/api/repositories/17/report?raw=true'),
+    ctx.request('/api/analysis-availability?raw=true'),
     ctx.request('/api/report-jobs/not-a-job'),
     ctx.request('/api/repositories/17/report-jobs', 'POST', jsonHeaders, {
       idempotencyKey: '123e4567-e89b-42d3-a456-426614174000',
@@ -820,14 +830,15 @@ test('stored source checks use the report coordinator while the API projects onl
 });
 
 test('a revoked session cannot return a private report read that finishes later', async () => {
-  let ctx;
+  const state = {};
   const reportOperations = {
     async getReport() {
-      await ctx.auth.logout({ session: ctx.session });
+      await state.ctx.auth.logout({ session: state.ctx.session });
       return { report: 'private-report-body' };
     },
   };
-  ctx = await setup(undefined, reportOperations);
+  const ctx = await setup(undefined, reportOperations);
+  state.ctx = ctx;
   const response = await ctx.api(ctx.request('/api/repositories/17/report'));
   assert.equal(response.status, 401);
   assert.ok(!JSON.stringify(await response.json()).includes('private-report'));
