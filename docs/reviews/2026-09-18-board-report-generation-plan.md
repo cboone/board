@@ -326,6 +326,30 @@ A's active entry, and only then reserve for B.
 Disposition: resolved in the fifth corrected plan; exact-commit re-review
 pending.
 
+### R20 Job accounting schema completeness
+
+Finding: exact commit `355f6fa18b88434d9884b86b55506869736ff8a3`
+required a job to store each committed ledger transition's resulting sequence,
+revision, digest, and transition ID, but the normative strict job schema omitted
+the sequence and transition ID. The ledger schema also omitted its logical
+revision, and an active entry lacked the last resulting revision needed to
+recover a lost acknowledgement after another job advanced the ledger. An exact
+allowlist projector would reject or be unable to recover facts required by the
+protocol.
+
+Required resolution: add fixed-width `accountingSequence` and `transitionId`
+fields to the always-present job accounting object alongside its nullable ledger
+revision and digest, and remove the duplicate top-level digest authority. Add a
+safe-integer logical ledger revision that advances on every ledger CAS while the
+monetary sequence/digest advance only on accounting transitions. Copy the
+resulting revision into each active entry and then the job before active-entry
+removal. Cover absent, initial, maximum-width, invalid, nonmonetary-mutation, and
+lost-ack recovery values after another job advances the global head in strict
+schema, serialization-boundary, and concurrency tests.
+
+Disposition: resolved in the sixth corrected plan; exact-commit re-review
+pending.
+
 ## Confirmed design decisions
 
 The reviews confirmed these parts of the exact plan:

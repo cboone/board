@@ -751,7 +751,7 @@ freeLease
   tokenHash, expiresAt
 finalizationLease
   tokenHash, expiresAt
-pricePolicyId, ledgerAccountingDigest
+pricePolicyId
 sourceFingerprint
 attempts[]
   number, reservationMicrousd, state, tokenHash
@@ -762,7 +762,7 @@ publication
   reportId, versionKey, candidateDigest, basisReportId
   pointerRevision, publishedAt, cleanupCandidateKey
 accounting
-  status, ledgerRevision, accountingDigest
+  status, ledgerRevision, accountingSequence, accountingDigest, transitionId
 terminal
   status, completedAt, sanitized errorCode
 ```
@@ -772,6 +772,18 @@ cryptographically random dispatch capability, stores only its hash, and sends
 the raw value once in the bounded background invocation. The job stores no
 source body, comment, file content, tree, prompt, raw delta, hidden thinking, or
 provider body.
+
+The `accounting` object is always present. The inert job starts with status
+`unreserved` and nullable ledger revision, sequence, digest, and transition ID.
+The first committed reservation and every later monetary accounting transition
+sets status `pending` and fills those facts; a terminal record uses `complete`
+after all exposure is known and the active entry can be removed, or `unknown`
+while conservative exposure remains active. A transition ID is a 64-character
+lowercase hexadecimal domain-separated SHA-256 digest of the canonical
+job/attempt transition. Accounting digests use the same fixed representation;
+ledger revisions and sequences are nonnegative safe integers. Project the
+maximum terminal widths before the first paid boundary. Persist the job's
+resulting accounting facts before removing its active ledger entry.
 
 Admission copies the authenticated session's `authorizationEpoch`, not its
 cookie or token. The worker uses a job-only auth helper to acquire the current
@@ -872,6 +884,7 @@ and checked against the stored copy:
 ```text
 schemaVersion: 1
 currency: "USD"
+revision
 activePolicyId
 policies
   <policy-id>
@@ -887,7 +900,8 @@ accountingSequence, accountingDigest
 active
   <job-id>
     policyId, createdAt, accountingState
-    lastAccountingSequence, lastAccountingDigest, lastTransitionId
+    lastLedgerRevision, lastAccountingSequence, lastAccountingDigest
+    lastTransitionId
     attempts[]
       number, ceilingMicrousd, state
       actualCostMicrousd, unknownExposureMicrousd, recordedAt
@@ -900,6 +914,13 @@ discussions
 pricingReviewRequired
 updatedAt
 ```
+
+`revision` is a nonnegative safe integer incremented by every successful ledger
+CAS; the Blob ETag remains transport-only for `onlyIfMatch`. Monetary
+accounting transitions also increment `accountingSequence` and advance
+`accountingDigest`. Policy/discussion mutations and accounting-complete active
+entry removal increment `revision` but remain outside the monetary digest
+chain.
 
 Set `SETUP_LEDGER_MAX_BYTES` to 262,144,
 `SETUP_LEDGER_MAX_ACTIVE_JOBS` to four, and
@@ -977,10 +998,10 @@ free.
 Each accounting CAS increments `accountingSequence` and replaces
 `accountingDigest` with a domain-separated hash of the previous digest and the
 canonical job/attempt transition. The same CAS copies that transition's fixed
-ID, resulting sequence, and digest into its active entry. The job then stores
-the resulting sequence, revision, digest, and transition ID plus its complete
-per-attempt audit. Resolve a lost ledger acknowledgement against the per-entry
-transition fields even when another job has since advanced the global digest.
+ID, resulting ledger revision, accounting sequence, and digest into its active
+entry. The job then stores those resulting facts plus its complete per-attempt
+audit. Resolve a lost ledger acknowledgement against the per-entry transition
+fields even when another job has since advanced the global revision and digest.
 Preallocate their maximum serialized widths at reservation. After the job is
 durably accounting-complete, CAS-remove its active ledger entry only when it
 contains no unknown attempt. Preserve an entry with unknown exposure until
@@ -1407,7 +1428,10 @@ Before any paid call, verify in the deployed artifact:
 
 - Exercise exact allowlist schemas and byte bounds, strict key validation,
   strong reads, `onlyIfNew`, `onlyIfMatch`, bounded CAS conflicts, and
-  fail-closed storage errors.
+  fail-closed storage errors. Include the job accounting sequence, digest,
+  transition ID, and ledger revision plus the ledger and active-entry revisions
+  at absent, initial, maximum-width, and invalid boundaries. Prove nonmonetary
+  ledger mutations change only the logical ledger revision.
 - Fill the setup ledger to each four-active-job, 16-policy, 32-decision, and
   262,144-byte boundary using worst-width projections. Repeat definitive
   zero-billed refusals and very small settlements beyond those counts and prove
@@ -1416,14 +1440,15 @@ Before any paid call, verify in the deployed artifact:
   record.
 - Commit job A's accounting transition while losing its response, advance the
   global accounting head with job B, then prove A recovers from its own active
-  entry's transition ID/sequence/digest without replaying settlement. Fill the
-  active map with interrupted pre-provider jobs from other repositories, expire
-  them, then prove a new admission reconciles each job/accounting/claim order
-  within the four-entry bound before reserving. Separately, commit repository
-  A's terminal job CAS and interrupt before its ledger settlement; prove a new
-  repository B admission uses the global pre-reservation sweep to settle A
-  exactly once, mark A accounting-complete, clear A's claim last, remove A's
-  active entry, and only then reserve for B.
+  entry's ledger revision, transition ID, accounting sequence, and digest
+  without replaying settlement. Fill the active map with interrupted
+  pre-provider jobs from other repositories, expire them, then prove a new
+  admission reconciles each job/accounting/claim order within the four-entry
+  bound before reserving. Separately, commit repository A's terminal job CAS and
+  interrupt before its ledger settlement; prove a new repository B admission
+  uses the global pre-reservation sweep to settle A exactly once, mark A
+  accounting-complete, clear A's claim last, remove A's active entry, and only
+  then reserve for B.
 - Race identical and different idempotency keys, concurrent repositories,
   global cross-repository UUID reuse, active-job claims, source checks, catalog
   merges/repair, report publication, and ledger reservations.
