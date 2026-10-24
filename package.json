@@ -28,7 +28,7 @@
     "verify": "npm run format:check && npm run lint && npm test && npm run test:browser && npm run build && npm run test:artifact"
   },
   "dependencies": {
-    "@alpinejs/csp": "3.17.3"
+    "@alpinejs/csp": "3.17.5"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.13.0",
